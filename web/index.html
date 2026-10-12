@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>omniHub</title>
+    <style>
+        :root {
+            --bg: #0e1117;
+            --card-bg: #161b22;
+            --text: #e6edf3;
+            --accent: #58a6ff;
+            --border: #30363d;
+        }
+        body {
+            margin: 0;
+            padding: 24px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 16px;
+            margin-bottom: 24px;
+        }
+        h1 { margin: 0; font-size: 24px; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .card h2 { margin-top: 0; font-size: 18px; color: var(--accent); }
+        .badge {
+            display: inline-block;
+            background: #238636;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>🎮 omniHub</h1>
+        <div id="status-badge" class="badge">服务运行中</div>
+    </header>
+    <div class="grid">
+        <div class="card">
+            <h2>📖 媒体中心</h2>
+            <p>漫画画廊 · 小说文档 · 全格式音声 · 短视频</p>
+        </div>
+        <div class="card">
+            <h2>🕹️ 游戏专区</h2>
+            <p>独立大作 · Wine · 模拟器 · 星际争霸2</p>
+        </div>
+        <div class="card">
+            <h2>🛠️ 局域网工具</h2>
+            <p>跨设备剪贴板 · 文件传输 · 硬件监控</p>
+        </div>
+    </div>
+</body>
+</html>
