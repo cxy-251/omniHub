@@ -1,5 +1,11 @@
+import { request } from '../src/api';
 // omniHub 权限管理与矩阵配置交互逻辑
+let lifetime = new AbortController();
+const fetch = (input, options = {}) => request(input, { ...options, signal: lifetime.signal });
 const AdminHub = {
+  dispose() { lifetime.abort();
+ this.initialized = false;
+  },
   sections: [
     { id: 'gallery', name: '🖼️ 相册画廊' },
     { id: 'shortvideo', name: '🎬 短视频与图集' },
@@ -14,6 +20,7 @@ const AdminHub = {
 
   initialized: false,
   init() {
+    lifetime = new AbortController();
     this.renderContainer();
   },
 
@@ -102,6 +109,7 @@ const AdminHub = {
         `;
       }).join('');
     } catch (e) {
+ if (e.name === 'AbortError') return;
       tbody.innerHTML = `<tr><td colspan="3" style="color:var(--danger)">加载失败: ${e.message}</td></tr>`;
     }
   },
@@ -123,6 +131,7 @@ const AdminHub = {
         alert('更新失败');
       }
     } catch (e) {
+ if (e.name === 'AbortError') return;
       alert(`异常: ${e.message}`);
     }
   },
@@ -170,11 +179,11 @@ const AdminHub = {
         alert('更新失败');
       }
     } catch (e) {
+ if (e.name === 'AbortError') return;
       alert(`异常: ${e.message}`);
     }
   }
 };
 
-window.addEventListener('DOMContentLoaded', () => {
-  AdminHub.init();
-});
+globalThis.AdminHub = AdminHub;
+export default AdminHub;

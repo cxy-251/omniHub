@@ -14,7 +14,7 @@
 3. **构建系统**：CMake 3.22+，统一管理 C++ 与 Qt Quick 资源编译。
 
 ### 0.3 嵌入式 Web 前端技术栈
-1. **基础规范**：原生 JavaScript（ES6+）与原生 CSS，免 Node.js/Webpack 构建工具链。
+1. **基础规范**：React + TypeScript + Tailwind CSS + Vite，采用模块化组件与按需加载。Node.js 仅用于开发与构建，发布产物为静态资源，由 Go 嵌入，运行时无需 Node.js 或外网 CDN。模块按需加载，离开页面时释放轮询、监听器与解码资源。
 2. **离线第三方组件**：
    - 富文本与图表：`marked.min.js`、`katex.min.js`、`mermaid.min.js`；
    - 网页控制台：`xterm.js`。

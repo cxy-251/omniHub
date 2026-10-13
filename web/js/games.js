@@ -1,10 +1,17 @@
+import { request } from '../src/api';
 // omniHub Web 游戏专区交互逻辑 (仅展示与运行 web_only 游戏)
+let lifetime = new AbortController();
+const fetch = (input, options = {}) => request(input, { ...options, signal: lifetime.signal });
 const GamesHub = {
+  dispose() { lifetime.abort();
+ const frame = document.getElementById('game-runner-frame'); if (frame) frame.src = 'about:blank';
+  },
   initialized: false,
   allGames: [],
   currentCategory: 'ALL',
 
   init() {
+    lifetime = new AbortController();
     this.renderContainer();
     this.bindEvents();
   },
@@ -87,6 +94,7 @@ const GamesHub = {
       this.allGames = Array.isArray(data) ? data : [];
       this.renderGamesList();
     } catch (e) {
+ if (e.name === 'AbortError') return;
       grid.innerHTML = `<div style="color:var(--danger)">加载游戏失败: ${e.message}</div>`;
     }
   },
@@ -146,6 +154,5 @@ const GamesHub = {
   }
 };
 
-window.addEventListener('DOMContentLoaded', () => {
-  GamesHub.init();
-});
+globalThis.GamesHub = GamesHub;
+export default GamesHub;

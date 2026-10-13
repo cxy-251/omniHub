@@ -1,5 +1,32 @@
+import { request } from '../src/api';
+let markedReady;
+async function renderMarkdown(raw) {
+ if (!markedReady) markedReady = new Promise((resolve, reject) => {
+  const script = document.createElement('script');
+  script.src = '/vendor/marked.min.js';
+  script.onload = resolve; script.onerror = () => { markedReady = undefined; reject(new Error('Markdown 渲染器加载失败')); };
+  document.head.appendChild(script);
+ });
+ const [{ default: DOMPurify }] = await Promise.all([import('dompurify'), markedReady]);
+ return DOMPurify.sanitize(window.marked.parse(raw));
+}
 // omniHub 媒体专区交互逻辑
+let lifetime = new AbortController();
+const fetch = (input, options = {}) => request(input, { ...options, signal: lifetime.signal });
 const MediaHub = {
+  dispose() { lifetime.abort();
+    this.pauseMatrixVideos();
+    if (this.audioTimer) clearInterval(this.audioTimer);
+    if (this.mangaScrollTimer) clearTimeout(this.mangaScrollTimer);
+    if (this.galleryScrollHandler) window.removeEventListener('scroll', this.galleryScrollHandler);
+    this.scrollBound = false;
+    this.audioTimer = null;
+    if (this.audioPlayer) { this.audioPlayer.pause(); this.audioPlayer.removeAttribute('src'); this.audioPlayer.load(); this.audioPlayer = null; }
+    this.currentAudioId = '';
+    this.galleryState = { offset: 0, limit: 48, hasMore: true, isLoading: false, initialized: false };
+    this.currentSubtab = 'gallery';
+    document.querySelectorAll('video').forEach(video => { video.pause(); video.removeAttribute('src'); video.load(); });
+  },
   currentSubtab: 'gallery',
   audioPlayer: null,
   currentAudioId: '',
@@ -16,6 +43,7 @@ const MediaHub = {
   },
 
   init() {
+    lifetime = new AbortController();
     this.renderContainer();
     this.bindEvents();
     this.initAudioBar();
@@ -424,6 +452,7 @@ const MediaHub = {
       `).join('');
       listEl.insertAdjacentHTML('beforeend', html);
     } catch (e) {
+ if (e.name === 'AbortError') return;
       this.galleryState.isLoading = false;
       if (this.galleryState.offset === 0) {
         listEl.innerHTML = `<div style="color:var(--danger)">加载失败: ${e.message}</div>`;
@@ -434,12 +463,13 @@ const MediaHub = {
   bindGalleryScroll() {
     if (this.scrollBound) return;
     this.scrollBound = true;
-    window.addEventListener('scroll', () => {
+    this.galleryScrollHandler = () => {
       if (this.currentSubtab !== 'gallery') return;
       if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
         this.loadGallery(false);
       }
-    });
+    };
+    window.addEventListener('scroll', this.galleryScrollHandler, { passive: true });
   },
 
   viewOriginal(id, vol) {
@@ -462,12 +492,13 @@ const MediaHub = {
 
       // 使用离线 marked.min.js 进行富文本与图表排版 (第 6.1 节)
       const rawText = data.lines.join('\n');
-      if (window.marked && typeof window.marked.parse === 'function') {
-        contentEl.innerHTML = window.marked.parse(rawText);
+      if (this.textState.path.toLowerCase().endsWith('.md')) {
+        contentEl.innerHTML = await renderMarkdown(rawText);
       } else {
         contentEl.innerHTML = data.lines.map(line => `<div>${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") || '&nbsp;'}</div>`).join('');
       }
     } catch (e) {
+ if (e.name === 'AbortError') return;
       contentEl.textContent = `加载错误: ${e.message}`;
     }
   },
@@ -488,6 +519,7 @@ const MediaHub = {
         </div>
       `).join('');
     } catch (e) {
+ if (e.name === 'AbortError') return;
       listEl.innerHTML = `<div style="color:var(--danger)">加载失败: ${e.message}</div>`;
     }
   },
@@ -521,6 +553,7 @@ const MediaHub = {
         </div>
       `).join('');
     } catch (e) {
+ if (e.name === 'AbortError') return;
       grid.innerHTML = `<div style="color:var(--danger)">加载书架失败: ${e.message}</div>`;
     }
   },
@@ -585,6 +618,7 @@ const MediaHub = {
         }, 300);
       }
     } catch (e) {
+ if (e.name === 'AbortError') return;
       box.innerHTML = `<div style="color:var(--danger); text-align:center; padding-top:100px;">读取 CBZ 失败: ${e.message}</div>`;
     }
   },
@@ -602,6 +636,7 @@ const MediaHub = {
         })
       });
     } catch (e) {
+ if (e.name === 'AbortError') return;
       console.warn('Failed to save manga progress', e);
     }
   },
@@ -637,7 +672,7 @@ const MediaHub = {
     });
 
     // 每 5 秒上报断点
-    setInterval(() => {
+    this.audioTimer = setInterval(() => {
       if (!this.audioPlayer.paused && this.currentAudioId) {
         fetch('/api/media/audio/progress', {
           method: 'POST',
@@ -682,6 +717,5 @@ const MediaHub = {
   }
 };
 
-window.addEventListener('DOMContentLoaded', () => {
-  MediaHub.init();
-});
+globalThis.MediaHub = MediaHub;
+export default MediaHub;

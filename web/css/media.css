@@ -132,9 +132,7 @@
   max-height: 480px;
   background-color: #000;
   object-fit: contain;
-}
   border-radius: 8px;
-  background-color: #000;
 }
 
 .album-viewer {

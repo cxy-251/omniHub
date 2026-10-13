@@ -1,5 +1,12 @@
+import { request } from '../src/api';
 // omniHub 任务调试台交互逻辑
+let lifetime = new AbortController();
+const fetch = (input, options = {}) => request(input, { ...options, signal: lifetime.signal });
 const TasksHub = {
+  dispose() { lifetime.abort();
+ if (this.eventSource) { this.eventSource.close(); this.eventSource = null; }
+ this.allLogs = []; this.bufferedLogs = [];
+  },
   activeTaskId: null,
   eventSource: null,
   isPaused: false,
@@ -10,6 +17,7 @@ const TasksHub = {
   expandedContextId: null,
 
   init() {
+    lifetime = new AbortController();
     this.renderContainer();
     this.bindEvents();
   },
@@ -128,6 +136,7 @@ const TasksHub = {
 
       this.subscribeLogs(taskId);
     } catch (e) {
+ if (e.name === 'AbortError') return;
       alert(`启动异常: ${e.message}`);
     }
   },
@@ -141,6 +150,7 @@ const TasksHub = {
         body: JSON.stringify({ id: this.activeTaskId })
       });
     } catch (e) {
+ if (e.name === 'AbortError') return;
       console.warn('Failed to stop task', e);
     }
   },
@@ -153,8 +163,10 @@ const TasksHub = {
       try {
         const entry = JSON.parse(e.data);
         this.allLogs.push(entry);
+ if (this.allLogs.length > 512) this.allLogs.shift();
         if (this.isPaused) {
           this.bufferedLogs.push(entry);
+ if (this.bufferedLogs.length > 512) this.bufferedLogs.shift();
         } else {
           this.appendLogEntry(entry);
         }
@@ -192,6 +204,7 @@ const TasksHub = {
     const el = document.createElement('div');
     el.innerHTML = this.renderRowHTML(entry);
     list.appendChild(el.firstElementChild);
+ while (list.children.length > 512) list.firstElementChild.remove();
     list.scrollTop = list.scrollHeight;
   },
 
@@ -259,6 +272,5 @@ const TasksHub = {
   }
 };
 
-window.addEventListener('DOMContentLoaded', () => {
-  TasksHub.init();
-});
+globalThis.TasksHub = TasksHub;
+export default TasksHub;

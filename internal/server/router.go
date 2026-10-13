@@ -321,7 +321,7 @@ func (r *Router) registerRoutes() {
 	})
 
 	// 嵌入式 Web 根路由静态文件
-	r.mux.Handle("/", http.FileServer(http.FS(web.FS)))
+	r.mux.Handle("/", web.Handler())
 }
 
 // --- 鉴权与媒体库 ---

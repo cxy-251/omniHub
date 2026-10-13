@@ -1,0 +1,12 @@
+@import "tailwindcss";
+@import "../css/app.css" layer(components);
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-panel: var(--surface);
+  --color-line: var(--border);
+  --color-foreground: var(--text);
+  --color-muted: var(--text-muted);
+  --color-primary: var(--accent);
+  --color-danger: var(--danger);
+}

@@ -1,7 +1,16 @@
+import { request } from '../src/api';
 // omniHub 局域网小工具交互逻辑
+let lifetime = new AbortController();
+const fetch = (input, options = {}) => request(input, { ...options, signal: lifetime.signal });
 const ToolsHub = {
+  dispose() { lifetime.abort();
+ this.initialized = false;
+ this.deactivate();
+ if (this.term) { this.term.dispose(); this.term = null; }
+  },
   initialized: false,
   init() {
+    lifetime = new AbortController();
     this.renderContainer();
     this.bindEvents();
   },
@@ -11,7 +20,6 @@ const ToolsHub = {
     this.loadMetrics();
     this.loadSharedFiles();
     this.initWebShell();
-    this.loadMegaStatus();
     if (!this.metricsTimer) {
       this.metricsTimer = setInterval(() => this.loadMetrics(), 3000);
     }
@@ -314,6 +322,7 @@ const ToolsHub = {
       const mbps = (buf.byteLength * 8) / (elapsed * 1000 * 1000);
       resLbl.textContent = `下行速率: ${mbps.toFixed(2)} Mbps (${(buf.byteLength / 1024 / 1024).toFixed(1)}MB in ${elapsed.toFixed(1)}s)`;
     } catch (e) {
+ if (e.name === 'AbortError') return;
       resLbl.textContent = `测速失败: ${e.message}`;
     }
   },
@@ -331,6 +340,7 @@ const ToolsHub = {
         alert('发送失败');
       }
     } catch (e) {
+ if (e.name === 'AbortError') return;
       alert(`异常: ${e.message}`);
     }
   },
@@ -372,6 +382,7 @@ const ToolsHub = {
         this.term.write('$ ');
       }
     } catch (e) {
+ if (e.name === 'AbortError') return;
       if (this.term) {
         this.term.writeln(`执行异常: ${e.message}`);
         this.term.write('$ ');
@@ -400,6 +411,7 @@ const ToolsHub = {
         </div>
       `).join('');
     } catch (e) {
+ if (e.name === 'AbortError') return;
       listEl.innerHTML = `<div style="color:var(--danger)">扫描失败: ${e.message}</div>`;
     }
   },
@@ -444,8 +456,7 @@ const ToolsHub = {
         body: JSON.stringify(payload)
       });
       if (res.ok) {
-        this.loadMegaStatus();
-      } else {
+          } else {
         alert('添加 MEGA 下载失败');
       }
     } catch (_) {
@@ -458,6 +469,5 @@ const ToolsHub = {
   }
 };
 
-window.addEventListener('DOMContentLoaded', () => {
-  ToolsHub.init();
-});
+globalThis.ToolsHub = ToolsHub;
+export default ToolsHub;
