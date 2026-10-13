@@ -15,7 +15,6 @@ let lifetime = new AbortController();
 const fetch = (input, options = {}) => request(input, { ...options, signal: lifetime.signal });
 const MediaHub = {
   dispose() { this.saveAudioProgress(true, true); lifetime.abort();
-    this.pauseMatrixVideos();
     if (this.audioTimer) clearInterval(this.audioTimer);
     if (this.mangaScrollTimer) clearTimeout(this.mangaScrollTimer);
     this.audioTimer = null;
@@ -49,26 +48,6 @@ const MediaHub = {
         <button data-sub="text">📖 文本阅读器</button>
         <button data-sub="manga">📚 漫画条漫</button>
         <button data-sub="audio">🎧 音频专辑</button>
-      </div>
-
-      <!-- 短视频多联放映矩阵 (第 11.1 节) -->
-      <div id="subpane-shortvideo" class="media-subpane">
-        <div class="matrix-toolbar">
-          <label style="display:flex; align-items:center; gap:6px; font-size:13px;">
-            <span>分屏布局:</span>
-            <select id="matrix-layout-select">
-              <option value="2">2 屏并排</option>
-              <option value="3" selected>3 屏并排 (Deck宽屏)</option>
-            </select>
-          </label>
-          <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer;">
-            <input type="checkbox" id="matrix-focus-audio" checked>
-            <span>🎯 焦点出声 (点击视频独占出声)</span>
-          </label>
-          <button id="btn-matrix-random-all" class="btn-primary" style="padding:2px 10px;">🎲 全屏随机切片</button>
-          <button id="btn-matrix-accompany" class="btn-primary" style="padding:2px 10px;" onclick="MediaHub.toggleAudioAccompany()">🎵 伴听音频</button>
-        </div>
-        <div id="matrix-slots-container" class="matrix-container matrix-grid-3"></div>
       </div>
 
       <!-- 文本阅读器 -->
@@ -147,21 +126,6 @@ const MediaHub = {
       });
     });
 
-    // 短视频多联放映矩阵事件 (第 11.1 节)
-    const selectLayout = document.getElementById('matrix-layout-select');
-    if (selectLayout) {
-      selectLayout.addEventListener('change', (e) => {
-        this.setMatrixLayout(parseInt(e.target.value, 10));
-      });
-    }
-
-    const btnRandomAll = document.getElementById('btn-matrix-random-all');
-    if (btnRandomAll) {
-      btnRandomAll.addEventListener('click', () => {
-        this.randomizeAllSlots();
-      });
-    }
-
     // 文本分页
     this.textState = { path: '', start: 1, offset: 0, nextOffset: 0, nextStart: 1, history: [], limit: 100, hasMore: false, sequence: 0 };
     const btnTextLoad = document.getElementById('btn-text-load');
@@ -229,9 +193,6 @@ const MediaHub = {
   },
 
   switchSubtab(subId) {
-    if (this.currentSubtab === 'shortvideo' && subId !== 'shortvideo') {
-      this.pauseMatrixVideos();
-    }
     this.currentSubtab = subId;
     window.dispatchEvent(new CustomEvent('omni-media-tab', { detail: subId }));
     document.querySelectorAll('.media-subnav button').forEach(b => {
@@ -240,142 +201,8 @@ const MediaHub = {
     document.querySelectorAll('.media-subpane').forEach(p => {
       p.classList.toggle('active', p.id === `subpane-${subId}`);
     });
-    if (subId === 'shortvideo') this.initMatrix();
     if (subId === 'manga') this.loadMangaShelf();
     if (subId === 'text') this.loadTextList();
-  },
-
-  pauseMatrixVideos() {
-    const container = document.getElementById('matrix-slots-container');
-    if (container) {
-      container.querySelectorAll('video').forEach(v => v.pause());
-    }
-  },
-
-  // --- 短视频多联放映矩阵实现 (第 11.1 节) ---
-  matrixState: {
-    slotCount: 3,
-    channels: []
-  },
-
-  async initMatrix() {
-    if (this.matrixState.channels.length === 0) {
-      try {
-        const res = await fetch('/api/media/shortvideo/channels');
-        this.matrixState.channels = await res.json();
-      } catch (_) {
-        this.matrixState.channels = ['快手', '抖音', 'TikTok'];
-      }
-    }
-    this.renderMatrixSlots();
-  },
-
-  setMatrixLayout(count) {
-    this.matrixState.slotCount = count;
-    const container = document.getElementById('matrix-slots-container');
-    if (container) {
-      container.className = `matrix-container matrix-grid-${count}`;
-    }
-    this.renderMatrixSlots();
-  },
-
-  renderMatrixSlots() {
-    const container = document.getElementById('matrix-slots-container');
-    if (!container) return;
-    const count = this.matrixState.slotCount;
-    const channels = this.matrixState.channels.length > 0 ? this.matrixState.channels : ['快手', '抖音', 'TikTok'];
-
-    container.innerHTML = Array.from({ length: count }).map((_, i) => {
-      const defaultChan = channels[i % channels.length] || channels[0];
-      return `
-        <div class="matrix-slot ${i === 0 ? 'focus-active' : ''}" id="matrix-slot-${i}" onclick="MediaHub.focusSlot(${i})">
-          <div class="matrix-slot-header">
-            <select id="slot-chan-${i}" onchange="MediaHub.changeSlotChannel(${i}, this.value)" onclick="event.stopPropagation()">
-              ${channels.map(c => `<option value="${c}" ${c === defaultChan ? 'selected' : ''}>${c}</option>`).join('')}
-            </select>
-            <button class="btn-primary" id="slot-play-btn-${i}" style="padding:2px 8px;" onclick="event.stopPropagation(); MediaHub.toggleSlotPause(${i})">⏸️</button>
-            <button class="btn-primary" style="padding:2px 8px;" onclick="event.stopPropagation(); MediaHub.randomSlotVideo(${i})">🎲 换片</button>
-          </div>
-          <video id="slot-video-${i}" autoplay loop ${i === 0 ? '' : 'muted'} playsinline></video>
-        </div>
-      `;
-    }).join('');
-
-    for (let i = 0; i < count; i++) {
-      const defaultChan = channels[i % channels.length] || channels[0];
-      this.randomSlotVideo(i, defaultChan);
-    }
-  },
-
-  async randomSlotVideo(slotIndex, channel) {
-    const chan = channel || document.getElementById(`slot-chan-${slotIndex}`)?.value;
-    if (!chan) return;
-    const v = document.getElementById(`slot-video-${slotIndex}`);
-    if (!v) return;
-
-    try {
-      const res = await fetch(`/api/media/shortvideo/random?channel=${encodeURIComponent(chan)}`);
-      if (res.ok) {
-        const data = await res.json();
-        v.src = `/api/media/shortvideo/stream?path=${encodeURIComponent(data.path)}`;
-        v.play().catch(() => {});
-      }
-    } catch (_) {}
-  },
-
-  changeSlotChannel(slotIndex, channel) {
-    this.randomSlotVideo(slotIndex, channel);
-  },
-
-  randomizeAllSlots() {
-    for (let i = 0; i < this.matrixState.slotCount; i++) {
-      this.randomSlotVideo(i);
-    }
-  },
-
-  focusSlot(slotIndex) {
-    const focusAudio = document.getElementById('matrix-focus-audio')?.checked;
-    const count = this.matrixState.slotCount;
-
-    for (let i = 0; i < count; i++) {
-      const slotEl = document.getElementById(`matrix-slot-${i}`);
-      const videoEl = document.getElementById(`slot-video-${i}`);
-      if (!slotEl || !videoEl) continue;
-
-      if (i === slotIndex) {
-        slotEl.classList.add('focus-active');
-        if (focusAudio) videoEl.muted = false;
-      } else {
-        slotEl.classList.remove('focus-active');
-        if (focusAudio) videoEl.muted = true;
-      }
-    }
-  },
-
-  toggleSlotPause(slotIndex) {
-    const v = document.getElementById(`slot-video-${slotIndex}`);
-    const btn = document.getElementById(`slot-play-btn-${slotIndex}`);
-    if (!v) return;
-    if (v.paused) {
-      v.play();
-      if (btn) btn.textContent = '⏸️';
-    } else {
-      v.pause();
-      if (btn) btn.textContent = '▶️';
-    }
-  },
-
-  toggleAudioAccompany() {
-    const audioBar = document.getElementById('audio-bar');
-    if (!audioBar) return;
-    const isHidden = audioBar.style.display === 'none';
-    audioBar.style.display = isHidden ? 'flex' : 'none';
-    if (isHidden) {
-      const container = document.getElementById('matrix-slots-container');
-      if (container) {
-        container.querySelectorAll('video').forEach(v => v.muted = true);
-      }
-    }
   },
 
   // --- 文本阅读器实现 ---
@@ -574,6 +401,8 @@ const MediaHub = {
       console.warn('Failed to save manga progress', e);
     }
   },
+
+  showAudioBar() { const bar = document.getElementById('audio-bar'); if (bar) bar.style.display = 'flex'; },
 
   // --- 全格式音频底栏 ---
   initAudioBar() {

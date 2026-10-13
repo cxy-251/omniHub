@@ -7,6 +7,7 @@ type ExistingModule = {
   dispose(): void;
   switchSubtab?(id: string): void;
   playAudio?(path: string, title: string, album: string): void;
+  showAudioBar?(): void;
 };
 
 const loaders = {
@@ -19,6 +20,7 @@ const loaders = {
 
 const AudioLibrary = lazy(() => import('./AudioLibrary'));
 const GalleryLibrary = lazy(() => import('./GalleryLibrary'));
+const VideoMatrix = lazy(() => import('./VideoMatrix'));
 
 // Transitional lifecycle adapter: existing modules remain runnable while each is moved to typed components.
 export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'libraries'>; sections: string[] }) {
@@ -27,12 +29,17 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
   const [audioVisited, setAudioVisited] = useState(false);
   const [galleryActive, setGalleryActive] = useState(false);
   const [galleryVisited, setGalleryVisited] = useState(false);
+  const [videoActive, setVideoActive] = useState(false);
+  const [videoVisited, setVideoVisited] = useState(false);
   const moduleRef = useRef<ExistingModule | undefined>(undefined);
   useEffect(() => {
     let disposed = false;
     let module: ExistingModule | undefined;
     const tabChanged = (event: Event) => {
       const tab = (event as CustomEvent<string>).detail;
+      const video = sections.includes('shortvideo') && tab === 'shortvideo';
+      setVideoActive(video);
+      if (video) setVideoVisited(true);
       const gallery = sections.includes('gallery') && tab === 'gallery';
       setGalleryActive(gallery);
       if (gallery) setGalleryVisited(true);
@@ -59,6 +66,9 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
   return <section className="tab-pane active" id={`pane-${id}`}>
     {error ? <p role="alert" className="mb-4 whitespace-pre-wrap text-danger">{error}</p> : null}
     <div id={`${id}-container`} />
+    {id === 'media' && sections.includes('shortvideo') && videoVisited ? <div hidden={!videoActive} className="mt-4">
+      <Suspense fallback={<p role="status">正在加载视频矩阵…</p>}><VideoMatrix active={videoActive} onAccompany={sections.includes('audio') ? () => moduleRef.current?.showAudioBar?.() : undefined} /></Suspense>
+    </div> : null}
     {id === 'media' && sections.includes('gallery') && galleryVisited ? <div hidden={!galleryActive} className="mt-4">
       <Suspense fallback={<p role="status">正在加载相册…</p>}><GalleryLibrary active={galleryActive} canEdit={sections.includes('admin')} /></Suspense>
     </div> : null}

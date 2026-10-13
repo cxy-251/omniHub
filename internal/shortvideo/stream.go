@@ -9,8 +9,15 @@ import (
 )
 
 // StreamVideo 处理短视频的 Range 206 局部内容请求（第 2.1.2 节）。
-func StreamVideo(w http.ResponseWriter, r *http.Request, filePath string) error {
+func StreamVideo(w http.ResponseWriter, r *http.Request, filePath string) (result error) {
 	cleanPath := filepath.Clean(filePath)
+	info, err := os.Lstat(cleanPath)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("video must be a regular file")
+	}
 	file, err := os.Open(cleanPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -19,15 +26,15 @@ func StreamVideo(w http.ResponseWriter, r *http.Request, filePath string) error 
 		}
 		return fmt.Errorf("failed to open video file: %w", err)
 	}
-	defer file.Close()
+	defer func() { result = errors.Join(result, file.Close()) }()
 
 	fi, err := file.Stat()
 	if err != nil {
 		return fmt.Errorf("failed to stat video file: %w", err)
 	}
 
-	if fi.IsDir() {
-		return errors.New("target video path is a directory")
+	if !fi.Mode().IsRegular() || !os.SameFile(info, fi) {
+		return errors.New("video changed while opening")
 	}
 
 	// 设置通用视频响应头

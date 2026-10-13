@@ -625,7 +625,9 @@ func (r *Router) handleShortVideoStream(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	_ = shortvideo.StreamVideo(w, req, fullPath)
+	if err := shortvideo.StreamVideo(w, req, fullPath); err != nil {
+		http.Error(w, "video file unavailable", 503)
+	}
 }
 
 func (r *Router) handleShortVideoAlbums(w http.ResponseWriter, req *http.Request) {
@@ -696,69 +698,11 @@ func (r *Router) handleShortVideoThumbnail(w http.ResponseWriter, req *http.Requ
 }
 
 func (r *Router) handleShortVideoChannels(w http.ResponseWriter, req *http.Request) {
-	primary := r.libMgr.GetPrimary()
-	if primary == nil {
-		writeJSON(w, http.StatusOK, []string{})
-		return
-	}
-	svDir := filepath.Join(primary.RootPath, "media_library", "shortvideo")
-	entries, err := os.ReadDir(svDir)
-	if err != nil {
-		writeJSON(w, http.StatusOK, []string{})
-		return
-	}
-	var channels []string
-	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-			channels = append(channels, e.Name())
-		}
-	}
-	writeJSON(w, http.StatusOK, channels)
+	r.listVideoChannels(w, req)
 }
 
 func (r *Router) handleShortVideoRandom(w http.ResponseWriter, req *http.Request) {
-	channel := req.URL.Query().Get("channel")
-	primary := r.libMgr.GetPrimary()
-	if primary == nil || channel == "" {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	channelDir, err := r.libMgr.ResolveCategoryPath(primary.ID+":media_library/shortvideo/"+channel, "media_library/shortvideo")
-	if err != nil {
-		http.Error(w, "invalid channel", http.StatusBadRequest)
-		return
-	}
-
-	var logicalPath string
-	for attempt := 0; attempt < 2; attempt++ {
-		video, err := r.videoCatalog.Random(req.Context(), channelDir)
-		if errors.Is(err, shortvideo.ErrNoVideos) {
-			http.Error(w, "no videos in channel", http.StatusNotFound)
-			return
-		}
-		if err != nil {
-			http.Error(w, "video catalog unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		logicalPath = primary.ID + ":media_library/shortvideo/" + filepath.ToSlash(filepath.Join(channel, video))
-		// 缓存只保存目录索引；发送路径前重新校验被选文件，拒绝替换后的越界链接。
-		resolved, err := r.libMgr.ResolveCategoryPath(logicalPath, "media_library/shortvideo")
-		if err == nil {
-			info, statErr := os.Stat(resolved)
-			if statErr == nil && info.Mode().IsRegular() {
-				break
-			}
-		}
-		r.videoCatalog.Invalidate(channelDir)
-		logicalPath = ""
-	}
-	if logicalPath == "" {
-		http.Error(w, "video channel changed; retry", http.StatusServiceUnavailable)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"path": logicalPath,
-	})
+	r.randomVideoLibrary(w, req)
 }
 
 // --- 文本 ---
