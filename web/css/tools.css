@@ -1,0 +1,78 @@
+/* 局域网小工具样式 */
+.tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.tool-card {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tool-card h3 {
+  margin: 0;
+  font-size: 15px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.clipboard-list {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  background-color: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.clipboard-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  background-color: var(--surface);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.metrics-box {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.metrics-item {
+  background-color: var(--bg);
+  border: 1px solid var(--border);
+  padding: 8px;
+  border-radius: 6px;
+}
+
+.metrics-val {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.terminal-box {
+  background-color: #000;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  height: 150px;
+  font-family: monospace;
+  font-size: 12px;
+  overflow-y: auto;
+  color: #58a6ff;
+  white-space: pre-wrap;
+}
