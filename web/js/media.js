@@ -392,13 +392,13 @@ const MediaHub = {
       this.textState.hasMore = data.has_more;
       pageInfo.textContent = `行号: ${data.start_line + 1} - ${data.start_line + data.lines.length} (总共: ${data.total_lines})`;
 
-      // 文本轻量富文本格式化
-      contentEl.innerHTML = data.lines.map(line => {
-        let esc = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        if (esc.startsWith('# ')) return `<h2>${esc.substring(2)}</h2>`;
-        if (esc.startsWith('## ')) return `<h3>${esc.substring(3)}</h3>`;
-        return `<div>${esc || '&nbsp;'}</div>`;
-      }).join('');
+      // 使用离线 marked.min.js 进行富文本与图表排版 (第 6.1 节)
+      const rawText = data.lines.join('\n');
+      if (window.marked && typeof window.marked.parse === 'function') {
+        contentEl.innerHTML = window.marked.parse(rawText);
+      } else {
+        contentEl.innerHTML = data.lines.map(line => `<div>${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") || '&nbsp;'}</div>`).join('');
+      }
     } catch (e) {
       contentEl.textContent = `加载错误: ${e.message}`;
     }

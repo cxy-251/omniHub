@@ -12,6 +12,7 @@ const ToolsHub = {
     this.loadClipboard();
     this.loadMetrics();
     this.loadSharedFiles();
+    this.initWebShell();
   },
 
   renderContainer() {
@@ -82,11 +83,11 @@ const ToolsHub = {
           </div>
         </div>
 
-        <!-- WebShell 终端 (仅管理员) -->
+        <!-- WebShell 终端 (第 11.4 节 - xterm.js 离线集成) -->
         <div class="tool-card" style="grid-column: 1 / -1;">
-          <h3>💻 应急 WebShell 终端 (仅 Admin 可用)</h3>
-          <div id="webshell-output" class="terminal-box">omniHub WebShell [受限应急调试模式]&#10;</div>
-          <div style="display:flex; gap:6px; margin-top:6px;">
+          <h3>💻 应急 WebShell 终端 (仅 Admin 可用，基于 xterm.js)</h3>
+          <div id="webshell-terminal" style="padding: 8px; background: #0d1117; border-radius: 6px; border: 1px solid var(--border); min-height: 180px;"></div>
+          <div style="display:flex; gap:6px; margin-top:8px;">
             <input type="text" id="webshell-input" placeholder="输入命令 (如 uptime, uname -a)" style="flex-grow:1; font-family:monospace;">
             <button id="btn-webshell-exec" class="btn-primary">执行</button>
           </div>
@@ -284,10 +285,28 @@ const ToolsHub = {
     }
   },
 
-  // --- WebShell ---
+  // --- WebShell (第 11.4 节 - xterm.js 原生挂载) ---
+  term: null,
+
+  initWebShell() {
+    if (this.term) return;
+    const termContainer = document.getElementById('webshell-terminal');
+    if (!termContainer || !window.Terminal) return;
+
+    this.term = new window.Terminal({
+      cursorBlink: true,
+      rows: 10,
+      theme: { background: '#0d1117', foreground: '#58a6ff' }
+    });
+    this.term.open(termContainer);
+    this.term.writeln('omniHub WebShell [受限应急调试模式 - xterm.js 已就绪]');
+    this.term.write('$ ');
+  },
+
   async execShell(cmd) {
-    const out = document.getElementById('webshell-output');
-    out.textContent += `$ ${cmd}\n`;
+    if (this.term) {
+      this.term.writeln(`\r\n$ ${cmd}`);
+    }
     try {
       const res = await fetch('/api/tools/webshell', {
         method: 'POST',
@@ -295,10 +314,18 @@ const ToolsHub = {
         body: JSON.stringify({ command: cmd })
       });
       const data = await res.json();
-      out.textContent += `${data.output || ''}\n`;
-      out.scrollTop = out.scrollHeight;
+      if (this.term) {
+        const lines = (data.output || '').split('\n');
+        for (const line of lines) {
+          this.term.writeln(line);
+        }
+        this.term.write('$ ');
+      }
     } catch (e) {
-      out.textContent += `执行异常: ${e.message}\n`;
+      if (this.term) {
+        this.term.writeln(`执行异常: ${e.message}`);
+        this.term.write('$ ');
+      }
     }
   },
 
