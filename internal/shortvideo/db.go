@@ -152,15 +152,18 @@ func (s *Storage) SaveThumbnail(targetID string, data []byte) error {
 	return err
 }
 
-// GetThumbnail 读取指定目标缩略图。
+// GetThumbnail 读取最多 2MiB 的指定目标缩略图，超限不加载 BLOB。
 func (s *Storage) GetThumbnail(targetID string) ([]byte, error) {
 	var data []byte
-	err := s.thumbDB.QueryRow("SELECT data FROM thumbnails WHERE target_id = ?", targetID).Scan(&data)
+	err := s.thumbDB.QueryRow("SELECT CASE WHEN length(data) <= ? THEN data ELSE NULL END FROM thumbnails WHERE target_id = ?", storage.MaxThumbnailReadBytes, targetID).Scan(&data)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if data == nil {
+		return nil, ErrImageCapacity
 	}
 	return data, nil
 }
@@ -178,15 +181,18 @@ func (s *Storage) SaveAlbumImage(postID string, orderIndex int, data []byte) err
 	return err
 }
 
-// GetAlbumImage 读取图集指定序号的图片。
+// GetAlbumImage 读取最多 32MiB 的图集图片，超限不加载 BLOB。
 func (s *Storage) GetAlbumImage(postID string, orderIndex int) ([]byte, error) {
 	var data []byte
-	err := s.albumDB.QueryRow("SELECT data FROM album_images WHERE post_id = ? AND order_index = ?", postID, orderIndex).Scan(&data)
+	err := s.albumDB.QueryRow("SELECT CASE WHEN length(data) <= ? THEN data ELSE NULL END FROM album_images WHERE post_id = ? AND order_index = ?", storage.MaxImageReadBytes, postID, orderIndex).Scan(&data)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if data == nil {
+		return nil, ErrImageCapacity
 	}
 	return data, nil
 }

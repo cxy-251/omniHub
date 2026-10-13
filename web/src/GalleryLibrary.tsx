@@ -9,6 +9,7 @@ function photoURL(kind: string, photo: Photo) {
   return `/api/media/gallery/${kind}?${new URLSearchParams({ id: photo.id, library_id: photo.library_id })}`;
 }
 
+// GalleryLibrary bounds the rendered page and exposes permitted trash actions.
 export default function GalleryLibrary({ active, canEdit }: Props) {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [offset, setOffset] = useState(0);

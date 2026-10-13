@@ -118,6 +118,7 @@ function DocumentReader({ document: item, active }: { document: Document; active
   </section>;
 }
 
+// TextLibrary retains selection while hidden and aborts file/position requests.
 export default function TextLibrary({ active }: { active: boolean }) {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [selected, setSelected] = useState<Document>();

@@ -2,7 +2,14 @@
 // 遵循 ARCHITECTURE.md 第 2 节规范。
 package shortvideo
 
-import "time"
+import (
+	"time"
+
+	"omnihub/internal/storage"
+)
+
+// ErrImageCapacity reports an image BLOB beyond its read budget, before allocation.
+var ErrImageCapacity = storage.ErrBlobCapacity
 
 // Creator 记录博主信息。
 type Creator struct {

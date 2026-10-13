@@ -47,6 +47,7 @@ type Router struct {
 	videoCatalog *shortvideo.VideoCatalog
 	textCatalog  *catalog.Catalog
 	audioCatalog *catalog.Catalog
+	mediaReads   chan struct{}
 
 	// 专区数据库连接复用缓存（第 12.2 节避免高频请求重复 Open 与 Migrate）
 	dbMu      sync.RWMutex
@@ -90,6 +91,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		videoCatalog: shortvideo.NewVideoCatalog(),
 		textCatalog:  catalog.New(".txt", ".epub", ".md", ".rst"),
 		audioCatalog: catalog.New(audio.FileExtensions()...),
+		mediaReads:   make(chan struct{}, 2),
 	}
 	r.registerRoutes()
 	return r, nil
@@ -666,7 +668,15 @@ func (r *Router) handleShortVideoAlbums(w http.ResponseWriter, req *http.Request
 
 func (r *Router) handleShortVideoAlbumImage(w http.ResponseWriter, req *http.Request) {
 	postID := req.URL.Query().Get("post_id")
-	idx, _ := strconv.Atoi(req.URL.Query().Get("index"))
+	idx := 0
+	if value := req.URL.Query().Get("index"); value != "" {
+		var err error
+		idx, err = strconv.Atoi(value)
+		if err != nil || idx < 0 || idx > 20000 {
+			http.Error(w, "invalid image index", 400)
+			return
+		}
+	}
 	primary := r.libMgr.GetPrimary()
 	if primary == nil || postID == "" {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -679,6 +689,10 @@ func (r *Router) handleShortVideoAlbumImage(w http.ResponseWriter, req *http.Req
 	}
 
 	data, err := storage.GetAlbumImage(postID, idx)
+	if errors.Is(err, shortvideo.ErrImageCapacity) {
+		http.Error(w, "album image exceeds read capacity", 413)
+		return
+	}
 	if err != nil || len(data) == 0 {
 		http.Error(w, "image not found", http.StatusNotFound)
 		return
@@ -702,6 +716,10 @@ func (r *Router) handleShortVideoThumbnail(w http.ResponseWriter, req *http.Requ
 	}
 
 	data, err := storage.GetThumbnail(targetID)
+	if errors.Is(err, shortvideo.ErrImageCapacity) {
+		http.Error(w, "thumbnail exceeds read capacity", 413)
+		return
+	}
 	if err != nil || len(data) == 0 {
 		http.Error(w, "thumbnail not found", http.StatusNotFound)
 		return

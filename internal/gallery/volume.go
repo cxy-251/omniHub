@@ -185,12 +185,15 @@ func (vm *VolumeManager) ReadOriginal(volumeName, id string) ([]byte, error) {
 	vm.mu.Unlock()
 
 	var blob []byte
-	err := db.QueryRow("SELECT data FROM originals WHERE id = ?", id).Scan(&blob)
+	err := db.QueryRow("SELECT CASE WHEN length(data) <= ? THEN data ELSE NULL END FROM originals WHERE id = ?", storage.MaxImageReadBytes, id).Scan(&blob)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to read original from %s: %w", volumeName, err)
+	}
+	if blob == nil {
+		return nil, ErrImageCapacity
 	}
 
 	return blob, nil
@@ -214,7 +217,7 @@ func ReadOriginalDirect(originalsDir, volumeName, id string) (data []byte, resul
 	defer func() { result = errors.Join(result, db.Close()) }()
 
 	var blob []byte
-	err = db.QueryRow("SELECT CASE WHEN length(data) <= ? THEN data ELSE NULL END FROM originals WHERE id = ?", 32<<20, id).Scan(&blob)
+	err = db.QueryRow("SELECT CASE WHEN length(data) <= ? THEN data ELSE NULL END FROM originals WHERE id = ?", storage.MaxImageReadBytes, id).Scan(&blob)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil

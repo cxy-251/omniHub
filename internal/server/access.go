@@ -55,6 +55,39 @@ func (r *Router) protectRoutes(next http.Handler) http.Handler {
 			http.Error(w, "trusted local client required", http.StatusForbidden)
 			return
 		}
+		if r.mediaReads != nil && bufferedMediaRead(path) {
+			if req.Context().Err() != nil {
+				http.Error(w, "media read canceled", 503)
+				return
+			}
+			select {
+			case r.mediaReads <- struct{}{}:
+				defer func() { <-r.mediaReads }()
+				if req.Context().Err() != nil {
+					http.Error(w, "media read canceled", 503)
+					return
+				}
+			case <-req.Context().Done():
+				http.Error(w, "media read canceled", 503)
+				return
+			}
+		}
 		next.ServeHTTP(w, req)
 	})
+}
+
+// Decompressed archive content and SQL image BLOBs have a per-request budget;
+// admitting only two together also limits their aggregate allocation pressure.
+func bufferedMediaRead(path string) bool {
+	if strings.HasPrefix(path, "/api/media/text/epub-content/") {
+		return true
+	}
+	switch path {
+	case "/api/media/gallery/original", "/api/media/gallery/thumbnail",
+		"/api/media/shortvideo/album/image", "/api/media/shortvideo/thumbnail",
+		"/api/media/manga/page", "/api/media/manga/cover", "/api/media/manga/pages",
+		"/api/media/text/chunk", "/api/media/text/epub/book":
+		return true
+	}
+	return false
 }

@@ -146,7 +146,7 @@ func (m *MetaDB) SaveThumbnail(t *Thumbnail) error {
 // GetThumbnail 读取最多 2MiB 的缩略图 BLOB，超限时不加载图像内容。
 func (m *MetaDB) GetThumbnail(photoID string) ([]byte, error) {
 	var data []byte
-	err := m.db.QueryRow("SELECT CASE WHEN length(data) <= ? THEN data ELSE NULL END FROM thumbnails WHERE photo_id = ? AND size_type = 'm'", 2<<20, photoID).Scan(&data)
+	err := m.db.QueryRow("SELECT CASE WHEN length(data) <= ? THEN data ELSE NULL END FROM thumbnails WHERE photo_id = ? AND size_type = 'm'", storage.MaxThumbnailReadBytes, photoID).Scan(&data)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil

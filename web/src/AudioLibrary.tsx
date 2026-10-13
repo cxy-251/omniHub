@@ -6,6 +6,7 @@ type Album = { id: string; title: string; library_name?: string; track_count: nu
 type Props = { active: boolean; onPlay: (path: string, title: string, album: string) => void };
 const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
 
+// AudioLibrary pages albums/tracks only while active and delegates to one player.
 export default function AudioLibrary({ active, onPlay }: Props) {
   const [albums, setAlbums] = useState<Album[]>([]);
   const [offset, setOffset] = useState(0);

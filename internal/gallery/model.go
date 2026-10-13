@@ -3,12 +3,13 @@
 package gallery
 
 import (
-	"errors"
 	"time"
+
+	"omnihub/internal/storage"
 )
 
 // ErrImageCapacity reports a BLOB beyond the bounded thumbnail/original read budget.
-var ErrImageCapacity = errors.New("image exceeds read capacity")
+var ErrImageCapacity = storage.ErrBlobCapacity
 
 // 单分卷最大容量上限：4GB（第 3.1.2 节、第 3.3.2 节）
 const MaxVolumeSizeBytes = 4 * 1024 * 1024 * 1024

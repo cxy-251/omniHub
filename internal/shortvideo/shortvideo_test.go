@@ -1,6 +1,7 @@
 package shortvideo
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,5 +62,25 @@ func TestVideoStreamRange206(t *testing.T) {
 	}
 	if rec.Body.String() != "0123456789" {
 		t.Errorf("expected slice '0123456789', got '%s'", rec.Body.String())
+	}
+}
+
+func TestOversizedAlbumAndThumbnailDoNotLoadBlobs(t *testing.T) {
+	s, err := OpenStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.thumbDB.Exec("DROP TABLE thumbnails; CREATE VIEW thumbnails AS SELECT 'big' target_id, zeroblob(2097153) data"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.albumDB.Exec("DROP TABLE album_images; CREATE VIEW album_images AS SELECT 'big' post_id, 1 order_index, zeroblob(33554433) data"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetThumbnail("big"); !errors.Is(err, ErrImageCapacity) {
+		t.Fatalf("unbounded thumbnail: %v", err)
+	}
+	if _, err := s.GetAlbumImage("big", 1); !errors.Is(err, ErrImageCapacity) {
+		t.Fatalf("unbounded album image: %v", err)
 	}
 }

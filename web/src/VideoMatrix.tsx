@@ -43,6 +43,7 @@ function VideoSlot({ active, channels, index, muted, focused, revision, onFocus 
   </article>;
 }
 
+// VideoMatrix retains controls while hidden, with slots releasing their decoders.
 export default function VideoMatrix({ active, onAccompany }: { active: boolean; onAccompany?: () => void }) {
   const [channels, setChannels] = useState<string[]>([]);
   const [count, setCount] = useState(3);
