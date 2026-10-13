@@ -49,6 +49,15 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 		}
 		ctx = context.WithValue(ctx, ClientContextKey, clientTarget)
 
+		// 检查系统是否有 Admin（第 5.3.3 节）
+		hasAdmin, _ := m.db.HasAdmin()
+		if !hasAdmin && !isLoopback(r.RemoteAddr) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"system uninitialized, admin setup required on local host"}`))
+			return
+		}
+
 		// 1. 本地回环免密直通 Admin（第 8.1.1 节）
 		if isLoopback(r.RemoteAddr) {
 			adminUser := &User{

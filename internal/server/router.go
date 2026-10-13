@@ -73,6 +73,7 @@ func (r *Router) registerRoutes() {
 
 	// 用户系统与状态接口
 	r.mux.HandleFunc("/api/auth/status", r.handleAuthStatus)
+	r.mux.HandleFunc("/api/auth/setup", r.handleAuthSetup)
 	r.mux.HandleFunc("/api/auth/login", r.handleAuthLogin)
 
 	// 媒体库管理接口
@@ -150,6 +151,49 @@ func (r *Router) handleAuthStatus(w http.ResponseWriter, req *http.Request) {
 		"logged_in": user.ID > 0,
 		"user":      user,
 		"has_admin": hasAdmin,
+	})
+}
+
+func (r *Router) handleAuthSetup(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	hasAdmin, _ := r.authDB.HasAdmin()
+	if hasAdmin {
+		http.Error(w, "admin already exists", http.StatusForbidden)
+		return
+	}
+
+	var payload struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil || payload.Username == "" || payload.Password == "" {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	user, err := r.authDB.CreateUser(payload.Username, payload.Password, auth.RoleAdmin, auth.LevelAdmin)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	token := fmt.Sprintf("token_%d_%d", user.ID, user.Level)
+	_ = r.authDB.CreateSession(user.ID, token, 86400*1000*1000*1000)
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "omni_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "ok",
+		"token":  token,
+		"user":   user,
 	})
 }
 

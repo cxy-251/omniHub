@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -130,3 +132,44 @@ func TestIPRateLimiter(t *testing.T) {
 		t.Errorf("expected rate limit cleared, got: %v", err)
 	}
 }
+
+func TestAdminInitialBlocking(t *testing.T) {
+	tempDir := t.TempDir()
+	db, err := OpenDB(filepath.Join(tempDir, "users.db"))
+	if err != nil {
+		t.Fatalf("failed to open auth db: %v", err)
+	}
+	defer db.Close()
+
+	mid := NewMiddleware(db)
+	nextCalled := false
+	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// 1. 无 Admin 时外部 IP 请求应被 503 阻断
+	reqExt := httptest.NewRequest("GET", "/api/media/gallery/list", nil)
+	reqExt.RemoteAddr = "192.168.1.100:12345"
+	recExt := httptest.NewRecorder()
+	mid.Handler(dummyHandler).ServeHTTP(recExt, reqExt)
+	if recExt.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 for external request without admin, got %d", recExt.Code)
+	}
+	if nextCalled {
+		t.Error("expected next handler not to be called for external request")
+	}
+
+	// 2. 无 Admin 时本地回环请求应放行以供初始化
+	reqLocal := httptest.NewRequest("GET", "/api/auth/status", nil)
+	reqLocal.RemoteAddr = "127.0.0.1:12345"
+	recLocal := httptest.NewRecorder()
+	mid.Handler(dummyHandler).ServeHTTP(recLocal, reqLocal)
+	if recLocal.Code != http.StatusOK {
+		t.Errorf("expected 200 for local request, got %d", recLocal.Code)
+	}
+	if !nextCalled {
+		t.Error("expected next handler to be called for local request")
+	}
+}
+
