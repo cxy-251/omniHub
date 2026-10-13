@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -25,6 +26,7 @@ const DataDirName = ".omni_data"
 var StandardDirs = []string{
 	// 独立游戏与模拟器分类
 	"standalone_games/rpg_games",
+	"standalone_games/renpy_games",
 	"standalone_games/retro_games",
 	"standalone_games/slg_games",
 	"standalone_games/flash_games",
@@ -169,10 +171,19 @@ func (m *Manager) MountLibrary(rootPath string, isPrimary, readOnly bool) (*Libr
 		return nil, errors.New("library root path cannot be empty")
 	}
 
-	cleanPath := filepath.Clean(rootPath)
+	cleanPath, err := filepath.Abs(rootPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve library root: %w", err)
+	}
 
 	// 检查目录是否存在与在线状态（第 1.4.3 节）
 	info, err := os.Stat(cleanPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect library root: %w", err)
+	}
+	if err == nil && !info.IsDir() {
+		return nil, errors.New("library root must be a directory")
+	}
 	isOnline := err == nil && info.IsDir()
 
 	var marker *Marker
@@ -219,17 +230,27 @@ func (m *Manager) MountLibrary(rootPath string, isPrimary, readOnly bool) (*Libr
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.libraries[lib.ID] = lib
+	if existing := m.libraries[lib.ID]; existing != nil && existing.RootPath != cleanPath {
+		return nil, errors.New("library ID already mounted at another root")
+	}
 	if isPrimary || m.primaryID == "" {
-		m.primaryID = lib.ID
 		// 若为主库，确保 .omni_data 目录存在（第 1.3.1 节）
 		if isOnline && !readOnly {
 			dataDir := filepath.Join(cleanPath, DataDirName)
-			_ = os.MkdirAll(dataDir, 0755)
+			if err := os.MkdirAll(dataDir, 0755); err != nil {
+				return nil, fmt.Errorf("create primary state directory: %w", err)
+			}
 		}
+		for _, existing := range m.libraries {
+			existing.IsPrimary = false
+		}
+		m.primaryID = lib.ID
 	}
+	lib.IsPrimary = m.primaryID == lib.ID
+	m.libraries[lib.ID] = lib
 
-	return lib, nil
+	snapshot := *lib
+	return &snapshot, nil
 }
 
 // RemoveLibrary 移除指定资源库映射（不删除任何物理文件）。
@@ -240,12 +261,8 @@ func (m *Manager) RemoveLibrary(id string) {
 	delete(m.libraries, id)
 	if m.primaryID == id {
 		m.primaryID = ""
-		// 自动挑选第一个可用库作为新主库
-		for remainingID := range m.libraries {
-			m.primaryID = remainingID
-			m.libraries[remainingID].IsPrimary = true
-			break
-		}
+		// 主库承载全局状态，移除映射不能暗中切换账号数据库。
+		// 新主库由显式迁移流程选定。
 	}
 }
 
@@ -257,7 +274,12 @@ func (m *Manager) GetPrimary() *Library {
 	if m.primaryID == "" {
 		return nil
 	}
-	return m.libraries[m.primaryID]
+	lib := m.libraries[m.primaryID]
+	if lib == nil {
+		return nil
+	}
+	snapshot := *lib
+	return &snapshot
 }
 
 // ListLibraries 返回当前所有已挂载的资源库列表。
@@ -267,8 +289,10 @@ func (m *Manager) ListLibraries() []*Library {
 
 	list := make([]*Library, 0, len(m.libraries))
 	for _, lib := range m.libraries {
-		list = append(list, lib)
+		snapshot := *lib
+		list = append(list, &snapshot)
 	}
+	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
 	return list
 }
 
@@ -311,6 +335,11 @@ func (m *Manager) IsCategoryDisabled(categoryRelPath string) bool {
 func (m *Manager) ResolvePath(logicalPath string) (string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.resolvePathLocked(logicalPath)
+}
+
+// resolvePathLocked 在调用方持有读锁时解析路径，确保分类检查使用同一挂载快照。
+func (m *Manager) resolvePathLocked(logicalPath string) (string, error) {
 
 	if logicalPath == "" {
 		return "", errors.New("empty logical path")
@@ -375,12 +404,12 @@ func (m *Manager) ResolvePath(logicalPath string) (string, error) {
 // ResolveCategoryPath 限制资源在指定分类目录内，防止低权限媒体接口读取库内账号或其他分类。
 // allowedDirs 使用库根目录下的逻辑相对目录；库内跨分类符号链接同样被拒绝。
 func (m *Manager) ResolveCategoryPath(logicalPath string, allowedDirs ...string) (string, error) {
-	path, err := m.ResolvePath(logicalPath)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	path, err := m.resolvePathLocked(logicalPath)
 	if err != nil {
 		return "", err
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	id := m.primaryID
 	if parts := strings.SplitN(logicalPath, ":", 2); len(parts) == 2 {
 		id = parts[0]

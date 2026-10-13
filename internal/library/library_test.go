@@ -6,6 +6,66 @@ import (
 	"testing"
 )
 
+func TestMountSnapshotsAndExplicitPrimaryRemoval(t *testing.T) {
+	mgr := NewManager()
+	first, err := mgr.AddLibrary(t.TempDir(), false)
+	if err != nil || !first.IsPrimary {
+		t.Fatalf("first mount must be primary: %v", err)
+	}
+	first.RootPath = "modified by caller"
+	if mgr.GetPrimary().RootPath == first.RootPath {
+		t.Fatal("mount exposed mutable manager state")
+	}
+	second, err := mgr.AddLibrary(t.TempDir(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lib := range mgr.ListLibraries() {
+		if lib.IsPrimary != (lib.ID == second.ID) {
+			t.Fatal("inconsistent primary flags")
+		}
+		lib.IsPrimary = false
+	}
+	if !mgr.GetPrimary().IsPrimary {
+		t.Fatal("list exposed mutable manager state")
+	}
+	primary := mgr.GetPrimary()
+	primary.Name = "modified by caller"
+	if mgr.GetPrimary().Name == primary.Name {
+		t.Fatal("primary query exposed mutable manager state")
+	}
+	mgr.RemoveLibrary(second.ID)
+	if mgr.GetPrimary() != nil || len(mgr.ListLibraries()) != 1 {
+		t.Fatal("removal silently selected a new primary")
+	}
+}
+
+func TestMountRejectsDuplicateIdentityAndFileRoot(t *testing.T) {
+	mgr := NewManager()
+	root := t.TempDir()
+	first, err := mgr.AddLibrary(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	marker, err := os.ReadFile(filepath.Join(root, LibraryMarkerFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, LibraryMarkerFile), marker, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.MountLibrary(other, true, true); err == nil {
+		t.Fatal("duplicate library replaced existing mount")
+	}
+	if mgr.GetPrimary().ID != first.ID || mgr.GetPrimary().RootPath != root {
+		t.Fatal("failed mount changed primary")
+	}
+	if _, err := mgr.AddLibrary(filepath.Join(root, LibraryMarkerFile), false); err == nil {
+		t.Fatal("accepted file as library root")
+	}
+}
+
 func TestLibraryZeroFaultTolerance(t *testing.T) {
 	mgr := NewManager()
 	if mgr.GetPrimary() != nil {
