@@ -286,6 +286,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/audio/album", r.handleAudioAlbum)
 	r.mux.HandleFunc("/api/media/audio/stream", r.handleAudioStream)
 	r.mux.HandleFunc("/api/media/audio/cover", r.handleAudioCover)
+	r.mux.HandleFunc("/api/media/audio/metadata", r.handleAudioMetadata)
 	r.mux.HandleFunc("/api/media/audio/progress", r.handleAudioProgress)
 
 	// 漫画业务接口

@@ -2,7 +2,10 @@ package server
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
+	"image"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,7 +30,24 @@ func TestNestedAudioLibrariesNaturalOrderingAndReadOnlyProgress(t *testing.T) {
 	}
 	manager := library.NewManager()
 	contents := make(map[string]string)
+	labels := make(map[string]string)
+	var picture bytes.Buffer
+	if err := png.Encode(&picture, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
 	for _, content := range []string{"first library", "second library"} {
+		label := content
+		frame := func(id string, data []byte) []byte {
+			header := make([]byte, 10)
+			copy(header, id)
+			binary.BigEndian.PutUint32(header[4:8], uint32(len(data)))
+			return append(header, data...)
+		}
+		body := frame("TIT2", append([]byte{3}, []byte(content)...))
+		body = append(body, frame("APIC", append([]byte("\x00image/png\x00\x03\x00"), picture.Bytes()...))...)
+		size := len(body)
+		header := []byte{'I', 'D', '3', 3, 0, 0, byte(size>>21) & 127, byte(size>>14) & 127, byte(size>>7) & 127, byte(size) & 127}
+		content = string(append(header, body...))
 		root := t.TempDir()
 		if _, err := library.NewManager().AddLibrary(root, false); err != nil {
 			t.Fatal(err)
@@ -46,6 +66,7 @@ func TestNestedAudioLibrariesNaturalOrderingAndReadOnlyProgress(t *testing.T) {
 			t.Fatal(err)
 		}
 		contents[lib.ID] = content
+		labels[lib.ID] = label
 	}
 	if err := manager.SetPrimary(""); err != nil {
 		t.Fatal(err)
@@ -81,6 +102,18 @@ func TestNestedAudioLibrariesNaturalOrderingAndReadOnlyProgress(t *testing.T) {
 		t.Fatalf("track order: %s", w.Body.String())
 	}
 	id := album.Tracks[0].RelPath
+	for _, item := range albums {
+		path := item.ID + "/2.mp3"
+		w = request(http.MethodGet, "/api/media/audio/metadata?path="+url.QueryEscape(path), nil)
+		var metadata audio.Metadata
+		if err := json.Unmarshal(w.Body.Bytes(), &metadata); err != nil || w.Code != 200 || metadata.Title != labels[item.LibraryID] || !metadata.HasCover {
+			t.Fatalf("metadata owning library: %d %s", w.Code, w.Body.String())
+		}
+		w = request(http.MethodGet, "/api/media/audio/cover?path="+url.QueryEscape(path), nil)
+		if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), picture.Bytes()) || w.Header().Get("Content-Type") != "image/png" {
+			t.Fatal("embedded cover returned incorrectly")
+		}
+	}
 	w = request(http.MethodPost, "/api/media/audio/progress", map[string]any{"audio_id": id, "offset": 42.5})
 	if w.Code != 200 {
 		t.Fatalf("read-only library should allow global progress: %s", w.Body.String())

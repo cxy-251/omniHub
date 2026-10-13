@@ -67,6 +67,22 @@ func (r *Router) handleAudioCover(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(path))
+	if audio.SupportedExtensions[ext] {
+		metadata, err := r.readAudioMetadata(req)
+		if err != nil {
+			http.Error(w, "embedded cover unavailable", 422)
+			return
+		}
+		if !metadata.HasCover {
+			http.Error(w, "embedded cover not found", 404)
+			return
+		}
+		w.Header().Set("Content-Type", http.DetectContentType(metadata.Picture))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "private, no-store")
+		_, _ = w.Write(metadata.Picture)
+		return
+	}
 	if ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".webp" {
 		http.Error(w, "unsupported cover format", 400)
 		return

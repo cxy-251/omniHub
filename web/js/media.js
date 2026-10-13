@@ -146,6 +146,12 @@ const MediaHub = {
     });
   },
 
+  updateAudioLabels(path, title, album) {
+    if (this.currentAudioId !== path || !this.audioPlayer) return;
+    document.getElementById('audio-title').textContent = title;
+    document.getElementById('audio-album').textContent = album;
+  },
+
   playAudio(path, title, album) {
     this.saveAudioProgress(true);
     const player = this.audioPlayer;

@@ -7,6 +7,7 @@ type ExistingModule = {
   dispose(): void;
   switchSubtab?(id: string): void;
   playAudio?(path: string, title: string, album: string): void;
+  updateAudioLabels?(path: string, title: string, album: string): void;
   showAudioBar?(): void;
 };
 
@@ -75,7 +76,7 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
       <Suspense fallback={<p role="status">正在加载相册…</p>}><GalleryLibrary active={galleryActive} canEdit={sections.includes('admin')} /></Suspense>
     </div> : null}
     {id === 'media' && sections.includes('audio') && audioVisited ? <div hidden={!audioActive} className="mt-4">
-      <Suspense fallback={<p role="status">正在加载音频专辑…</p>}><AudioLibrary active={audioActive} onPlay={(path, title, album) => moduleRef.current?.playAudio?.(path, title, album)} /></Suspense>
+      <Suspense fallback={<p role="status">正在加载音频专辑…</p>}><AudioLibrary active={audioActive} onPlay={(path, title, album) => moduleRef.current?.playAudio?.(path, title, album)} onMetadata={(path, title, album) => moduleRef.current?.updateAudioLabels?.(path, title, album)} /></Suspense>
     </div> : null}
   </section>;
 }
