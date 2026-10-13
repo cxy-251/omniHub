@@ -3,16 +3,16 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QProcess>
+#include "backend_api.h"
 
 GameLauncher::GameLauncher(QObject *parent) : QObject(parent) {}
 
-void GameLauncher::fetchGames(const QString &hostUrl)
+void GameLauncher::fetchGames()
 {
     m_loading = true;
     emit loadingChanged();
 
-    QUrl url(hostUrl + "/api/games/list?target=gui_only");
-    QNetworkRequest req(url);
+    QNetworkRequest req = BackendApi::localRequest("/api/games/list");
     QNetworkReply *reply = m_net.get(req);
 
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {

@@ -28,3 +28,7 @@
 5. 相册活动卷封存、主库迁移与合并冲突处理仍需按修订后的规范落实，文档修订不代表实现完成。
 
 后续先修复以上数据与权限基础，再验证媒体、游戏和原生客户端主流程。
+
+## 后续阶段
+
+实施计划及每阶段验证边界见 `IMPLEMENTATION_PLAN.md`。Web 技术栈已由用户确定为 React + TypeScript + Tailwind CSS，使用 pnpm/Vite；Python 使用 uv。CLI 的页面验证使用用户现有 Chrome，不安装 Playwright 或要求桌面插件。

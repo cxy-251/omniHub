@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,111 +44,170 @@ type Router struct {
 
 	// 专区数据库连接复用缓存（第 12.2 节避免高频请求重复 Open 与 Migrate）
 	dbMu      sync.RWMutex
-	cachedLib string
-	metaDB    *gallery.MetaDB
-	svStorage *shortvideo.Storage
-	mangaDB   *manga.DB
-	gamesDB   *games.DB
+	closed    bool
+	metaDB    map[string]*gallery.MetaDB
+	svStorage map[string]*shortvideo.Storage
+	mangaDB   map[string]*manga.DB
+	gamesDB   map[string]*games.DB
 }
 
 // NewRouter 创建路由分发器实例。
-func NewRouter(libMgr *library.Manager, authDB *auth.DB) *Router {
+func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken string) (*Router, error) {
 	// 初始化音频断点数据库
-	audioDBPath := filepath.Join(os.TempDir(), "omnihub_audio_progress.db")
-	progDB, _ := audio.OpenProgressDB(audioDBPath)
+	if stateDir == "" {
+		return nil, errors.New("router state directory is required")
+	}
+	audioDBPath := filepath.Join(stateDir, "audio_progress.db")
+	progDB, err := audio.OpenProgressDB(audioDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("open audio progress: %w", err)
+	}
 
 	r := &Router{
 		mux:        http.NewServeMux(),
+		metaDB:     make(map[string]*gallery.MetaDB),
+		svStorage:  make(map[string]*shortvideo.Storage),
+		mangaDB:    make(map[string]*manga.DB),
+		gamesDB:    make(map[string]*games.DB),
 		libMgr:     libMgr,
 		authDB:     authDB,
-		authMid:    auth.NewMiddleware(authDB),
+		authMid:    auth.NewMiddleware(authDB, localToken),
 		clipboard:  tools.NewClipboardManager(50),
 		taskMgr:    tasks.NewManager(),
 		progressDB: progDB,
 		megaClient: mega.NewClient("", 5*time.Minute),
 	}
 	r.registerRoutes()
-	return r
+	return r, nil
 }
 
 func (r *Router) getMetaDB(root string) (*gallery.MetaDB, error) {
 	r.dbMu.Lock()
 	defer r.dbMu.Unlock()
-	if r.metaDB != nil && r.cachedLib == root {
-		return r.metaDB, nil
+	if r.closed {
+		return nil, errors.New("router is closed")
+	}
+	readOnly := r.libMgr.IsReadOnly(root)
+	key := fmt.Sprintf("%s:%t", root, readOnly)
+	if db := r.metaDB[key]; db != nil {
+		return db, nil
 	}
 	galleryDir := filepath.Join(root, "media_library", "gallery")
-	metaDB, err := gallery.OpenMetaDB(galleryDir)
+	open := gallery.OpenMetaDB
+	if readOnly {
+		open = gallery.OpenMetaDBReadOnly
+	}
+
+	metaDB, err := open(galleryDir)
 	if err != nil {
 		return nil, err
 	}
-	if r.metaDB != nil && r.cachedLib != root {
-		_ = r.metaDB.Close()
-	}
-	r.metaDB = metaDB
-	r.cachedLib = root
+	r.metaDB[key] = metaDB
 	return metaDB, nil
 }
 
 func (r *Router) getSVStorage(root string) (*shortvideo.Storage, error) {
 	r.dbMu.Lock()
 	defer r.dbMu.Unlock()
-	if r.svStorage != nil && r.cachedLib == root {
-		return r.svStorage, nil
+	if r.closed {
+		return nil, errors.New("router is closed")
+	}
+	readOnly := r.libMgr.IsReadOnly(root)
+	key := fmt.Sprintf("%s:%t", root, readOnly)
+	if db := r.svStorage[key]; db != nil {
+		return db, nil
 	}
 	svDir := filepath.Join(root, "media_library", "shortvideo")
-	storage, err := shortvideo.OpenStorage(svDir)
+	open := shortvideo.OpenStorage
+	if readOnly {
+		open = shortvideo.OpenStorageReadOnly
+	}
+
+	storage, err := open(svDir)
 	if err != nil {
 		return nil, err
 	}
-	if r.svStorage != nil && r.cachedLib != root {
-		_ = r.svStorage.Close()
-	}
-	r.svStorage = storage
-	r.cachedLib = root
+	r.svStorage[key] = storage
 	return storage, nil
 }
 
 func (r *Router) getMangaDB(root string) (*manga.DB, error) {
 	r.dbMu.Lock()
 	defer r.dbMu.Unlock()
-	if r.mangaDB != nil && r.cachedLib == root {
-		return r.mangaDB, nil
+	if r.closed {
+		return nil, errors.New("router is closed")
+	}
+	readOnly := r.libMgr.IsReadOnly(root)
+	key := fmt.Sprintf("%s:%t", root, readOnly)
+	if db := r.mangaDB[key]; db != nil {
+		return db, nil
 	}
 	mangaDir := filepath.Join(root, "media_library", "manga")
-	mDB, err := manga.OpenDB(mangaDir)
+	open := manga.OpenDB
+	if readOnly {
+		open = manga.OpenDBReadOnly
+	}
+
+	mDB, err := open(mangaDir)
 	if err != nil {
 		return nil, err
 	}
-	if r.mangaDB != nil && r.cachedLib != root {
-		_ = r.mangaDB.Close()
-	}
-	r.mangaDB = mDB
-	r.cachedLib = root
+	r.mangaDB[key] = mDB
 	return mDB, nil
 }
 
 func (r *Router) getGamesDB(root string) (*games.DB, error) {
 	r.dbMu.Lock()
 	defer r.dbMu.Unlock()
-	if r.gamesDB != nil && r.cachedLib == root {
-		return r.gamesDB, nil
+	if r.closed {
+		return nil, errors.New("router is closed")
+	}
+	readOnly := r.libMgr.IsReadOnly(root)
+	key := fmt.Sprintf("%s:%t", root, readOnly)
+	if db := r.gamesDB[key]; db != nil {
+		return db, nil
 	}
 	gamesDir := filepath.Join(root, "standalone_games")
-	gdb, err := games.OpenDB(gamesDir)
+	open := games.OpenDB
+	if readOnly {
+		open = games.OpenDBReadOnly
+	}
+
+	gdb, err := open(gamesDir)
 	if err != nil {
 		return nil, err
 	}
-	if r.gamesDB != nil && r.cachedLib != root {
-		_ = r.gamesDB.Close()
-	}
-	r.gamesDB = gdb
-	r.cachedLib = root
+	r.gamesDB[key] = gdb
 	return gdb, nil
 }
 
+// Close 在 HTTP 服务完成退出后关闭所有模块连接，允许重复调用。
+func (r *Router) Close() error {
+	r.dbMu.Lock()
+	defer r.dbMu.Unlock()
+	if r.closed {
+		return nil
+	}
+	r.closed = true
+	var errs []error
+	for _, db := range r.metaDB {
+		errs = append(errs, db.Close())
+	}
+	for _, db := range r.svStorage {
+		errs = append(errs, db.Close())
+	}
+	for _, db := range r.mangaDB {
+		errs = append(errs, db.Close())
+	}
+	for _, db := range r.gamesDB {
+		errs = append(errs, db.Close())
+	}
+	errs = append(errs, r.progressDB.Close(), r.taskMgr.Close())
+	return errors.Join(errs...)
+}
+
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	r.authMid.Handler(r.mux).ServeHTTP(w, req)
+	r.authMid.Handler(r.protectRoutes(r.mux)).ServeHTTP(w, req)
 }
 
 func (r *Router) registerRoutes() {
@@ -158,6 +218,7 @@ func (r *Router) registerRoutes() {
 
 	// 用户系统与状态接口
 	r.mux.HandleFunc("/api/auth/status", r.handleAuthStatus)
+	r.mux.HandleFunc("/api/sections", r.handleSections)
 	r.mux.HandleFunc("/api/auth/setup", r.handleAuthSetup)
 	r.mux.HandleFunc("/api/auth/login", r.handleAuthLogin)
 
@@ -235,11 +296,27 @@ func (r *Router) registerRoutes() {
 			return
 		}
 		subPath := strings.TrimPrefix(req.URL.Path, "/standalone_games/")
-		if strings.Contains(subPath, "..") {
-			http.Error(w, "invalid path", http.StatusBadRequest)
+		parts := strings.Split(subPath, "/")
+		if len(parts) < 2 || (parts[0] != "rpg_games" && parts[0] != "slg_games" && parts[0] != "retro_games" && parts[0] != "flash_games") {
+			http.Error(w, "web game asset not allowed", http.StatusForbidden)
 			return
 		}
-		fullPath := filepath.Join(primary.RootPath, "standalone_games", subPath)
+		for _, part := range parts {
+			if part == "" || strings.HasPrefix(part, ".") || strings.EqualFold(part, "save") || strings.EqualFold(part, "saves") || strings.EqualFold(part, "logs") || strings.EqualFold(part, "omni.json") {
+				http.Error(w, "private game asset not allowed", http.StatusForbidden)
+				return
+			}
+		}
+		fullPath, err := r.libMgr.ResolveCategoryPath(primary.ID+":standalone_games/"+subPath, "standalone_games/"+parts[0])
+		if err != nil {
+			http.Error(w, "invalid game asset path", http.StatusBadRequest)
+			return
+		}
+		info, err := os.Stat(fullPath)
+		if err != nil || info.IsDir() {
+			http.NotFound(w, req)
+			return
+		}
 		http.ServeFile(w, req, fullPath)
 	})
 
@@ -251,7 +328,11 @@ func (r *Router) registerRoutes() {
 
 func (r *Router) handleAuthStatus(w http.ResponseWriter, req *http.Request) {
 	user := auth.UserFromContext(req.Context())
-	hasAdmin, _ := r.authDB.HasAdmin()
+	hasAdmin, err := r.authDB.HasAdmin()
+	if err != nil {
+		http.Error(w, "authentication store unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"logged_in": user.ID > 0,
 		"user":      user,
@@ -260,6 +341,10 @@ func (r *Router) handleAuthStatus(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) handleAuthSetup(w http.ResponseWriter, req *http.Request) {
+	if !auth.IsTrustedLocalFromContext(req.Context()) {
+		http.Error(w, "administrator setup requires trusted local client", http.StatusForbidden)
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -279,7 +364,7 @@ func (r *Router) handleAuthSetup(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	user, err := r.authDB.CreateUser(payload.Username, payload.Password, auth.RoleAdmin, auth.LevelAdmin)
+	user, err := r.authDB.CreateInitialAdmin(payload.Username, payload.Password)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -290,13 +375,19 @@ func (r *Router) handleAuthSetup(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	_ = r.authDB.CreateSession(user.ID, token, 86400*time.Second)
+	if err := r.authDB.CreateSession(user.ID, token, 24*time.Hour); err != nil {
+		http.Error(w, "failed to create session", http.StatusInternalServerError)
+		return
+	}
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "omni_token",
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   req.TLS != nil,
+		MaxAge:   86400,
 	})
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -332,13 +423,19 @@ func (r *Router) handleAuthLogin(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	_ = r.authDB.CreateSession(user.ID, token, 86400*time.Second)
+	if err := r.authDB.CreateSession(user.ID, token, 24*time.Hour); err != nil {
+		http.Error(w, "failed to create session", http.StatusInternalServerError)
+		return
+	}
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "omni_token",
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   req.TLS != nil,
+		MaxAge:   86400,
 	})
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -371,7 +468,7 @@ func (r *Router) handleGalleryList(w http.ResponseWriter, req *http.Request) {
 	}
 	metaDB, err := r.getMetaDB(primary.RootPath)
 	if err != nil {
-		writeJSON(w, http.StatusOK, []interface{}{})
+		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -380,7 +477,7 @@ func (r *Router) handleGalleryList(w http.ResponseWriter, req *http.Request) {
 	offset, _ := strconv.Atoi(req.URL.Query().Get("offset"))
 	photos, err := metaDB.ListPhotos(incDeleted, limit, offset)
 	if err != nil {
-		writeJSON(w, http.StatusOK, []interface{}{})
+		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	writeJSON(w, http.StatusOK, photos)
@@ -459,9 +556,14 @@ func (r *Router) handleShortVideoStream(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	fullPath, err := r.libMgr.ResolvePath(relPath)
+	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/shortvideo")
 	if err != nil {
 		http.Error(w, "file not found in library", http.StatusNotFound)
+		return
+	}
+
+	if strings.ToLower(filepath.Ext(fullPath)) != ".mp4" {
+		http.Error(w, "unsupported media format", http.StatusBadRequest)
 		return
 	}
 
@@ -476,11 +578,15 @@ func (r *Router) handleShortVideoAlbums(w http.ResponseWriter, req *http.Request
 	}
 	storage, err := r.getSVStorage(primary.RootPath)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]int{})
+		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	albums, _ := storage.ListAlbums()
+	albums, err := storage.ListAlbums()
+	if err != nil {
+		http.Error(w, "album query failed", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, albums)
 }
 
@@ -559,7 +665,11 @@ func (r *Router) handleShortVideoRandom(w http.ResponseWriter, req *http.Request
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	channelDir := filepath.Join(primary.RootPath, "media_library", "shortvideo", channel)
+	channelDir, err := r.libMgr.ResolveCategoryPath(primary.ID+":media_library/shortvideo/"+channel, "media_library/shortvideo")
+	if err != nil {
+		http.Error(w, "invalid channel", http.StatusBadRequest)
+		return
+	}
 
 	var mp4Files []string
 	_ = filepath.Walk(channelDir, func(path string, info os.FileInfo, err error) error {
@@ -635,7 +745,7 @@ func (r *Router) handleTextChunk(w http.ResponseWriter, req *http.Request) {
 	startLine, _ := strconv.Atoi(req.URL.Query().Get("start"))
 	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
 
-	fullPath, err := r.libMgr.ResolvePath(relPath)
+	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/docs", "media_library/novels")
 	if err != nil {
 		http.Error(w, "file not found in library", http.StatusNotFound)
 		return
@@ -652,7 +762,7 @@ func (r *Router) handleTextChunk(w http.ResponseWriter, req *http.Request) {
 func (r *Router) handleTextEpub(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
 	entry := req.URL.Query().Get("entry")
-	fullPath, err := r.libMgr.ResolvePath(relPath)
+	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/docs", "media_library/novels")
 	if err != nil {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
@@ -663,6 +773,9 @@ func (r *Router) handleTextEpub(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Type", "application/xhtml+xml; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
@@ -689,7 +802,7 @@ func (r *Router) handleAudioAlbums(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleAudioAlbum(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
-	fullPath, err := r.libMgr.ResolvePath(relPath)
+	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/audio")
 	if err != nil {
 		http.Error(w, "directory not found", http.StatusNotFound)
 		return
@@ -705,11 +818,16 @@ func (r *Router) handleAudioAlbum(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleAudioStream(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
-	fullPath, err := r.libMgr.ResolvePath(relPath)
+	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/audio")
 	if err != nil {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
+	if !audio.SupportedExtensions[strings.ToLower(filepath.Ext(fullPath))] {
+		http.Error(w, "unsupported media format", http.StatusBadRequest)
+		return
+	}
+
 	http.ServeFile(w, req, fullPath)
 }
 
@@ -755,17 +873,21 @@ func (r *Router) handleMangaList(w http.ResponseWriter, req *http.Request) {
 	}
 	mangaDB, err := r.getMangaDB(primary.RootPath)
 	if err != nil {
-		writeJSON(w, http.StatusOK, []interface{}{})
+		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	list, _ := mangaDB.ListMangas()
+	list, err := mangaDB.ListMangas()
+	if err != nil {
+		http.Error(w, "manga query failed", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, list)
 }
 
 func (r *Router) handleMangaPages(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
-	fullPath, err := r.libMgr.ResolvePath(relPath)
+	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/manga")
 	if err != nil {
 		http.Error(w, "cbz not found", http.StatusNotFound)
 		return
@@ -783,7 +905,7 @@ func (r *Router) handleMangaPages(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleMangaCover(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
-	fullPath, err := r.libMgr.ResolvePath(relPath)
+	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/manga")
 	if err != nil {
 		http.Error(w, "cbz not found", http.StatusNotFound)
 		return
@@ -808,7 +930,7 @@ func (r *Router) handleMangaCover(w http.ResponseWriter, req *http.Request) {
 func (r *Router) handleMangaPage(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
 	entry := req.URL.Query().Get("entry")
-	fullPath, err := r.libMgr.ResolvePath(relPath)
+	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/manga")
 	if err != nil {
 		http.Error(w, "cbz not found", http.StatusNotFound)
 		return
@@ -876,7 +998,7 @@ func (r *Router) handleGamesList(w http.ResponseWriter, req *http.Request) {
 	}
 	gdb, err := r.getGamesDB(primary.RootPath)
 	if err != nil {
-		writeJSON(w, http.StatusOK, []interface{}{})
+		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -889,7 +1011,7 @@ func (r *Router) handleGamesList(w http.ResponseWriter, req *http.Request) {
 
 	list, err := gdb.ListGames(target)
 	if err != nil {
-		writeJSON(w, http.StatusOK, []interface{}{})
+		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	writeJSON(w, http.StatusOK, list)
@@ -1378,7 +1500,8 @@ func (r *Router) checkSectionAccess(w http.ResponseWriter, req *http.Request, se
 	clientTarget := auth.ClientFromContext(req.Context())
 	reqLvl, err := r.authDB.GetSectionRequiredLevel(sectionID)
 	if err != nil {
-		reqLvl = auth.LevelGuest
+		http.Error(w, "permission lookup failed", http.StatusServiceUnavailable)
+		return false
 	}
 	if !auth.CheckAccess(user.Level, reqLvl, target, clientTarget) {
 		http.Error(w, "forbidden: insufficient permission level or target mismatch", http.StatusForbidden)
@@ -1392,4 +1515,3 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
 }
-

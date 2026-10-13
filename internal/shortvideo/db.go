@@ -1,10 +1,12 @@
 package shortvideo
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
+
+	"omnihub/internal/storage"
 	"path/filepath"
 	"time"
 
@@ -19,26 +21,29 @@ type Storage struct {
 }
 
 // OpenStorage 初始化短视频目录下的专属数据库。
-func OpenStorage(shortvideoDir string) (*Storage, error) {
-	if err := os.MkdirAll(shortvideoDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create shortvideo dir: %w", err)
-	}
+func OpenStorage(shortvideoDir string) (*Storage, error) { return openStorage(shortvideoDir, false) }
 
+// OpenStorageReadOnly 只读打开三个已有专区数据库，不建目录、不迁移。
+func OpenStorageReadOnly(shortvideoDir string) (*Storage, error) {
+	return openStorage(shortvideoDir, true)
+}
+
+func openStorage(shortvideoDir string, readOnly bool) (*Storage, error) {
 	metaPath := filepath.Join(shortvideoDir, "meta.db")
-	mDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", metaPath))
+	mDB, err := storage.OpenSQLite(metaPath, readOnly)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open meta.db: %w", err)
 	}
 
 	thumbPath := filepath.Join(shortvideoDir, "thumbnails.db")
-	tDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", thumbPath))
+	tDB, err := storage.OpenSQLite(thumbPath, readOnly)
 	if err != nil {
 		_ = mDB.Close()
 		return nil, fmt.Errorf("failed to open thumbnails.db: %w", err)
 	}
 
 	albumPath := filepath.Join(shortvideoDir, "albums.db")
-	aDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", albumPath))
+	aDB, err := storage.OpenSQLite(albumPath, readOnly)
 	if err != nil {
 		_ = mDB.Close()
 		_ = tDB.Close()
@@ -51,9 +56,12 @@ func OpenStorage(shortvideoDir string) (*Storage, error) {
 		albumDB: aDB,
 	}
 
-	if err := s.migrate(); err != nil {
-		_ = s.Close()
-		return nil, fmt.Errorf("shortvideo db migration failed: %w", err)
+	if !readOnly {
+		if err := s.migrate(); err != nil {
+			_ = s.Close()
+			return nil, fmt.Errorf("shortvideo db migration failed: %w", err)
+		}
+
 	}
 
 	return s, nil
@@ -118,6 +126,11 @@ func (s *Storage) migrate() error {
 		order_index INTEGER NOT NULL,
 		data BLOB NOT NULL,
 		PRIMARY KEY (post_id, order_index)
+	);
+	CREATE TABLE IF NOT EXISTS album_image_hashes (
+		post_id TEXT NOT NULL, order_index INTEGER NOT NULL,
+		sha256 BLOB NOT NULL, size_bytes INTEGER NOT NULL,
+		PRIMARY KEY(post_id, order_index)
 	);`
 	if _, err := s.albumDB.Exec(albumSchema); err != nil {
 		return err
@@ -181,22 +194,63 @@ func (s *Storage) GetAlbumImage(postID string, orderIndex int) ([]byte, error) {
 // MergeFromExternal 通过 SQLite 原生 ATTACH 语句跨库去重融合（第 2.3 节）。
 func (s *Storage) MergeFromExternal(extThumbDBPath, extAlbumDBPath string) error {
 	if extThumbDBPath != "" {
-		attachSQL := fmt.Sprintf("ATTACH DATABASE '%s' AS ext_thumb", extThumbDBPath)
-		if _, err := s.thumbDB.Exec(attachSQL); err == nil {
-			_, _ = s.thumbDB.Exec("INSERT OR IGNORE INTO thumbnails SELECT * FROM ext_thumb.thumbnails")
-			_, _ = s.thumbDB.Exec("DETACH DATABASE ext_thumb")
+		if err := mergeDatabase(s.thumbDB, extThumbDBPath,
+			`SELECT COUNT(*) FROM thumbnails t JOIN incoming.thumbnails i ON t.target_id=i.target_id WHERE t.data!=i.data`,
+			`INSERT OR IGNORE INTO thumbnails(target_id,data) SELECT target_id,data FROM incoming.thumbnails`); err != nil {
+			return fmt.Errorf("merge thumbnails: %w", err)
 		}
 	}
 
 	if extAlbumDBPath != "" {
-		attachSQL := fmt.Sprintf("ATTACH DATABASE '%s' AS ext_album", extAlbumDBPath)
-		if _, err := s.albumDB.Exec(attachSQL); err == nil {
-			_, _ = s.albumDB.Exec("INSERT OR IGNORE INTO album_images SELECT * FROM ext_album.album_images")
-			_, _ = s.albumDB.Exec("DETACH DATABASE ext_album")
+		if err := mergeDatabase(s.albumDB, extAlbumDBPath,
+			`SELECT COUNT(*) FROM album_images t JOIN incoming.album_images i ON t.post_id=i.post_id AND t.order_index=i.order_index WHERE t.data!=i.data`,
+			`INSERT OR IGNORE INTO album_images(post_id,order_index,data) SELECT post_id,order_index,data FROM incoming.album_images`); err != nil {
+			return fmt.Errorf("merge albums: %w", err)
 		}
 	}
 
 	return nil
+}
+
+func mergeDatabase(db *sql.DB, path, conflictQuery, mergeQuery string) (resultErr error) {
+	uri, err := storage.ReadOnlyURI(path)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, conn.Close()) }()
+	// ATTACH/transaction/DETACH 必须使用同一连接，禁止依赖连接池恰好复用。
+	if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS incoming", uri); err != nil {
+		return err
+	}
+	defer func() {
+		_, err := conn.ExecContext(ctx, "DETACH DATABASE incoming")
+		resultErr = errors.Join(resultErr, err)
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
+	var conflicts int
+	if err := tx.QueryRow(conflictQuery).Scan(&conflicts); err != nil {
+		return err
+	}
+	if conflicts != 0 {
+		return errors.New("same asset key has different content; merge cancelled")
+	}
+	if _, err := tx.Exec(mergeQuery); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListAlbums 列出所有图集 post_id 与其图片数量。
@@ -291,4 +345,3 @@ func (s *Storage) ListPosts(creatorID string) ([]*Post, error) {
 	}
 	return list, rows.Err()
 }
-

@@ -65,6 +65,8 @@ type Library struct {
 	IsPrimary bool `json:"is_primary"`
 	// IsOnline 标记该物理介质当前是否可访问。
 	IsOnline bool `json:"is_online"`
+	// ReadOnly 表示挂载不创建标识、目录或数据库，也不修改资产。
+	ReadOnly bool `json:"read_only"`
 }
 
 // Manager 统管系统中挂载的所有资源库，线程安全。
@@ -158,6 +160,11 @@ func EnsureSkeleton(rootPath string) error {
 
 // AddLibrary 挂载并校验一个物理资源库根目录。
 func (m *Manager) AddLibrary(rootPath string, isPrimary bool) (*Library, error) {
+	return m.MountLibrary(rootPath, isPrimary, false)
+}
+
+// MountLibrary 挂载资源库；只读库必须已有合法标识，绝不补建目录或状态文件。
+func (m *Manager) MountLibrary(rootPath string, isPrimary, readOnly bool) (*Library, error) {
 	if rootPath == "" {
 		return nil, errors.New("library root path cannot be empty")
 	}
@@ -171,12 +178,26 @@ func (m *Manager) AddLibrary(rootPath string, isPrimary bool) (*Library, error) 
 	var marker *Marker
 	if isOnline {
 		// 在线状态下确保标识文件与骨架存在
-		marker, err = EnsureMarker(cleanPath, "")
+		if readOnly {
+			var data []byte
+			data, err = os.ReadFile(filepath.Join(cleanPath, LibraryMarkerFile))
+			if err == nil {
+				marker = &Marker{}
+				err = json.Unmarshal(data, marker)
+				if err == nil && marker.ID == "" {
+					err = errors.New("library marker has empty ID")
+				}
+			}
+		} else {
+			marker, err = EnsureMarker(cleanPath, "")
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to verify marker in %s: %w", cleanPath, err)
 		}
-		if err := EnsureSkeleton(cleanPath); err != nil {
-			return nil, fmt.Errorf("failed to verify skeleton in %s: %w", cleanPath, err)
+		if !readOnly {
+			if err := EnsureSkeleton(cleanPath); err != nil {
+				return nil, fmt.Errorf("failed to verify skeleton in %s: %w", cleanPath, err)
+			}
 		}
 	} else {
 		// 离线状态下分配临时标记
@@ -192,6 +213,7 @@ func (m *Manager) AddLibrary(rootPath string, isPrimary bool) (*Library, error) 
 		RootPath:  cleanPath,
 		IsPrimary: isPrimary,
 		IsOnline:  isOnline,
+		ReadOnly:  readOnly,
 	}
 
 	m.mu.Lock()
@@ -201,7 +223,7 @@ func (m *Manager) AddLibrary(rootPath string, isPrimary bool) (*Library, error) 
 	if isPrimary || m.primaryID == "" {
 		m.primaryID = lib.ID
 		// 若为主库，确保 .omni_data 目录存在（第 1.3.1 节）
-		if isOnline {
+		if isOnline && !readOnly {
 			dataDir := filepath.Join(cleanPath, DataDirName)
 			_ = os.MkdirAll(dataDir, 0755)
 		}
@@ -248,6 +270,18 @@ func (m *Manager) ListLibraries() []*Library {
 		list = append(list, lib)
 	}
 	return list
+}
+
+// IsReadOnly 返回已挂载物理根路径是否只读，未挂载时返回 false。
+func (m *Manager) IsReadOnly(root string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, lib := range m.libraries {
+		if filepath.Clean(lib.RootPath) == filepath.Clean(root) {
+			return lib.ReadOnly
+		}
+	}
+	return false
 }
 
 // SetCategoryDisabled 设置某分类目录的停用状态（第 1.2.3 节删除即软停用）。
@@ -321,7 +355,11 @@ func (m *Manager) ResolvePath(logicalPath string) (string, error) {
 			if err != nil || !filepath.IsLocal(rel) {
 				return "", errors.New("resource symlink escapes library root")
 			}
-			return target, nil
+			remaining, err := filepath.Rel(ancestor, target)
+			if err != nil {
+				return "", fmt.Errorf("resolve remaining resource path: %w", err)
+			}
+			return filepath.Join(resolved, remaining), nil
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("failed to resolve resource path: %w", err)
@@ -332,4 +370,41 @@ func (m *Manager) ResolvePath(logicalPath string) (string, error) {
 		}
 		ancestor = parent
 	}
+}
+
+// ResolveCategoryPath 限制资源在指定分类目录内，防止低权限媒体接口读取库内账号或其他分类。
+// allowedDirs 使用库根目录下的逻辑相对目录；库内跨分类符号链接同样被拒绝。
+func (m *Manager) ResolveCategoryPath(logicalPath string, allowedDirs ...string) (string, error) {
+	path, err := m.ResolvePath(logicalPath)
+	if err != nil {
+		return "", err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id := m.primaryID
+	if parts := strings.SplitN(logicalPath, ":", 2); len(parts) == 2 {
+		id = parts[0]
+	}
+	lib := m.libraries[id]
+	if lib == nil {
+		return "", errors.New("library no longer mounted")
+	}
+	root, err := filepath.EvalSymlinks(lib.RootPath)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", err
+	}
+	for _, dir := range allowedDirs {
+		dir = filepath.Clean(filepath.FromSlash(dir))
+		if m.disabledCategories[filepath.ToSlash(dir)] {
+			continue
+		}
+		if rel == dir || strings.HasPrefix(rel, dir+string(filepath.Separator)) {
+			return path, nil
+		}
+	}
+	return "", errors.New("resource outside permitted category or category disabled")
 }

@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"omnihub/internal/storage"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,8 +113,7 @@ func (vm *VolumeManager) switchActiveVolume(volName string) error {
 	}
 
 	dbPath := filepath.Join(vm.originalsDir, volName)
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", dbPath)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := storage.OpenSQLite(dbPath, false)
 	if err != nil {
 		return fmt.Errorf("failed to open active volume %s: %w", volName, err)
 	}
@@ -160,6 +161,9 @@ func (vm *VolumeManager) WriteOriginal(id string, data []byte) (string, error) {
 
 // ReadOriginal 从指定分卷只读读取原图（严格以 mode=ro 挂载，第 3.1.2 节）。
 func (vm *VolumeManager) ReadOriginal(volumeName, id string) ([]byte, error) {
+	if !volumeNamePattern.MatchString(volumeName) {
+		return nil, errors.New("invalid originals volume name")
+	}
 	vm.mu.Lock()
 	db, ok := vm.readHandles[volumeName]
 	if !ok {
@@ -170,9 +174,8 @@ func (vm *VolumeManager) ReadOriginal(volumeName, id string) ([]byte, error) {
 		}
 
 		// 只读模式挂载 (mode=ro)
-		dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(3000)", dbPath)
 		var err error
-		db, err = sql.Open("sqlite", dsn)
+		db, err = storage.OpenSQLite(dbPath, true)
 		if err != nil {
 			vm.mu.Unlock()
 			return nil, fmt.Errorf("failed to open read-only volume %s: %w", volumeName, err)
@@ -195,13 +198,15 @@ func (vm *VolumeManager) ReadOriginal(volumeName, id string) ([]byte, error) {
 
 // ReadOriginalDirect 纯只读方式直接从分卷读取原图（严格以 mode=ro 打开，零写操作零建表，第 3.1.2 节）。
 func ReadOriginalDirect(originalsDir, volumeName, id string) ([]byte, error) {
+	if !volumeNamePattern.MatchString(volumeName) {
+		return nil, errors.New("invalid originals volume name")
+	}
 	dbPath := filepath.Join(originalsDir, volumeName)
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, fmt.Errorf("volume file not found: %s", volumeName)
 	}
 
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(3000)", dbPath)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := storage.OpenSQLite(dbPath, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open read-only volume %s: %w", volumeName, err)
 	}
@@ -217,3 +222,5 @@ func ReadOriginalDirect(originalsDir, volumeName, id string) ([]byte, error) {
 	}
 	return blob, nil
 }
+
+var volumeNamePattern = regexp.MustCompile(`^originals_vol[0-9]+\.db$`)

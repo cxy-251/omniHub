@@ -3,8 +3,11 @@
 #include <QQmlContext>
 #include <QQuickWindow>
 #include "player/mpv_item.h"
+#ifdef Q_OS_LINUX
 #include "player/mpris.h"
+#endif
 #include "games/game_launcher.h"
+#include "backend_api.h"
 
 int main(int argc, char *argv[])
 {
@@ -19,9 +22,14 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
 
+    BackendApi backend;
+    engine.rootContext()->setContextProperty("backendApi", &backend);
+
     // 注册 Linux MPRIS 媒体控制服务
+    #ifdef Q_OS_LINUX
     MprisService mprisService;
     engine.rootContext()->setContextProperty("mprisService", &mprisService);
+#endif
 
     // 处理外部打开文件命令行参数 (第 9.3 节)
     QString externalFile;

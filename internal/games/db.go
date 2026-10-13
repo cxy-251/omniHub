@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
+	"omnihub/internal/storage"
 	"path/filepath"
 	"time"
 
@@ -18,21 +18,28 @@ type DB struct {
 
 // OpenDB 打开或创建 standalone_games/games.db。
 func OpenDB(gamesDir string) (*DB, error) {
-	if err := os.MkdirAll(gamesDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create games dir: %w", err)
-	}
+	return openDB(gamesDir, false)
+}
 
+// OpenDBReadOnly 只读打开已有数据库，不建目录、不迁移。
+func OpenDBReadOnly(gamesDir string) (*DB, error) { return openDB(gamesDir, true) }
+
+func openDB(gamesDir string, readOnly bool) (*DB, error) {
 	dbPath := filepath.Join(gamesDir, "games.db")
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", dbPath)
-	sqliteDB, err := sql.Open("sqlite", dsn)
+	sqliteDB, err := storage.OpenSQLite(dbPath, readOnly)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open games.db: %w", err)
 	}
 
+	sqliteDB.SetMaxOpenConns(2)
+	sqliteDB.SetMaxIdleConns(1)
 	gDB := &DB{db: sqliteDB}
-	if err := gDB.migrate(); err != nil {
-		_ = sqliteDB.Close()
-		return nil, fmt.Errorf("games.db migration failed: %w", err)
+	if !readOnly {
+		if err := gDB.migrate(); err != nil {
+			_ = sqliteDB.Close()
+			return nil, fmt.Errorf("games.db migration failed: %w", err)
+		}
+
 	}
 
 	return gDB, nil

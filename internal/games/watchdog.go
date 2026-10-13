@@ -1,14 +1,10 @@
 package games
 
 import (
-	"bufio"
 	"context"
 	"errors"
-	"fmt"
-	"os"
-	"strconv"
-	"strings"
-	"syscall"
+	"github.com/shirou/gopsutil/v4/mem"
+	"omnihub/internal/platform"
 	"time"
 )
 
@@ -18,30 +14,13 @@ const (
 	KillThresholdBytes    = 500 * 1024 * 1024  // 500MB
 )
 
-// ReadMemAvailableBytes 从 Linux /proc/meminfo 读取系统当前可用内存字节数。
+// ReadMemAvailableBytes 通过平台适配读取系统当前可用内存字节数。
 func ReadMemAvailableBytes() (int64, error) {
-	file, err := os.Open("/proc/meminfo")
+	metrics, err := mem.VirtualMemory()
 	if err != nil {
 		return 0, err
 	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "MemAvailable:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				kb, err := strconv.ParseInt(fields[1], 10, 64)
-				if err != nil {
-					return 0, err
-				}
-				return kb * 1024, nil
-			}
-		}
-	}
-
-	return 0, errors.New("MemAvailable field not found in /proc/meminfo")
+	return int64(metrics.Available), nil
 }
 
 // WatchdogCallbacks 定义内存看门狗触发通知回调。
@@ -76,7 +55,7 @@ func StartWatchdog(ctx context.Context, pgid int, interval time.Duration, cb Wat
 						cb.OnKilled(avail)
 					}
 					// 向整个进程组广播 SIGTERM（-pgid）
-					_ = syscall.Kill(-pgid, syscall.SIGTERM)
+					_ = platform.Stop(pgid, false)
 					return
 				}
 
@@ -97,11 +76,9 @@ func KillProcessGroup(pgid int) error {
 		return nil
 	}
 
-	// 先尝试柔和退出 SIGTERM
-	_ = syscall.Kill(-pgid, syscall.SIGTERM)
-
-	// 等待 2 秒，如果仍有残留则强杀 SIGKILL
+	if err := platform.Stop(pgid, false); err != nil {
+		return err
+	}
 	time.Sleep(500 * time.Millisecond)
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
-	return fmt.Errorf("process group %d killed", pgid)
+	return errors.Join(platform.Stop(pgid, true), platform.Release(pgid))
 }

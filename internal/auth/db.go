@@ -8,8 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
+	"omnihub/internal/storage"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,25 +19,21 @@ import (
 
 // DB 封装基于 SQLite 的用户认证与权限持久化。
 type DB struct {
-	db              *sql.DB
-	ipMu            sync.Mutex
-	ipFailed        map[string][]time.Time // 防暴力破解：记录单 IP 验证失败时间戳
-	hasAdminCached  int32                  // 0: 未知/未初始化, 1: 已有管理员
+	db             *sql.DB
+	ipMu           sync.Mutex
+	ipFailed       map[string][]time.Time // 防暴力破解：记录单 IP 验证失败时间戳
+	hasAdminCached int32                  // 0: 未知/未初始化, 1: 已有管理员
 }
 
 // OpenDB 打开或创建指定路径下的 users.db，自动执行建表与 WAL 模式开启。
 func OpenDB(dbPath string) (*DB, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
-		return nil, fmt.Errorf("failed to create auth db directory: %w", err)
-	}
-
-	// 开启 WAL 模式以支撑并发读写
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", dbPath)
-	sqliteDB, err := sql.Open("sqlite", dsn)
+	sqliteDB, err := storage.OpenSQLite(dbPath, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open auth database: %w", err)
 	}
 
+	sqliteDB.SetMaxOpenConns(2)
+	sqliteDB.SetMaxIdleConns(1)
 	authDB := &DB{
 		db:       sqliteDB,
 		ipFailed: make(map[string][]time.Time),
@@ -171,10 +166,30 @@ func (d *DB) HasAdmin() (bool, error) {
 	return count > 0, err
 }
 
+// GetActiveAdmin 返回实际管理员账号，供可信本地客户端使用，避免假定管理员 ID 为 1。
+func (d *DB) GetActiveAdmin() (*User, error) {
+	var u User
+	var created string
+	err := d.db.QueryRow(`SELECT id, username, role, level, status, created_at FROM users
+		WHERE role = 'admin' AND status = 'active' ORDER BY id LIMIT 1`).Scan(
+		&u.ID, &u.Username, &u.Role, &u.Level, &u.Status, &created)
+	if err != nil {
+		return nil, fmt.Errorf("query active administrator: %w", err)
+	}
+	u.CreatedAt, err = time.Parse(time.RFC3339, created)
+	if err != nil {
+		return nil, fmt.Errorf("invalid administrator timestamp: %w", err)
+	}
+	return &u, nil
+}
+
 // CreateUser 创建新用户并对明文密码进行 bcrypt 哈希处理。
 func (d *DB) CreateUser(username, password, role string, level int) (*User, error) {
-	if username == "" || password == "" {
+	if username == "" || len(username) > 64 || password == "" || len(password) > 72 {
 		return nil, errors.New("username and password cannot be empty")
+	}
+	if (role != RoleAdmin && role != RoleUser) || !validLevel(level) || (role == RoleAdmin && level != LevelAdmin) {
+		return nil, errors.New("invalid user role or level")
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -212,6 +227,47 @@ func (d *DB) CreateUser(username, password, role string, level int) (*User, erro
 		Status:       "active",
 		CreatedAt:    now,
 	}, nil
+}
+
+func validLevel(level int) bool {
+	return level >= LevelGuest && level <= LevelVIP3 || level == LevelAdmin
+}
+
+// CreateInitialAdmin 原子检查并创建首次管理员，防止并发初始化生成多个管理员。
+func (d *DB) CreateInitialAdmin(username, password string) (*User, error) {
+	if username == "" || len(username) > 64 || password == "" || len(password) > 72 {
+		return nil, errors.New("invalid administrator credentials")
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var count int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM users WHERE role='admin'").Scan(&count); err != nil {
+		return nil, err
+	}
+	if count != 0 {
+		return nil, errors.New("administrator already exists")
+	}
+	now := time.Now().UTC()
+	result, err := tx.Exec(`INSERT INTO users(username,password_hash,role,level,status,created_at) VALUES (?,?, 'admin',99,'active',?)`, username, string(hash), now.Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	atomic.StoreInt32(&d.hasAdminCached, 1)
+	return &User{ID: id, Username: username, Role: RoleAdmin, Level: LevelAdmin, Status: "active", CreatedAt: now}, nil
 }
 
 // Authenticate 校验用户名与密码，支持 IP 速率限制保护。
@@ -296,6 +352,9 @@ func (d *DB) RevokeUserSessions(userID int64) error {
 
 // SetSectionRequiredLevel 设置分类标签的最低准入等级。
 func (d *DB) SetSectionRequiredLevel(sectionID string, requiredLevel int) error {
+	if sectionID == "" || len(sectionID) > 64 || !validLevel(requiredLevel) {
+		return errors.New("invalid section permission")
+	}
 	_, err := d.db.Exec(`
 		INSERT INTO section_permissions (section_id, required_level)
 		VALUES (?, ?)
@@ -361,10 +420,26 @@ func (d *DB) ListUsers() ([]*User, error) {
 
 // UpdateUserLevel 修改用户等级并废止所有活跃会话以即时生效。
 func (d *DB) UpdateUserLevel(userID int64, level int) error {
-	_, err := d.db.Exec("UPDATE users SET level = ? WHERE id = ?", level, userID)
+	if userID <= 0 || !validLevel(level) {
+		return errors.New("invalid user or level")
+	}
+	tx, err := d.db.Begin()
 	if err != nil {
 		return err
 	}
-	return d.RevokeUserSessions(userID)
+	defer tx.Rollback()
+	var role string
+	if err := tx.QueryRow("SELECT role FROM users WHERE id=?", userID).Scan(&role); err != nil {
+		return err
+	}
+	if role == RoleAdmin && level != LevelAdmin {
+		return errors.New("administrator level must remain 99")
+	}
+	if _, err := tx.Exec("UPDATE users SET level=? WHERE id=?", level, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM user_sessions WHERE user_id=?", userID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
-

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 // SingleInstanceLock 封装基于系统 flock 的单实例排他文件锁（第 9.4 节）。
@@ -27,10 +26,10 @@ func AcquireLock(lockPath string) (*SingleInstanceLock, error) {
 	}
 
 	// 非阻塞排他锁 LOCK_EX | LOCK_NB
-	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	err = lockFile(f)
 	if err != nil {
 		_ = f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+		if isLockContended(err) {
 			return nil, errors.New("another instance of omniHub is already running")
 		}
 		return nil, fmt.Errorf("flock failed: %w", err)
@@ -42,8 +41,8 @@ func AcquireLock(lockPath string) (*SingleInstanceLock, error) {
 // Release 释放排他文件锁。
 func (l *SingleInstanceLock) Release() error {
 	if l.file != nil {
-		_ = syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
-		err := l.file.Close()
+		unlockErr := unlockFile(l.file)
+		err := errors.Join(unlockErr, l.file.Close())
 		l.file = nil
 		return err
 	}

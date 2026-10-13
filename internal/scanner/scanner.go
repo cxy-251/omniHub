@@ -3,10 +3,13 @@ package scanner
 import (
 	"encoding/json"
 	"fmt"
+	"omnihub/internal/ordering"
+	"omnihub/internal/platform"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -143,6 +146,13 @@ func ScanManga(mangaDir string) (int, error) {
 
 // ScanShortVideos 扫描 media_library/shortvideo 目录下的博主与作品（视频/图集），提取缩略图并写入自治数据库。
 func ScanShortVideos(shortvideoDir string, readOnly bool) (int, error) {
+	if readOnly {
+		return 0, fmt.Errorf("cannot import short videos into a read-only library")
+	}
+	return scanShortVideos(shortvideoDir, platform.Trash)
+}
+
+func scanShortVideos(shortvideoDir string, trash func(string) error) (int, error) {
 	storage, err := shortvideo.OpenStorage(shortvideoDir)
 	if err != nil {
 		return 0, err
@@ -211,10 +221,11 @@ func ScanShortVideos(shortvideoDir string, readOnly bool) (int, error) {
 						RelPath:   relPath,
 						CreatedAt: time.Now(),
 					}
-					if err := storage.UpsertPost(p); err == nil {
-						itemCount++
-						totalPosts++
+					if err := storage.UpsertPost(p); err != nil {
+						return totalPosts, fmt.Errorf("index video: %w", err)
 					}
+					itemCount++
+					totalPosts++
 				} else if item.IsDir() {
 					// 散装图集目录
 					albumImages, err := os.ReadDir(itemPath)
@@ -248,18 +259,34 @@ func ScanShortVideos(shortvideoDir string, readOnly bool) (int, error) {
 						RelPath:   relPath,
 						CreatedAt: time.Now(),
 					}
-					if err := storage.UpsertPost(p); err == nil {
-						itemCount++
-						totalPosts++
-						if !readOnly {
-							_ = exec.Command("gio", "trash", itemPath).Run()
+					sort.Slice(imgFiles, func(i, j int) bool { return ordering.NaturalLess(imgFiles[i], imgFiles[j]) })
+					files := make([]string, len(imgFiles))
+					for i, name := range imgFiles {
+						files[i] = filepath.Join(itemPath, name)
+					}
+					if err := storage.ImportAlbumFiles(postID, files); err != nil {
+						return totalPosts, fmt.Errorf("import album %s: %w", itemName, err)
+					}
+					if err := storage.UpsertPost(p); err != nil {
+						return totalPosts, fmt.Errorf("index album: %w", err)
+					}
+					itemCount++
+					totalPosts++
+					if trash != nil {
+						if err := storage.VerifyAlbumSources(postID, files); err != nil {
+							return totalPosts, fmt.Errorf("preserve source album %s: %w", itemName, err)
+						}
+						if err := trash(itemPath); err != nil {
+							return totalPosts, fmt.Errorf("trash imported album: %w", err)
 						}
 					}
 				}
 			}
 
 			creator.ItemCount = itemCount
-			_ = storage.UpsertCreator(creator)
+			if err := storage.UpsertCreator(creator); err != nil {
+				return totalPosts, fmt.Errorf("index creator: %w", err)
+			}
 		}
 	}
 
@@ -280,4 +307,3 @@ func extractVideoThumbnail(videoPath string) []byte {
 	}
 	return nil
 }
-

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"strings"
@@ -13,16 +14,24 @@ const (
 	UserContextKey   contextKey = "auth_user"
 	ClientContextKey contextKey = "client_target"
 	WANContextKey    contextKey = "is_wan"
+	LocalContextKey  contextKey = "trusted_local"
 )
 
 // Middleware 负责在 HTTP 链路中提取会话凭证并注入用户信息。
 type Middleware struct {
-	db *DB
+	db         *DB
+	localToken string
 }
 
 // NewMiddleware 创建中间件实例。
-func NewMiddleware(db *DB) *Middleware {
-	return &Middleware{db: db}
+func NewMiddleware(db *DB, localToken string) *Middleware {
+	return &Middleware{db: db, localToken: localToken}
+}
+
+// IsTrustedLocal 校验由服务生成、仅供本机客户端读取的凭证；回环地址本身不授予权限。
+func (m *Middleware) IsTrustedLocal(r *http.Request) bool {
+	return IsLoopbackDirect(r) && m.localToken != "" &&
+		subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Omni-Local-Token")), []byte(m.localToken)) == 1
 }
 
 // IsLoopbackDirect 判断请求是否为直接本地回环访问（排除 Cloudflare 隧道或外部反代伪装）。
@@ -68,18 +77,23 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 
 		// 判定客户端类型与公网来源
 		clientTarget := TargetWeb
-		if r.Header.Get("X-Client-Target") == TargetGUI {
+		isTrustedLocal := m.IsTrustedLocal(r)
+		if isTrustedLocal {
 			clientTarget = TargetGUI
 		}
 		isWAN := IsWANRequest(r)
-		isDirectLocal := IsLoopbackDirect(r)
 
 		ctx = context.WithValue(ctx, ClientContextKey, clientTarget)
 		ctx = context.WithValue(ctx, WANContextKey, isWAN)
+		ctx = context.WithValue(ctx, LocalContextKey, isTrustedLocal)
 
 		// 检查系统是否有 Admin（第 5.3.3 节）
-		hasAdmin, _ := m.db.HasAdmin()
-		if !hasAdmin && !isDirectLocal {
+		hasAdmin, err := m.db.HasAdmin()
+		if err != nil {
+			http.Error(w, "authentication store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !hasAdmin && !isTrustedLocal {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(`{"error":"system uninitialized, admin setup required on local host"}`))
@@ -87,13 +101,11 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 		}
 
 		// 1. 本地回环免密直通 Admin（第 8.1.1 节），未初始化时不直通以引导 setup
-		if isDirectLocal && hasAdmin {
-			adminUser := &User{
-				ID:       1,
-				Username: "local_admin",
-				Role:     RoleAdmin,
-				Level:    LevelAdmin,
-				Status:   "active",
+		if isTrustedLocal && hasAdmin {
+			adminUser, err := m.db.GetActiveAdmin()
+			if err != nil {
+				http.Error(w, "local administrator unavailable", http.StatusServiceUnavailable)
+				return
 			}
 			ctx = context.WithValue(ctx, UserContextKey, adminUser)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -129,6 +141,12 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, UserContextKey, guestUser)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// IsTrustedLocalFromContext 返回请求是否通过本机专用凭证验证。
+func IsTrustedLocalFromContext(ctx context.Context) bool {
+	trusted, _ := ctx.Value(LocalContextKey).(bool)
+	return trusted
 }
 
 // UserFromContext 从上下文中获取当前请求的用户信息。

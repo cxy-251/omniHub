@@ -141,7 +141,7 @@ func TestAdminInitialBlocking(t *testing.T) {
 	}
 	defer db.Close()
 
-	mid := NewMiddleware(db)
+	mid := NewMiddleware(db, "local-test-token")
 	nextCalled := false
 	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nextCalled = true
@@ -163,6 +163,7 @@ func TestAdminInitialBlocking(t *testing.T) {
 	// 2. 无 Admin 时本地回环请求应放行以供初始化
 	reqLocal := httptest.NewRequest("GET", "/api/auth/status", nil)
 	reqLocal.RemoteAddr = "127.0.0.1:12345"
+	reqLocal.Header.Set("X-Omni-Local-Token", "local-test-token")
 	recLocal := httptest.NewRecorder()
 	mid.Handler(dummyHandler).ServeHTTP(recLocal, reqLocal)
 	if recLocal.Code != http.StatusOK {
@@ -173,3 +174,47 @@ func TestAdminInitialBlocking(t *testing.T) {
 	}
 }
 
+func TestLocalCredentialAndClientTargetCannotBeForged(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "users.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// 先建普通用户，证明管理员身份不依赖固定 ID 1。
+	if _, err := db.CreateUser("first", "password", RoleUser, LevelVIP0); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := db.CreateUser("admin", "password", RoleAdmin, LevelAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mid := NewMiddleware(db, "private-token")
+	for _, tc := range []struct {
+		name, addr, token, proxy string
+		trusted                  bool
+	}{
+		{"loopback without credential", "127.0.0.1:1000", "", "", false},
+		{"loopback wrong credential", "127.0.0.1:1000", "wrong", "", false},
+		{"remote valid credential", "192.168.1.2:1000", "private-token", "", false},
+		{"tunnel valid credential", "127.0.0.1:1000", "private-token", "8.8.8.8", false},
+		{"trusted local", "127.0.0.1:1000", "private-token", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/auth/status", nil)
+			req.RemoteAddr = tc.addr
+			req.Header.Set("X-Client-Target", TargetGUI)
+			req.Header.Set("X-Omni-Local-Token", tc.token)
+			req.Header.Set("CF-Connecting-IP", tc.proxy)
+			mid.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				u := UserFromContext(r.Context())
+				if tc.trusted {
+					if u.ID != admin.ID || ClientFromContext(r.Context()) != TargetGUI {
+						t.Errorf("incorrect local identity: %+v", u)
+					}
+				} else if u.Role == RoleAdmin || ClientFromContext(r.Context()) != TargetWeb {
+					t.Errorf("forged privilege: %+v", u)
+				}
+			})).ServeHTTP(httptest.NewRecorder(), req)
+		})
+	}
+}

@@ -7,7 +7,10 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Quick Qml DBus OpenGL)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Quick Qml Network OpenGL)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Qt6 6.6 REQUIRED COMPONENTS DBus)
+endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(MPV REQUIRED mpv)
 
@@ -18,13 +21,17 @@ include_directories(
 
 set(SOURCES
     src/main.cpp
+    src/backend_api.cpp
+    src/backend_api.h
     src/player/mpv_item.cpp
     src/player/mpv_item.h
-    src/player/mpris.cpp
-    src/player/mpris.h
     src/games/game_launcher.cpp
     src/games/game_launcher.h
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND SOURCES src/player/mpris.cpp src/player/mpris.h)
+endif()
 
 set(QML_RESOURCES
     qml.qrc
@@ -40,9 +47,12 @@ target_link_libraries(omnihub_client PRIVATE
     Qt6::Gui
     Qt6::Quick
     Qt6::Qml
-    Qt6::DBus
+    Qt6::Network
     Qt6::OpenGL
     ${MPV_LIBRARIES}
 )
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(omnihub_client PRIVATE Qt6::DBus)
+endif()
 
 install(TARGETS omnihub_client DESTINATION bin)

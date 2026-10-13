@@ -3,14 +3,17 @@ package tasks
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"omnihub/internal/platform"
 	"os/exec"
 	"regexp"
 	"sync"
-	"syscall"
 	"time"
 )
 
+// LogLevel 是任务输出中识别的日志级别。
 type LogLevel string
 
 const (
@@ -20,6 +23,7 @@ const (
 	LevelError LogLevel = "ERROR"
 )
 
+// LogEntry 是有限日志缓冲中的一条输出，ID 单调递增。
 type LogEntry struct {
 	ID        int64     `json:"id"`
 	Timestamp time.Time `json:"timestamp"`
@@ -29,46 +33,68 @@ type LogEntry struct {
 	IsStack   bool      `json:"is_stack"`
 }
 
+// Task 管理单个脚本进程；可变状态通过内部锁与 JSON 快照读取。
 type Task struct {
-	ID        string      `json:"id"`
-	Name      string      `json:"name"`
-	Args      []string    `json:"args"`
-	Running   bool        `json:"running"`
-	StartedAt time.Time   `json:"started_at"`
-	EndedAt   *time.Time  `json:"ended_at,omitempty"`
-	ExitCode  int         `json:"exit_code"`
-	cmd       *exec.Cmd   `json:"-"`
-	pgid      int         `json:"-"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Args      []string   `json:"args"`
+	Running   bool       `json:"running"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	ExitCode  int        `json:"exit_code"`
+	cmd       *exec.Cmd  `json:"-"`
+	pgid      int        `json:"-"`
 	logsMu    sync.RWMutex
 	logs      []LogEntry
 	nextLogID int64
 	lastTime  time.Time
 	listeners map[chan LogEntry]struct{}
+	done      chan struct{}
+	logNext   int
 }
 
+// Manager 保存有限任务历史并管理其生命周期。
 type Manager struct {
-	mu    sync.RWMutex
-	tasks map[string]*Task
+	mu     sync.RWMutex
+	tasks  map[string]*Task
+	closed bool
 }
 
+// NewManager 创建有限容量的任务管理器。
 func NewManager() *Manager {
 	return &Manager{
 		tasks: make(map[string]*Task),
 	}
 }
 
+// RunScript 运行已通过调用方注册和校验的脚本，相同 ID 同时仅有一个实例。
 func (m *Manager) RunScript(id, scriptPath string, args []string) (*Task, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if t, exists := m.tasks[id]; exists && t.Running {
+	if m.closed {
+		return nil, errors.New("task manager is closed")
+	}
+	if id == "" || scriptPath == "" {
+		return nil, errors.New("task ID and script are required")
+	}
+	if t, exists := m.tasks[id]; exists && t.isRunning() {
 		return nil, fmt.Errorf("task %s already running", id)
 	}
 
-	cmdArgs := []string{"-n", "10", "ionice", "-c", "3", scriptPath}
-	cmdArgs = append(cmdArgs, args...)
-	cmd := exec.Command("nice", cmdArgs...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if len(m.tasks) >= MaxTasks {
+		var oldest *Task
+		for _, t := range m.tasks {
+			if !t.isRunning() && (oldest == nil || t.StartedAt.Before(oldest.StartedAt)) {
+				oldest = t
+			}
+		}
+		if oldest == nil {
+			return nil, errors.New("task capacity reached")
+		}
+		delete(m.tasks, oldest.ID)
+	}
+	cmd := platform.BackgroundCommand(context.Background(), scriptPath, args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -79,16 +105,18 @@ func (m *Manager) RunScript(id, scriptPath string, args []string) (*Task, error)
 	t := &Task{
 		ID:        id,
 		Name:      scriptPath,
-		Args:      args,
+		Args:      append([]string(nil), args...),
 		Running:   true,
 		StartedAt: time.Now(),
 		cmd:       cmd,
-		logs:      make([]LogEntry, 0, 1000),
+		logs:      make([]LogEntry, 0, MaxLogEntries),
+		done:      make(chan struct{}),
 		listeners: make(map[chan LogEntry]struct{}),
 		lastTime:  time.Now(),
 	}
 
-	if err := cmd.Start(); err != nil {
+	if err := platform.Start(cmd, false); err != nil {
+		_ = stdout.Close()
 		return nil, err
 	}
 	t.pgid = cmd.Process.Pid
@@ -96,12 +124,25 @@ func (m *Manager) RunScript(id, scriptPath string, args []string) (*Task, error)
 
 	go func() {
 		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 4096), MaxLogLineBytes)
 		for scanner.Scan() {
 			line := scanner.Text()
 			t.appendLog(line)
 		}
 
-		_ = cmd.Wait()
+		if err := scanner.Err(); err != nil {
+			t.appendLog("ERROR: task output failed: " + err.Error())
+			// 输出管道失效时阻止子进程无限写入未消费的管道。
+			if killErr := platform.Stop(t.pgid, true); killErr != nil {
+				t.appendLog("ERROR: stop task: " + killErr.Error())
+			}
+		}
+		if err := cmd.Wait(); err != nil {
+			t.appendLog("ERROR: task exited: " + err.Error())
+		}
+		if err := platform.Release(t.pgid); err != nil {
+			t.appendLog("ERROR: release task: " + err.Error())
+		}
 		t.logsMu.Lock()
 		t.Running = false
 		now := time.Now()
@@ -109,6 +150,7 @@ func (m *Manager) RunScript(id, scriptPath string, args []string) (*Task, error)
 		if cmd.ProcessState != nil {
 			t.ExitCode = cmd.ProcessState.ExitCode()
 		}
+		close(t.done)
 		// 关闭所有监听通道
 		for ch := range t.listeners {
 			close(ch)
@@ -124,6 +166,9 @@ func (t *Task) appendLog(msg string) {
 	t.logsMu.Lock()
 	defer t.logsMu.Unlock()
 
+	if len(msg) > 4096 {
+		msg = msg[:4096] + " … [truncated]"
+	}
 	now := time.Now()
 	delta := now.Sub(t.lastTime).Milliseconds()
 	t.lastTime = now
@@ -137,7 +182,12 @@ func (t *Task) appendLog(msg string) {
 		Message:   msg,
 		IsStack:   detectIsStack(msg),
 	}
-	t.logs = append(t.logs, entry)
+	if len(t.logs) < MaxLogEntries {
+		t.logs = append(t.logs, entry)
+	} else {
+		t.logs[t.logNext] = entry
+		t.logNext = (t.logNext + 1) % MaxLogEntries
+	}
 
 	for ch := range t.listeners {
 		select {
@@ -147,48 +197,106 @@ func (t *Task) appendLog(msg string) {
 	}
 }
 
+const (
+	// MaxTasks 限制运行中与已完成任务总数，满时淘汰最早完成的历史任务。
+	MaxTasks = 16
+	// MaxLogEntries 限制每个任务保留的日志行数。
+	MaxLogEntries = 256
+	// MaxLogLineBytes 限制一行输出大小，避免异常输出耗尽内存。
+	MaxLogLineBytes = 16 * 1024
+)
+
+var errorPattern = regexp.MustCompile(`(?i)error|fatal|exception`)
+var warningPattern = regexp.MustCompile(`(?i)warn`)
+var debugPattern = regexp.MustCompile(`(?i)debug`)
+var stackPattern = regexp.MustCompile(`^\s+at\s+|^\s+File\s+".*",\s+line\s+\d+|panic:`)
+
 func detectLogLevel(msg string) LogLevel {
-	matched, _ := regexp.MatchString(`(?i)error|fatal|exception`, msg)
-	if matched {
+	if errorPattern.MatchString(msg) {
 		return LevelError
 	}
-	matched, _ = regexp.MatchString(`(?i)warn`, msg)
-	if matched {
+	if warningPattern.MatchString(msg) {
 		return LevelWarn
 	}
-	matched, _ = regexp.MatchString(`(?i)debug`, msg)
-	if matched {
+	if debugPattern.MatchString(msg) {
 		return LevelDebug
 	}
 	return LevelInfo
 }
+func detectIsStack(msg string) bool { return stackPattern.MatchString(msg) }
 
-func detectIsStack(msg string) bool {
-	matched, _ := regexp.MatchString(`^\s+at\s+|^\s+File\s+".*",\s+line\s+\d+|panic:`, msg)
-	return matched
+func (t *Task) isRunning() bool {
+	t.logsMu.RLock()
+	defer t.logsMu.RUnlock()
+	return t.Running
 }
 
+// MarshalJSON 在锁内复制状态，避免 HTTP 编码与退出 goroutine 数据竞争。
+func (t *Task) MarshalJSON() ([]byte, error) {
+	t.logsMu.RLock()
+	defer t.logsMu.RUnlock()
+	return json.Marshal(struct {
+		ID        string     `json:"id"`
+		Name      string     `json:"name"`
+		Args      []string   `json:"args"`
+		Running   bool       `json:"running"`
+		StartedAt time.Time  `json:"started_at"`
+		EndedAt   *time.Time `json:"ended_at,omitempty"`
+		ExitCode  int        `json:"exit_code"`
+	}{t.ID, t.Name, t.Args, t.Running, t.StartedAt, t.EndedAt, t.ExitCode})
+}
+
+// StopTask 请求任务进程组退出，五秒未完成才强杀；已完成的任务不再发送信号。
 func (m *Manager) StopTask(id string) error {
 	m.mu.RLock()
 	t, ok := m.tasks[id]
 	m.mu.RUnlock()
-	if !ok || !t.Running {
+	if !ok || !t.isRunning() {
 		return fmt.Errorf("task %s not running", id)
 	}
 
-	// 向进程组广播 SIGTERM
-	if t.pgid > 0 {
-		_ = syscall.Kill(-t.pgid, syscall.SIGTERM)
+	if err := platform.Stop(t.pgid, false); err != nil {
+		return fmt.Errorf("stop task: %w", err)
 	}
-
-	// 5秒后如果未退出则 SIGKILL
-	go func(pgid int) {
-		time.Sleep(5 * time.Second)
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
-	}(t.pgid)
-
+	go func() {
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-t.done:
+			return
+		case <-timer.C:
+			if t.isRunning() {
+				if err := platform.Stop(t.pgid, true); err != nil {
+					t.appendLog("ERROR: kill task: " + err.Error())
+				}
+			}
+		}
+	}()
 	return nil
 }
+
+// Close 禁止启动新任务并终止当前任务，等待全部输出与进程回收。
+func (m *Manager) Close() error {
+	m.mu.Lock()
+	m.closed = true
+	current := make([]*Task, 0, len(m.tasks))
+	for _, t := range m.tasks {
+		current = append(current, t)
+	}
+	m.mu.Unlock()
+	var errs []error
+	for _, t := range current {
+		if t.isRunning() {
+			errs = append(errs, m.StopTask(t.ID))
+		}
+	}
+	for _, t := range current {
+		<-t.done
+	}
+	return errors.Join(errs...)
+}
+
+// GetTask 返回任务实例，不存在时返回 nil。
 
 func (m *Manager) GetTask(id string) *Task {
 	m.mu.RLock()
@@ -196,20 +304,31 @@ func (m *Manager) GetTask(id string) *Task {
 	return m.tasks[id]
 }
 
+// SubscribeLogs 返回按 ID 排序的有限历史及后续输出；结束或取消时关闭通道。
 func (t *Task) SubscribeLogs(ctx context.Context) (chan LogEntry, []LogEntry) {
 	t.logsMu.Lock()
 	ch := make(chan LogEntry, 100)
+	history := make([]LogEntry, 0, len(t.logs))
+	history = append(history, t.logs[t.logNext:]...)
+	history = append(history, t.logs[:t.logNext]...)
+	if !t.Running || len(t.listeners) >= 8 {
+		close(ch)
+		t.logsMu.Unlock()
+		return ch, history
+	}
 	t.listeners[ch] = struct{}{}
-	history := make([]LogEntry, len(t.logs))
-	copy(history, t.logs)
 	t.logsMu.Unlock()
-
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-t.done:
+		}
 		t.logsMu.Lock()
-		delete(t.listeners, ch)
+		if _, exists := t.listeners[ch]; exists {
+			delete(t.listeners, ch)
+			close(ch)
+		}
 		t.logsMu.Unlock()
 	}()
-
 	return ch, history
 }

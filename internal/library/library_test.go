@@ -121,3 +121,51 @@ func TestResolvePathRejectsLibraryEscape(t *testing.T) {
 		t.Fatalf("rejected internal symlink: %v", err)
 	}
 }
+
+func TestCategoryPathRejectsOtherSectionsAndAliases(t *testing.T) {
+	root := t.TempDir()
+	mgr := NewManager()
+	if _, err := mgr.AddLibrary(root, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, DataDirName), filepath.Join(root, "media_library", "audio", "private")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{".omni_data/users.db", "media_library/audio/private/users.db", "media_library/docs/readme.md"} {
+		if _, err := mgr.ResolveCategoryPath(path, "media_library/audio"); err == nil {
+			t.Errorf("accepted cross-category resource %q", path)
+		}
+	}
+	if _, err := mgr.ResolveCategoryPath("media_library/audio/album/track.mp3", "media_library/audio"); err != nil {
+		t.Fatal(err)
+	}
+	mgr.SetCategoryDisabled("media_library/audio", true)
+	if _, err := mgr.ResolveCategoryPath("media_library/audio/track.mp3", "media_library/audio"); err == nil {
+		t.Fatal("disabled category still readable")
+	}
+}
+
+func TestReadOnlyMountDoesNotCreateSkeleton(t *testing.T) {
+	root := t.TempDir()
+	marker := []byte(`{"id":"existing-library","name":"Read only"}`)
+	if err := os.WriteFile(filepath.Join(root, LibraryMarkerFile), marker, 0644); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewManager()
+	lib, err := mgr.MountLibrary(root, true, true)
+	if err != nil || !lib.ReadOnly {
+		t.Fatalf("mount: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("read-only mount wrote to library: %v, %v", entries, err)
+	}
+	missing := t.TempDir()
+	if _, err := mgr.MountLibrary(missing, false, true); err == nil {
+		t.Fatal("read-only mount created missing marker")
+	}
+	entries, err = os.ReadDir(missing)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("missing-marker library was modified")
+	}
+}

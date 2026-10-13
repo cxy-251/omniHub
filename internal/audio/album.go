@@ -5,6 +5,7 @@ package audio
 import (
 	"database/sql"
 	"fmt"
+	"omnihub/internal/storage"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,19 +26,19 @@ var SupportedExtensions = map[string]bool{
 
 // Track 记录专辑内的单集音轨信息。
 type Track struct {
-	Index    int    `json:"index"`     // 自然排序序号 (1, 2, 3...)
-	Title    string `json:"title"`     // 音轨标题（文件名去后缀）
-	Filename string `json:"filename"`  // 实际文件名
-	RelPath  string `json:"rel_path"`  // 相对专辑目录路径
-	Ext      string `json:"ext"`       // 容器扩展名
+	Index    int    `json:"index"`    // 自然排序序号 (1, 2, 3...)
+	Title    string `json:"title"`    // 音轨标题（文件名去后缀）
+	Filename string `json:"filename"` // 实际文件名
+	RelPath  string `json:"rel_path"` // 相对专辑目录路径
+	Ext      string `json:"ext"`      // 容器扩展名
 }
 
 // Album 记录目录映射出的专辑。
 type Album struct {
-	ID        string   `json:"id"`        // 专辑唯一 ID
-	Title     string   `json:"title"`     // 专辑名称（父目录名）
-	CoverPath string   `json:"cover_path"`// 封面相对或绝对路径
-	Tracks    []*Track `json:"tracks"`    // 分集列表
+	ID        string   `json:"id"`         // 专辑唯一 ID
+	Title     string   `json:"title"`      // 专辑名称（父目录名）
+	CoverPath string   `json:"cover_path"` // 封面相对或绝对路径
+	Tracks    []*Track `json:"tracks"`     // 分集列表
 }
 
 // ScanAlbum 从指定物理目录扫描生成专辑对象及分集播放列表（第 6.2.2 节）。
@@ -113,13 +114,12 @@ type ProgressDB struct {
 
 // OpenProgressDB 打开音频进度数据库。
 func OpenProgressDB(dbPath string) (*ProgressDB, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
-		return nil, err
-	}
-	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", dbPath))
+	db, err := storage.OpenSQLite(dbPath, false)
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
 	schema := `CREATE TABLE IF NOT EXISTS audio_progress (
 		user_id INTEGER NOT NULL,
 		audio_id TEXT NOT NULL,

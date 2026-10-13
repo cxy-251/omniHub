@@ -7,7 +7,12 @@ Item {
 
     GameLauncher {
         id: launcher
-        Component.onCompleted: fetchGames()
+        Component.onCompleted: { if (backendApi.hasAdmin) fetchGames() }
+    }
+
+    Connections {
+        target: backendApi
+        function onStatusChanged() { if (backendApi.hasAdmin) launcher.fetchGames() }
     }
 
     ListView {

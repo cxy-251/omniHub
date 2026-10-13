@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
+	"omnihub/internal/storage"
 	"path/filepath"
 	"time"
 
@@ -18,21 +18,28 @@ type MetaDB struct {
 
 // OpenMetaDB 打开或创建指定目录下的 gallery.db。
 func OpenMetaDB(galleryDir string) (*MetaDB, error) {
-	if err := os.MkdirAll(galleryDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create gallery dir: %w", err)
-	}
+	return openDB(galleryDir, false)
+}
 
+// OpenMetaDBReadOnly 只读打开已有数据库，不建目录、不迁移。
+func OpenMetaDBReadOnly(galleryDir string) (*MetaDB, error) { return openDB(galleryDir, true) }
+
+func openDB(galleryDir string, readOnly bool) (*MetaDB, error) {
 	dbPath := filepath.Join(galleryDir, "gallery.db")
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", dbPath)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := storage.OpenSQLite(dbPath, readOnly)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open gallery.db: %w", err)
 	}
 
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
 	meta := &MetaDB{db: db}
-	if err := meta.migrate(); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("gallery.db migration failed: %w", err)
+	if !readOnly {
+		if err := meta.migrate(); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("gallery.db migration failed: %w", err)
+		}
+
 	}
 
 	return meta, nil
@@ -244,4 +251,3 @@ func (m *MetaDB) ListPhotos(includeDeleted bool, limit, offset int) ([]*Photo, e
 
 	return photos, rows.Err()
 }
-

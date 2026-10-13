@@ -27,6 +27,18 @@ type Config struct {
 	PrimaryLibrary string `json:"primary_library"`
 	// Libraries 记录所有挂载的物理资源库根路径列表。
 	Libraries []string `json:"libraries"`
+	// ReadOnlyLibraries 指定只读资源库路径，与 Libraries/PrimaryLibrary 中的路径匹配。
+	ReadOnlyLibraries []string `json:"read_only_libraries,omitempty"`
+}
+
+// IsLibraryReadOnly 查询指定资源库是否以只读模式配置。
+func (c *Config) IsLibraryReadOnly(path string) bool {
+	for _, candidate := range c.ReadOnlyLibraries {
+		if filepath.Clean(candidate) == filepath.Clean(path) {
+			return true
+		}
+	}
+	return false
 }
 
 // DefaultConfig 返回包含安全默认值的配置实例。
@@ -46,6 +58,13 @@ func DefaultConfig() *Config {
 // Windows: %APPDATA%\omnihub
 // macOS: ~/Library/Application Support/omnihub
 func GetConfigDir() (string, error) {
+	// 隔离开发实例与便携部署，路径仍由配置中心统一提供。
+	if dir := os.Getenv("OMNIHUB_CONFIG_DIR"); dir != "" {
+		if !filepath.IsAbs(dir) {
+			return "", errors.New("OMNIHUB_CONFIG_DIR must be absolute")
+		}
+		return filepath.Clean(dir), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get user home directory: %w", err)
@@ -101,7 +120,9 @@ func Load() (*Config, error) {
 		if os.IsNotExist(err) {
 			// 文件不存在时，使用并保存默认配置
 			cfg := DefaultConfig()
-			_ = Save(cfg)
+			if err := Save(cfg); err != nil {
+				return nil, fmt.Errorf("save default configuration: %w", err)
+			}
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("failed to read config file from %s: %w", path, err)

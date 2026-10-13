@@ -17,7 +17,7 @@ public:
     QVariantList games() const { return m_games; }
     bool loading() const { return m_loading; }
 
-    Q_INVOKABLE void fetchGames(const QString &hostUrl = "http://127.0.0.1:8998");
+    Q_INVOKABLE void fetchGames();
     Q_INVOKABLE void launchGame(const QString &gameId, const QString &exePath, const QString &args);
 
 signals:

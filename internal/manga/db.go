@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"omnihub/internal/storage"
 	"path/filepath"
 	"time"
 
@@ -19,21 +19,26 @@ type DB struct {
 
 // OpenDB 打开或创建 manga/manga.db。
 func OpenDB(mangaDir string) (*DB, error) {
-	if err := os.MkdirAll(mangaDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create manga dir: %w", err)
-	}
+	return openDB(mangaDir, false)
+}
 
+// OpenDBReadOnly 只读打开已有数据库，不建目录、不迁移。
+func OpenDBReadOnly(mangaDir string) (*DB, error) { return openDB(mangaDir, true) }
+
+func openDB(mangaDir string, readOnly bool) (*DB, error) {
 	dbPath := filepath.Join(mangaDir, "manga.db")
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", dbPath)
-	sqliteDB, err := sql.Open("sqlite", dsn)
+	db, err := storage.OpenSQLite(dbPath, readOnly)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open manga.db: %w", err)
 	}
 
-	mDB := &DB{db: sqliteDB}
-	if err := mDB.migrate(); err != nil {
-		_ = sqliteDB.Close()
-		return nil, fmt.Errorf("manga.db migration failed: %w", err)
+	mDB := &DB{db: db}
+	if !readOnly {
+		if err := mDB.migrate(); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("manga.db migration failed: %w", err)
+		}
+
 	}
 
 	return mDB, nil
@@ -204,4 +209,3 @@ func (d *DB) GetExistingIDs() (map[string]bool, error) {
 	}
 	return res, rows.Err()
 }
-

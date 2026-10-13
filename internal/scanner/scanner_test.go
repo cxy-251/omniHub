@@ -55,7 +55,7 @@ func TestScannerGamesAndManga(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(creatorAlbumDir, "01.jpg"), []byte("dummy image 1"), 0644)
 	_ = os.WriteFile(filepath.Join(creatorAlbumDir, "02.jpg"), []byte("dummy image 2"), 0644)
 
-	svCount, err := ScanShortVideos(svDir, true)
+	svCount, err := scanShortVideos(svDir, nil)
 	if err != nil {
 		t.Fatalf("ScanShortVideos error: %v", err)
 	}
@@ -63,4 +63,3 @@ func TestScannerGamesAndManga(t *testing.T) {
 		t.Errorf("expected 2 shortvideo posts (1 video + 1 album), got %d", svCount)
 	}
 }
-
