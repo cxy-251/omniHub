@@ -188,3 +188,16 @@ func (c *Client) CheckQuotaRecovery() bool {
 	}
 	return false
 }
+
+// GetState 获取当前 MEGA 配额状态与任务列表。
+func (c *Client) GetState() (QuotaState, []*DownloadTask) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var taskList []*DownloadTask
+	for _, t := range c.tasks {
+		taskList = append(taskList, t)
+	}
+	return c.quotaState, taskList
+}
+

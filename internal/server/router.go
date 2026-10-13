@@ -20,6 +20,8 @@ import (
 	"omnihub/internal/games"
 	"omnihub/internal/library"
 	"omnihub/internal/manga"
+	"omnihub/internal/mega"
+	"omnihub/internal/sc2"
 	"omnihub/internal/shortvideo"
 	"omnihub/internal/tasks"
 	"omnihub/internal/text"
@@ -36,6 +38,7 @@ type Router struct {
 	clipboard  *tools.ClipboardManager
 	taskMgr    *tasks.Manager
 	progressDB *audio.ProgressDB
+	megaClient *mega.Client
 }
 
 // NewRouter 创建路由分发器实例。
@@ -52,6 +55,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB) *Router {
 		clipboard:  tools.NewClipboardManager(50),
 		taskMgr:    tasks.NewManager(),
 		progressDB: progDB,
+		megaClient: mega.NewClient("", 5*time.Minute),
 	}
 	r.registerRoutes()
 	return r
@@ -124,6 +128,14 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/tools/shared/zip", r.handleToolsSharedZip)
 	r.mux.HandleFunc("/api/tools/speed", r.handleToolsSpeed)
 	r.mux.HandleFunc("/api/tools/webshell", r.handleToolsWebShell)
+
+	// 星际争霸 2 定制接口 (第 10.1 节)
+	r.mux.HandleFunc("/api/sc2/maps", r.handleSC2Maps)
+	r.mux.HandleFunc("/api/sc2/launch", r.handleSC2Launch)
+
+	// MEGA 客户端接口 (第 10.2 节)
+	r.mux.HandleFunc("/api/mega/status", r.handleMegaStatus)
+	r.mux.HandleFunc("/api/mega/download", r.handleMegaDownload)
 
 	// 嵌入式 Web 根路由静态文件
 	r.mux.Handle("/", http.FileServer(http.FS(web.FS)))
@@ -966,6 +978,92 @@ func (r *Router) handleToolsWebShell(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"output": outBuf.String(),
 	})
+}
+
+// --- 星际争霸 2 定制接口 (第 10.1 节) ---
+
+func (r *Router) handleSC2Maps(w http.ResponseWriter, req *http.Request) {
+	primary := r.libMgr.GetPrimary()
+	if primary == nil {
+		writeJSON(w, http.StatusOK, []sc2.MapItem{})
+		return
+	}
+	mapsDir := filepath.Join(primary.RootPath, "standalone_games", "wine_games", "StarCraft II", "Maps")
+	maps, err := sc2.ListMaps(mapsDir)
+	if err != nil {
+		writeJSON(w, http.StatusOK, []sc2.MapItem{})
+		return
+	}
+	writeJSON(w, http.StatusOK, maps)
+}
+
+func (r *Router) handleSC2Launch(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var opt sc2.MatchOptions
+	if err := json.NewDecoder(req.Body).Decode(&opt); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	primary := r.libMgr.GetPrimary()
+	sc2Dir := ""
+	if primary != nil {
+		sc2Dir = filepath.Join(primary.RootPath, "standalone_games", "wine_games", "StarCraft II")
+	}
+
+	args, err := sc2.BuildMatchArgs(opt, sc2Dir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "ready",
+		"args":   args,
+	})
+}
+
+// --- MEGA 客户端接口 (第 10.2 节) ---
+
+func (r *Router) handleMegaStatus(w http.ResponseWriter, req *http.Request) {
+	quota, tasks := r.megaClient.GetState()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"quota": quota,
+		"tasks": tasks,
+	})
+}
+
+func (r *Router) handleMegaDownload(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var p struct {
+		ID      string `json:"id"`
+		Source  string `json:"source"`
+		DestDir string `json:"dest_dir"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&p); err != nil || p.Source == "" {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if p.ID == "" {
+		p.ID = fmt.Sprintf("mega_%d", time.Now().UnixNano())
+	}
+	if p.DestDir == "" {
+		home, _ := os.UserHomeDir()
+		p.DestDir = filepath.Join(home, "Downloads")
+	}
+
+	task, err := r.megaClient.EnqueueDownload(p.ID, p.Source, p.DestDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

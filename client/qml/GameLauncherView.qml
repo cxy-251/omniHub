@@ -44,11 +44,52 @@ Item {
                 }
 
                 Button {
-                    text: "启动游戏"
+                    text: (modelData.name.indexOf("StarCraft") !== -1) ? "对战配置…" : "启动游戏"
                     anchors.verticalCenter: parent.verticalCenter
-                    onClicked: launcher.launchGame(modelData.id, modelData.exe, modelData.args || "")
+                    onClicked: {
+                        if (modelData.name.indexOf("StarCraft") !== -1) {
+                            sc2Dialog.open()
+                        } else {
+                            launcher.launchGame(modelData.id, modelData.exe, modelData.args || "")
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    // 星际争霸 2 定制对战开局弹窗 (第 10.1 节)
+    Dialog {
+        id: sc2Dialog
+        anchors.centerIn: parent
+        width: 400
+        height: 320
+        title: "星际争霸 2 离线对战配置"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        Column {
+            anchors.fill: parent
+            spacing: 12
+
+            Text { text: "AI 种族:"; color: "#e6edf3" }
+            ComboBox {
+                id: raceCombo
+                width: parent.width
+                model: ["Random", "Terran", "Zerg", "Protoss"]
+            }
+
+            Text { text: "AI 难度:"; color: "#e6edf3" }
+            ComboBox {
+                id: diffCombo
+                width: parent.width
+                model: ["VeryEasy", "Easy", "Medium", "Hard", "VeryHard", "CheatInsane"]
+                currentIndex: 2
+            }
+        }
+
+        onAccepted: {
+            var args = "--race " + raceCombo.currentText + " --difficulty " + diffCombo.currentText;
+            launcher.launchGame("sc2", "wine_games/StarCraft II/Support64/SC2Switcher_x64.exe", args);
         }
     }
 }

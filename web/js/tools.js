@@ -13,6 +13,7 @@ const ToolsHub = {
     this.loadMetrics();
     this.loadSharedFiles();
     this.initWebShell();
+    this.loadMegaStatus();
   },
 
   renderContainer() {
@@ -83,6 +84,21 @@ const ToolsHub = {
           </div>
         </div>
 
+        <!-- MEGA 客户端面板 (第 10.2 节) -->
+        <div class="tool-card">
+          <h3>☁️ MEGA 客户端与配额避让</h3>
+          <div style="display:flex; gap:6px;">
+            <input type="text" id="mega-url-input" placeholder="MEGA 分享链接 (mega.nz/...)" style="flex-grow:1;">
+            <button id="btn-mega-add" class="btn-primary">添加下载</button>
+          </div>
+          <div id="mega-quota-warning" style="display:none; color:#f85149; font-size:12px; background:rgba(248,81,73,0.1); padding:4px 8px; border-radius:4px;">
+            ⚠️ 配额超限避让中: 任务挂起，等待恢复倒计时
+          </div>
+          <div id="mega-tasks-list" class="clipboard-list" style="max-height:110px;">
+            <div style="color:var(--text-muted)">暂无活动 MEGA 任务</div>
+          </div>
+        </div>
+
         <!-- WebShell 终端 (第 11.4 节 - xterm.js 离线集成) -->
         <div class="tool-card" style="grid-column: 1 / -1;">
           <h3>💻 应急 WebShell 终端 (仅 Admin 可用，基于 xterm.js)</h3>
@@ -129,6 +145,18 @@ const ToolsHub = {
       btnWOL.addEventListener('click', () => {
         const mac = document.getElementById('wol-mac-input').value.trim();
         if (mac) this.sendWOL(mac);
+      });
+    }
+
+    // MEGA 下载添加
+    const btnMega = document.getElementById('btn-mega-add');
+    if (btnMega) {
+      btnMega.addEventListener('click', () => {
+        const inp = document.getElementById('mega-url-input');
+        if (inp.value.trim()) {
+          this.addMegaDownload(inp.value.trim());
+          inp.value = '';
+        }
       });
     }
 
@@ -326,6 +354,50 @@ const ToolsHub = {
         this.term.writeln(`执行异常: ${e.message}`);
         this.term.write('$ ');
       }
+    }
+  },
+
+  // --- MEGA 客户端 (第 10.2 节) ---
+  async loadMegaStatus() {
+    const list = document.getElementById('mega-tasks-list');
+    const warning = document.getElementById('mega-quota-warning');
+    if (!list) return;
+
+    try {
+      const res = await fetch('/api/mega/status');
+      const data = await res.json();
+      if (warning) {
+        warning.style.display = (data.quota === 'exceeded' || data.quota === 'cooldown') ? 'block' : 'none';
+      }
+
+      if (!Array.isArray(data.tasks) || data.tasks.length === 0) {
+        list.innerHTML = '<div style="color:var(--text-muted)">暂无活动 MEGA 任务</div>';
+        return;
+      }
+
+      list.innerHTML = data.tasks.map(t => `
+        <div class="clipboard-item">
+          <span>${this.escapeHTML(t.id || t.source)}</span>
+          <span style="font-size:11px; color:${t.status === 'downloading' ? '#58a6ff' : 'var(--text-muted)'}">${t.status} (${((t.progress || 0) * 100).toFixed(0)}%)</span>
+        </div>
+      `).join('');
+    } catch (_) {}
+  },
+
+  async addMegaDownload(url) {
+    try {
+      const res = await fetch('/api/mega/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: url })
+      });
+      if (res.ok) {
+        this.loadMegaStatus();
+      } else {
+        alert('添加 MEGA 下载失败');
+      }
+    } catch (_) {
+      alert('网络异常');
     }
   },
 
