@@ -294,3 +294,54 @@ func (d *DB) GetSectionRequiredLevel(sectionID string) (int, error) {
 	}
 	return level, nil
 }
+
+// ListSectionPermissions 列出所有分类权限矩阵。
+func (d *DB) ListSectionPermissions() (map[string]int, error) {
+	rows, err := d.db.Query("SELECT section_id, required_level FROM section_permissions")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	res := make(map[string]int)
+	for rows.Next() {
+		var sec string
+		var lvl int
+		if err := rows.Scan(&sec, &lvl); err != nil {
+			return nil, err
+		}
+		res[sec] = lvl
+	}
+	return res, rows.Err()
+}
+
+// ListUsers 列出所有用户。
+func (d *DB) ListUsers() ([]*User, error) {
+	rows, err := d.db.Query("SELECT id, username, role, level, status, created_at FROM users ORDER BY id ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*User
+	for rows.Next() {
+		var u User
+		var createdStr string
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.Level, &u.Status, &createdStr); err != nil {
+			return nil, err
+		}
+		u.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+		users = append(users, &u)
+	}
+	return users, rows.Err()
+}
+
+// UpdateUserLevel 修改用户等级并废止所有活跃会话以即时生效。
+func (d *DB) UpdateUserLevel(userID int64, level int) error {
+	_, err := d.db.Exec("UPDATE users SET level = ? WHERE id = ?", level, userID)
+	if err != nil {
+		return err
+	}
+	return d.RevokeUserSessions(userID)
+}
+
