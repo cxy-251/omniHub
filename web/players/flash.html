@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Flash Player (Ruffle WASM)</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            width: 100%; height: 100%; background: #080a0f; overflow: hidden;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+        }
+        #flash-container {
+            width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+            position: relative;
+        }
+        ruffle-player {
+            width: 100% !important; height: 100% !important;
+            max-width: 1280px; max-height: 800px;
+            outline: none; border-radius: 4px;
+            box-shadow: 0 0 40px rgba(0,0,0,0.8);
+        }
+        #loading-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #080a0f; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; color: #58a6ff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-size: 14px; gap: 12px; z-index: 10;
+        }
+        .spinner {
+            width: 36px; height: 36px; border: 3px solid rgba(88,166,255,0.2);
+            border-top-color: #58a6ff; border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        #hint-bar {
+            position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+            background: rgba(22, 27, 34, 0.85); backdrop-filter: blur(8px);
+            border: 1px solid rgba(48, 54, 61, 0.6); border-radius: 20px;
+        }
+
+    </style>
+    <script>
+        window.RufflePlayer = window.RufflePlayer || {};
+        window.RufflePlayer.config = {
+            publicPath: "/plugins/ruffle/",
+            autoplay: "on",
+            unmuteOverlay: "hidden",
+            letterbox: "on",
+            warnOnUnsupportedContent: false,
+            contextMenu: "off",
+            showSwfDownload: false,
+            splashScreen: false,
+            scale: "showAll",
+            forceScale: true,
+            openUrlMode: "confirm"
+        };
+    </script>
+    <script src="/plugins/ruffle/ruffle.js"></script>
+</head>
+<body>
+    <div id="flash-container">
+        <div id="loading-overlay">
+            <div class="spinner"></div>
+            <div>⚡ 正在加载 Flash 殿堂游戏引擎 (Ruffle WASM)...</div>
+        </div>
+    </div>
+    <div id="hint-bar" style="display:none;"></div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const gameId = params.get('id') || '';
+        const swfFile = params.get('file') || '';
+        const hint = params.get('hint') || '';
+
+        if (hint) {
+            const bar = document.getElementById('hint-bar');
+            bar.textContent = hint;
+            bar.style.display = 'flex';
+            setTimeout(() => { bar.style.opacity = '0'; }, 8000);
+        }
+
+        const container = document.getElementById('flash-container');
+        const loading = document.getElementById('loading-overlay');
+
+        function initPlayer() {
+            if (!swfFile) {
+                fetch('/api/games')
+                    .then(r => r.json())
+                    .then(list => {
+                        const g = list.find(x => x.id === gameId);
+                        if (g && g.engine === 'web_flash' && g.url) {
+                            window.location.replace(g.url);
+                        } else {
+                            if (loading) loading.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center;">⚠️ 未找到该游戏的 SWF 镜像文件</div>';
+                        }
+                    })
+                    .catch(() => {
+                        if (loading) loading.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center;">⚠️ 未找到该游戏的 SWF 镜像文件</div>';
+                    });
+                return;
+            }
+
+            const swfUrl = '/flash_swf/' + encodeURIComponent(gameId) + '/' + encodeURIComponent(swfFile);
+
+            const tryInit = () => {
+                try {
+                    if (!window.RufflePlayer || typeof window.RufflePlayer.newest !== 'function') {
+                        setTimeout(tryInit, 100);
+                        return;
+                    }
+                    const ruffle = window.RufflePlayer.newest();
+                    const player = ruffle.createPlayer();
+                    player.style.width = "100%";
+                    player.style.height = "100%";
+                    container.appendChild(player);
+
+                    player.addEventListener("loadedmetadata", () => {
+                        if (loading) loading.style.display = 'none';
+                    });
+
+                    player.load({
+                        url: swfUrl,
+                        autoplay: "on",
+                        allowScriptAccess: true
+                    }).then(() => {
+                        setTimeout(() => { if (loading) loading.style.display = 'none'; }, 800);
+                    }).catch(err => {
+                        console.error("Ruffle load error:", err);
+                        if (loading) loading.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center;">Flash 游戏加载失败: ' + err + '</div>';
+                    });
+                } catch (e) {
+                    console.error("Ruffle init error:", e);
+                    if (loading) loading.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center;">Ruffle 引擎初始化失败: ' + e.message + '</div>';
+                }
+            };
+            tryInit();
+        }
+
+        function returnToCategory() {
+            window.location.href = '/hub.html?category=flash';
+        }
+
+        window.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                returnToCategory();
+            }
+        });
+
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+            initPlayer();
+        } else {
+            window.addEventListener('DOMContentLoaded', initPlayer);
+        }
+    </script>
+</body>
+</html>

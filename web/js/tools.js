@@ -87,14 +87,17 @@ const ToolsHub = {
         <!-- MEGA 客户端面板 (第 10.2 节) -->
         <div class="tool-card">
           <h3>☁️ MEGA 客户端与配额避让</h3>
-          <div style="display:flex; gap:6px;">
-            <input type="text" id="mega-url-input" placeholder="MEGA 分享链接 (mega.nz/...)" style="flex-grow:1;">
-            <button id="btn-mega-add" class="btn-primary">添加下载</button>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <input type="text" id="mega-url-input" placeholder="MEGA 分享链接 (mega.nz/...)" style="width:100%;">
+            <div style="display:flex; gap:6px;">
+              <input type="text" id="mega-path-input" placeholder="自定义保存路径 (默认 ~/Downloads)" style="flex-grow:1;">
+              <button id="btn-mega-add" class="btn-primary">添加下载</button>
+            </div>
           </div>
-          <div id="mega-quota-warning" style="display:none; color:#f85149; font-size:12px; background:rgba(248,81,73,0.1); padding:4px 8px; border-radius:4px;">
+          <div id="mega-quota-warning" style="display:none; color:#f85149; font-size:12px; background:rgba(248,81,73,0.1); padding:4px 8px; border-radius:4px; margin-top:4px;">
             ⚠️ 配额超限避让中: 任务挂起，等待恢复倒计时
           </div>
-          <div id="mega-tasks-list" class="clipboard-list" style="max-height:110px;">
+          <div id="mega-tasks-list" class="clipboard-list" style="max-height:110px; margin-top:4px;">
             <div style="color:var(--text-muted)">暂无活动 MEGA 任务</div>
           </div>
         </div>
@@ -153,8 +156,9 @@ const ToolsHub = {
     if (btnMega) {
       btnMega.addEventListener('click', () => {
         const inp = document.getElementById('mega-url-input');
+        const pathInp = document.getElementById('mega-path-input');
         if (inp.value.trim()) {
-          this.addMegaDownload(inp.value.trim());
+          this.addMegaDownload(inp.value.trim(), pathInp ? pathInp.value.trim() : '');
           inp.value = '';
         }
       });
@@ -372,24 +376,29 @@ const ToolsHub = {
 
       if (!Array.isArray(data.tasks) || data.tasks.length === 0) {
         list.innerHTML = '<div style="color:var(--text-muted)">暂无活动 MEGA 任务</div>';
-        return;
+      } else {
+        list.innerHTML = data.tasks.map(t => `
+          <div class="clipboard-item">
+            <span>${this.escapeHTML(t.id || t.source)}</span>
+            <span style="font-size:11px; color:${t.status === 'downloading' ? '#58a6ff' : 'var(--text-muted)'}">${t.status} (${((t.progress || 0) * 100).toFixed(0)}%)</span>
+          </div>
+        `).join('');
       }
 
-      list.innerHTML = data.tasks.map(t => `
-        <div class="clipboard-item">
-          <span>${this.escapeHTML(t.id || t.source)}</span>
-          <span style="font-size:11px; color:${t.status === 'downloading' ? '#58a6ff' : 'var(--text-muted)'}">${t.status} (${((t.progress || 0) * 100).toFixed(0)}%)</span>
-        </div>
-      `).join('');
+      if (!this.megaTimer) {
+        this.megaTimer = setInterval(() => this.loadMegaStatus(), 3000);
+      }
     } catch (_) {}
   },
 
-  async addMegaDownload(url) {
+  async addMegaDownload(url, destDir) {
     try {
+      const payload = { source: url };
+      if (destDir) payload.dest_dir = destDir;
       const res = await fetch('/api/mega/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: url })
+        body: JSON.stringify(payload)
       });
       if (res.ok) {
         this.loadMegaStatus();

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Player</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; cursor: default !important; }
+        html, body {
+            width: 100%; height: 100%; background: #000000; overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            cursor: default !important;
+        }
+        #display {
+            width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+            cursor: default !important;
+        }
+        #game, canvas {
+            width: 100%; height: 100%;
+            cursor: default !important;
+        }
+        #error-overlay {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(22, 27, 34, 0.96);
+            border: 1px solid #f85149;
+            border-radius: 12px;
+            padding: 24px 30px;
+            z-index: 999999;
+            color: #f0f6fc;
+            text-align: center;
+            max-width: 580px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.85);
+        }
+        #error-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #ff7b72;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        #error-desc {
+            font-size: 13px;
+            color: #c9d1d9;
+            margin-bottom: 18px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+            text-align: left;
+            background: #0d1117;
+            padding: 10px 14px;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+        }
+        .error-btn {
+            background: #21262d;
+            border: 1px solid #58a6ff;
+            color: #58a6ff;
+            padding: 8px 22px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            outline: none;
+        }
+        .error-btn:hover {
+            background: #388bfd;
+            color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+    <div id="display">
+        <div id="game"></div>
+    </div>
+
+    <div id="error-overlay">
+        <div id="error-title">⚠️ 模拟器运行提示</div>
+        <div id="error-desc"></div>
+        <button class="error-btn" onclick="returnToCategory()">⬅ 返回街机专区</button>
+    </div>
+
+    <script>
+        // 彻底禁用 PointerLock，防止 Wayland 鼠标隐藏与输入捕获锁死
+        if (typeof Element !== 'undefined' && Element.prototype) {
+            Element.prototype.requestPointerLock = function() {
+                return Promise.resolve();
+            };
+        }
+        if (document.exitPointerLock) {
+            try { document.exitPointerLock(); } catch(e) {}
+        }
+
+        function returnToCategory() {
+            if (window.EJS_emulator && window.EJS_emulator.gameManager) {
+                try { window.EJS_emulator.gameManager.pause(); } catch(e) {}
+            }
+            window.location.href = '/hub.html?category=retro';
+        }
+
+        window.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                returnToCategory();
+            }
+        });
+
+        function triggerErrorBanner(msg) {
+            var overlay = document.getElementById('error-overlay');
+            var desc = document.getElementById('error-desc');
+            if (overlay && desc) {
+                var clean = String(msg || '');
+                if (clean.includes('ddp3_bios') || clean.includes('bios.u42')) {
+                    clean = '【缺少 PGM2 街机 BIOS 固件】\n该 ROM (三国战纪3 / Knights of Valour 3) 属于 IGS PGM2 二代硬件基板，需要 pgm2.zip BIOS 固件 (包含 ddp3_bios.u37 与 bios.u42)。\n\n' + clean;
+                }
+                desc.textContent = clean;
+                overlay.style.display = 'block';
+            }
+        }
+
+        // 拦截 alert 避免阻塞浏览器/Qt
+        window.alert = function(msg) {
+            console.warn('[Emulator-Alert]', msg);
+            triggerErrorBanner(msg);
+        };
+
+        window.addEventListener('error', function(e) {
+            var str = e.error ? (e.error.stack || e.error.message) : e.message;
+            console.error('JS_ERR_STACK:', str);
+            if (str && (str.includes('FBNeo') || str.includes('abort(') || str.includes('Cannot find'))) {
+                triggerErrorBanner(str);
+            }
+        });
+
+        window.addEventListener('unhandledrejection', function(e) {
+            console.error('PROMISE_REJ_STACK:', e.reason ? (e.reason.stack || e.reason) : e.reason);
+        });
+
+        // 静音/安全处理 WakeLock 权限拒绝
+        if ('wakeLock' in navigator) {
+            try {
+                const _req = navigator.wakeLock.request;
+                navigator.wakeLock.request = function() {
+                    return _req.apply(this, arguments).catch(() => ({ release: () => Promise.resolve() }));
+                };
+            } catch(e) {}
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const gameId = params.get('id') || '';
+        const system = params.get('system') || 'nes';
+        const romFile = params.get('rom') || '';
+        
+        let gameUrl = '/retro_rom/' + encodeURIComponent(gameId);
+        if (romFile) {
+            gameUrl += '/' + encodeURIComponent(romFile);
+        }
+
+        let cleanGameName = gameId;
+        if (system === 'arcade' || system === 'fbalpha' || system === 'fbneo') {
+            if (romFile) {
+                cleanGameName = romFile.replace(/\.[^/.]+$/, "");
+            }
+        }
+
+        window.EJS_player = '#game';
+        window.EJS_gameName = cleanGameName;
+        window.EJS_core = system;
+        window.EJS_gameUrl = gameUrl;
+        window.EJS_pathtodata = '/emulatorjs/data/';
+        window.EJS_startOnLoaded = true;
+        window.EJS_disableDatabases = true;
+        window.EJS_forceLegacyCores = true;
+        window.EJS_threads = false;
+        window.EJS_language = 'zh-CN';
+    </script>
+    <script src="/emulatorjs/data/loader.js"></script>
+</body>
+</html>

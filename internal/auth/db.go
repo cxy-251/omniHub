@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -18,9 +20,10 @@ import (
 
 // DB 封装基于 SQLite 的用户认证与权限持久化。
 type DB struct {
-	db       *sql.DB
-	ipMu     sync.Mutex
-	ipFailed map[string][]time.Time // 防暴力破解：记录单 IP 验证失败时间戳
+	db              *sql.DB
+	ipMu            sync.Mutex
+	ipFailed        map[string][]time.Time // 防暴力破解：记录单 IP 验证失败时间戳
+	hasAdminCached  int32                  // 0: 未知/未初始化, 1: 已有管理员
 }
 
 // OpenDB 打开或创建指定路径下的 users.db，自动执行建表与 WAL 模式开启。
@@ -95,6 +98,15 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// GenerateSecureToken 生成 32 字节密码学安全的随机会话 Token。
+func GenerateSecureToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate random token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
 // CheckIPRateLimit 检查指定 IP 是否因连续失败触发防爆破锁定（连续 5 次失败锁定 5 分钟）。
 func (d *DB) CheckIPRateLimit(ip string) error {
 	d.ipMu.Lock()
@@ -147,8 +159,15 @@ func sanitizeIP(ip string) string {
 
 // HasAdmin 检查系统是否已有管理员账号（用于首次启动引导判断）。
 func (d *DB) HasAdmin() (bool, error) {
+	if atomic.LoadInt32(&d.hasAdminCached) == 1 {
+		return true, nil
+	}
 	var count int
 	err := d.db.QueryRow("SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'").Scan(&count)
+	if err == nil && count > 0 {
+		atomic.StoreInt32(&d.hasAdminCached, 1)
+		return true, nil
+	}
 	return count > 0, err
 }
 
@@ -178,6 +197,10 @@ func (d *DB) CreateUser(username, password, role string, level int) (*User, erro
 	id, err := res.LastInsertId()
 	if err != nil {
 		return nil, err
+	}
+
+	if role == RoleAdmin {
+		atomic.StoreInt32(&d.hasAdminCached, 1)
 	}
 
 	return &User{

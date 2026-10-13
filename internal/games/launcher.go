@@ -90,10 +90,9 @@ func LaunchGame(ctx context.Context, opt LaunchOptions) (*LaunchedGame, error) {
 	env = append(env, fmt.Sprintf("OMNI_SAVE_DIR=%s", saveDir))
 	cmd.Env = append(env, opt.Env...)
 
-	// Setsid 独立会话脱钩（第 4.3.1 节）
+	// Setsid 独立会话脱钩（第 4.3.1 节），新 session 会天然作为新进程组 leader
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-		Setsid:  true,
+		Setsid: true,
 	}
 
 	if err := cmd.Start(); err != nil {

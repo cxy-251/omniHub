@@ -12,6 +12,7 @@ type contextKey string
 const (
 	UserContextKey   contextKey = "auth_user"
 	ClientContextKey contextKey = "client_target"
+	WANContextKey    contextKey = "is_wan"
 )
 
 // Middleware 负责在 HTTP 链路中提取会话凭证并注入用户信息。
@@ -24,11 +25,16 @@ func NewMiddleware(db *DB) *Middleware {
 	return &Middleware{db: db}
 }
 
-// isLoopback 判断请求是否来自本地回环（第 8.1.1 节受信任环境）。
-func isLoopback(remoteAddr string) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
+// IsLoopbackDirect 判断请求是否为直接本地回环访问（排除 Cloudflare 隧道或外部反代伪装）。
+func IsLoopbackDirect(r *http.Request) bool {
+	if r.Header.Get("CF-Connecting-IP") != "" ||
+		r.Header.Get("X-Forwarded-For") != "" ||
+		r.Header.Get("X-Real-IP") != "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		host = remoteAddr
+		host = r.RemoteAddr
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
@@ -37,29 +43,51 @@ func isLoopback(remoteAddr string) bool {
 	return ip.IsLoopback()
 }
 
+// IsWANRequest 判断请求是否来自 WAN 公网或反代隧道（第 8.1.3 节）。
+func IsWANRequest(r *http.Request) bool {
+	if r.Header.Get("CF-Connecting-IP") != "" ||
+		r.Header.Get("X-Forwarded-For") != "" ||
+		r.Header.Get("X-Real-IP") != "" {
+		return true
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return !ip.IsLoopback() && !ip.IsPrivate()
+}
+
 // Handler 返回 HTTP 鉴权处理中间件。
 func (m *Middleware) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		// 判定客户端类型
+		// 判定客户端类型与公网来源
 		clientTarget := TargetWeb
 		if r.Header.Get("X-Client-Target") == TargetGUI {
 			clientTarget = TargetGUI
 		}
+		isWAN := IsWANRequest(r)
+		isDirectLocal := IsLoopbackDirect(r)
+
 		ctx = context.WithValue(ctx, ClientContextKey, clientTarget)
+		ctx = context.WithValue(ctx, WANContextKey, isWAN)
 
 		// 检查系统是否有 Admin（第 5.3.3 节）
 		hasAdmin, _ := m.db.HasAdmin()
-		if !hasAdmin && !isLoopback(r.RemoteAddr) {
+		if !hasAdmin && !isDirectLocal {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(`{"error":"system uninitialized, admin setup required on local host"}`))
 			return
 		}
 
-		// 1. 本地回环免密直通 Admin（第 8.1.1 节）
-		if isLoopback(r.RemoteAddr) {
+		// 1. 本地回环免密直通 Admin（第 8.1.1 节），未初始化时不直通以引导 setup
+		if isDirectLocal && hasAdmin {
 			adminUser := &User{
 				ID:       1,
 				Username: "local_admin",
@@ -117,4 +145,12 @@ func ClientFromContext(ctx context.Context) string {
 		return c
 	}
 	return TargetWeb
+}
+
+// IsWANFromContext 从上下文中获取是否属于公网/隧道请求。
+func IsWANFromContext(ctx context.Context) bool {
+	if v, ok := ctx.Value(WANContextKey).(bool); ok {
+		return v
+	}
+	return false
 }

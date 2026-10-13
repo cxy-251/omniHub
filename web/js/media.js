@@ -65,38 +65,58 @@ const MediaHub = {
             <span>🎯 焦点出声 (点击视频独占出声)</span>
           </label>
           <button id="btn-matrix-random-all" class="btn-primary" style="padding:2px 10px;">🎲 全屏随机切片</button>
+          <button id="btn-matrix-accompany" class="btn-primary" style="padding:2px 10px;" onclick="MediaHub.toggleAudioAccompany()">🎵 伴听音频</button>
         </div>
         <div id="matrix-slots-container" class="matrix-container matrix-grid-3"></div>
       </div>
 
       <!-- 文本阅读器 -->
       <div id="subpane-text" class="media-subpane">
-        <div class="reader-toolbar">
-          <div style="display:flex; gap:8px;">
-            <input type="text" id="text-path-input" placeholder="输入相对路径 (如 media_library/novels/standard/test.txt)" style="width: 350px;">
-            <button id="btn-text-load" class="btn-primary">加载文本</button>
+        <div style="display:grid; grid-template-columns: 280px 1fr; gap:16px;">
+          <div style="background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:12px; max-height:650px; overflow-y:auto;">
+            <h4 style="margin:0 0 8px 0; color:var(--accent);">📚 小说与文档</h4>
+            <div id="text-file-list" style="display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--text-muted);">
+              正在获取文本列表…
+            </div>
           </div>
-          <div style="display:flex; gap:8px;">
-            <button id="btn-text-prev" class="btn-primary">上一页</button>
-            <span id="text-page-info" style="font-size:13px; align-self:center;">-</span>
-            <button id="btn-text-next" class="btn-primary">下一页</button>
+          <div>
+            <div class="reader-toolbar">
+              <div style="display:flex; gap:8px;">
+                <input type="text" id="text-path-input" placeholder="输入相对路径" style="width: 300px;">
+                <button id="btn-text-load" class="btn-primary">加载</button>
+              </div>
+              <div style="display:flex; gap:8px;">
+                <button id="btn-text-prev" class="btn-primary">上一页</button>
+                <span id="text-page-info" style="font-size:13px; align-self:center;">-</span>
+                <button id="btn-text-next" class="btn-primary">下一页</button>
+              </div>
+            </div>
+            <div id="reader-content" class="reader-container">请从左侧选择文档或在上方输入路径进行阅读</div>
           </div>
         </div>
-        <div id="reader-content" class="reader-container">请在上方输入路径并加载文本</div>
       </div>
 
       <!-- 漫画专区 -->
       <div id="subpane-manga" class="media-subpane">
-        <div style="margin-bottom: 12px; display:flex; gap:8px;">
-          <input type="text" id="manga-path-input" placeholder="输入 CBZ 相对路径 (如 media_library/manga/test.cbz)" style="width:350px;">
-          <button id="btn-manga-load" class="btn-primary">打开条漫</button>
+        <!-- 书架视图 -->
+        <div id="manga-shelf-view">
+          <div style="margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-size:14px; color:var(--text-muted);">已索引漫画书架 (点击直接阅读条漫)</span>
+            <button id="btn-manga-refresh" class="btn-primary" style="padding:4px 10px;">🔄 刷新书架</button>
+          </div>
+          <div id="manga-shelf-grid" class="gallery-grid">
+            <div style="color:var(--text-muted);">正在加载漫画书架…</div>
+          </div>
         </div>
-        <div class="manga-status-bar">
-          <span id="manga-title-badge">未打开漫画</span>
-          <span id="manga-scroll-badge">断点: 0.0%</span>
-        </div>
-        <div id="manga-waterfall-box" class="manga-waterfall">
-          <div style="color:var(--text-muted); text-align:center; padding-top:100px;">请输入 CBZ 路径进行阅读</div>
+
+        <!-- 条漫阅读视口 -->
+        <div id="manga-reader-view" style="display:none;">
+          <div style="margin-bottom: 8px; display:flex; gap:8px; align-items:center;">
+            <button id="btn-manga-back" class="btn-primary" style="padding:4px 12px;">🔙 返回书架</button>
+            <span id="manga-title-badge" style="font-weight:bold; color:#58a6ff;">-</span>
+            <span id="manga-scroll-badge" style="font-size:12px; color:var(--text-muted);">断点: 0.0%</span>
+          </div>
+          <div id="manga-waterfall-box" class="manga-waterfall"></div>
         </div>
       </div>
 
@@ -174,7 +194,16 @@ const MediaHub = {
       });
     }
 
-    // 漫画瀑布流
+    // 漫画书架与条漫导航
+    const btnMangaRefresh = document.getElementById('btn-manga-refresh');
+    if (btnMangaRefresh) {
+      btnMangaRefresh.addEventListener('click', () => this.loadMangaShelf());
+    }
+    const btnMangaBack = document.getElementById('btn-manga-back');
+    if (btnMangaBack) {
+      btnMangaBack.addEventListener('click', () => this.closeMangaBook());
+    }
+
     const btnManga = document.getElementById('btn-manga-load');
     if (btnManga) {
       btnManga.addEventListener('click', () => {
@@ -212,6 +241,8 @@ const MediaHub = {
     });
     if (subId === 'gallery') this.loadGallery(true);
     if (subId === 'shortvideo') this.initMatrix();
+    if (subId === 'manga') this.loadMangaShelf();
+    if (subId === 'text') this.loadTextList();
   },
 
   pauseMatrixVideos() {
@@ -262,6 +293,7 @@ const MediaHub = {
             <select id="slot-chan-${i}" onchange="MediaHub.changeSlotChannel(${i}, this.value)" onclick="event.stopPropagation()">
               ${channels.map(c => `<option value="${c}" ${c === defaultChan ? 'selected' : ''}>${c}</option>`).join('')}
             </select>
+            <button class="btn-primary" id="slot-play-btn-${i}" style="padding:2px 8px;" onclick="event.stopPropagation(); MediaHub.toggleSlotPause(${i})">⏸️</button>
             <button class="btn-primary" style="padding:2px 8px;" onclick="event.stopPropagation(); MediaHub.randomSlotVideo(${i})">🎲 换片</button>
           </div>
           <video id="slot-video-${i}" autoplay loop ${i === 0 ? '' : 'muted'} playsinline></video>
@@ -316,6 +348,32 @@ const MediaHub = {
       } else {
         slotEl.classList.remove('focus-active');
         if (focusAudio) videoEl.muted = true;
+      }
+    }
+  },
+
+  toggleSlotPause(slotIndex) {
+    const v = document.getElementById(`slot-video-${slotIndex}`);
+    const btn = document.getElementById(`slot-play-btn-${slotIndex}`);
+    if (!v) return;
+    if (v.paused) {
+      v.play();
+      if (btn) btn.textContent = '⏸️';
+    } else {
+      v.pause();
+      if (btn) btn.textContent = '▶️';
+    }
+  },
+
+  toggleAudioAccompany() {
+    const audioBar = document.getElementById('audio-bar');
+    if (!audioBar) return;
+    const isHidden = audioBar.style.display === 'none';
+    audioBar.style.display = isHidden ? 'flex' : 'none';
+    if (isHidden) {
+      const container = document.getElementById('matrix-slots-container');
+      if (container) {
+        container.querySelectorAll('video').forEach(v => v.muted = true);
       }
     }
   },
@@ -414,18 +472,92 @@ const MediaHub = {
     }
   },
 
-  // --- 条漫实现 ---
-  async loadManga(path) {
-    this.currentMangaId = path;
+  async loadTextList() {
+    const listEl = document.getElementById('text-file-list');
+    if (!listEl) return;
+    try {
+      const res = await fetch('/api/media/text/list');
+      const items = await res.json();
+      if (!Array.isArray(items) || items.length === 0) {
+        listEl.innerHTML = '<div style="color:var(--text-muted)">暂无可用文本</div>';
+        return;
+      }
+      listEl.innerHTML = items.map(item => `
+        <div style="cursor:pointer; padding:6px 8px; border-radius:4px; background:var(--background); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" onclick="MediaHub.selectTextFile('${item.rel_path}')" title="${item.rel_path}">
+          📄 ${item.name}
+        </div>
+      `).join('');
+    } catch (e) {
+      listEl.innerHTML = `<div style="color:var(--danger)">加载失败: ${e.message}</div>`;
+    }
+  },
+
+  selectTextFile(relPath) {
+    const inp = document.getElementById('text-path-input');
+    if (inp) inp.value = relPath;
+    this.textState.path = relPath;
+    this.textState.start = 0;
+    this.loadTextChunk();
+  },
+
+  // --- 漫画书架与条漫实现 ---
+  async loadMangaShelf() {
+    const grid = document.getElementById('manga-shelf-grid');
+    if (!grid) return;
+    try {
+      const res = await fetch('/api/media/manga/list');
+      const mangas = await res.json();
+      if (!Array.isArray(mangas) || mangas.length === 0) {
+        grid.innerHTML = '<div style="color:var(--text-muted)">书架暂无漫画</div>';
+        return;
+      }
+      grid.innerHTML = mangas.map(m => `
+        <div class="gallery-item" style="aspect-ratio:3/4;" onclick="MediaHub.openMangaBook('${encodeURIComponent(m.rel_path)}', '${encodeURIComponent(m.title)}')">
+          <img src="/api/media/manga/cover?path=${encodeURIComponent('media_library/manga/' + m.rel_path)}" loading="lazy" alt="${m.title}">
+          <div class="overlay-info">
+            <span style="font-weight:bold;">${m.title}</span>
+            <span>共 ${m.total_pages} 页</span>
+          </div>
+        </div>
+      `).join('');
+    } catch (e) {
+      grid.innerHTML = `<div style="color:var(--danger)">加载书架失败: ${e.message}</div>`;
+    }
+  },
+
+  openMangaBook(encodedRelPath, encodedTitle) {
+    const relPath = decodeURIComponent(encodedRelPath);
+    const title = decodeURIComponent(encodedTitle);
+    const shelf = document.getElementById('manga-shelf-view');
+    const reader = document.getElementById('manga-reader-view');
+    if (shelf && reader) {
+      shelf.style.display = 'none';
+      reader.style.display = 'block';
+    }
+    this.loadManga(relPath, title);
+  },
+
+  closeMangaBook() {
+    const shelf = document.getElementById('manga-shelf-view');
+    const reader = document.getElementById('manga-reader-view');
+    if (shelf && reader) {
+      shelf.style.display = 'block';
+      reader.style.display = 'none';
+    }
+  },
+
+  async loadManga(relPath, title) {
+    const fullRelPath = 'media_library/manga/' + relPath;
+    this.currentMangaId = fullRelPath;
     const box = document.getElementById('manga-waterfall-box');
     const badge = document.getElementById('manga-title-badge');
-    badge.textContent = `正在加载: ${path}`;
+    badge.textContent = title || relPath;
     box.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding-top:100px;">正在提取 CBZ 页面流…</div>';
 
-    // 先请求历史进度
+    // 历史阅读进度
     let savedRatio = 0;
     try {
-      const progRes = await fetch(`/api/media/manga/progress?manga_id=${encodeURIComponent(path)}`);
+      const progRes = await fetch(`/api/media/manga/progress?manga_id=${encodeURIComponent(fullRelPath)}`);
       if (progRes.ok) {
         const prog = await progRes.json();
         if (prog && prog.scroll_offset_ratio) {
@@ -434,20 +566,26 @@ const MediaHub = {
       }
     } catch (_) {}
 
-    // 假设渲染前 20 页测试条漫瀑布流
-    let html = '';
-    for (let i = 1; i <= 20; i++) {
-      const entry = `page_${String(i).padStart(3, '0')}.jpg`;
-      html += `<img src="/api/media/manga/page?path=${encodeURIComponent(path)}&entry=${encodeURIComponent(entry)}" loading="lazy" alt="Page ${i}">`;
-    }
-    box.innerHTML = html;
-    badge.textContent = `正在阅读: ${path}`;
+    // 获取 CBZ 内真实图片条目列表
+    try {
+      const pagesRes = await fetch(`/api/media/manga/pages?path=${encodeURIComponent(fullRelPath)}`);
+      const entries = await pagesRes.json();
+      if (!Array.isArray(entries) || entries.length === 0) {
+        box.innerHTML = '<div style="color:var(--danger); text-align:center; padding-top:100px;">CBZ 包内未发现有效图片页面</div>';
+        return;
+      }
 
-    // 恢复断点定位
-    if (savedRatio > 0) {
-      setTimeout(() => {
-        box.scrollTop = savedRatio * (box.scrollHeight - box.clientHeight);
-      }, 300);
+      box.innerHTML = entries.map((entry, idx) => `
+        <img src="/api/media/manga/page?path=${encodeURIComponent(fullRelPath)}&entry=${encodeURIComponent(entry)}" loading="lazy" alt="Page ${idx + 1}">
+      `).join('');
+
+      if (savedRatio > 0) {
+        setTimeout(() => {
+          box.scrollTop = savedRatio * (box.scrollHeight - box.clientHeight);
+        }, 300);
+      }
+    } catch (e) {
+      box.innerHTML = `<div style="color:var(--danger); text-align:center; padding-top:100px;">读取 CBZ 失败: ${e.message}</div>`;
     }
   },
 

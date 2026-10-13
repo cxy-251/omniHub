@@ -18,11 +18,12 @@ type MapItem struct {
 
 // MatchOptions 封装离线对战开局参数。
 type MatchOptions struct {
-	MapName   string   `json:"map_name"`
-	PlayerRace string  `json:"player_race"` // "P", "T", "Z", "R"
-	Difficulty string  `json:"difficulty"`  // "VeryEasy" ~ "CheatInsane"
-	Opponents []string `json:"opponents"`   // 电脑对手种族清单
-	Mods      []string `json:"mods"`        // 挂载 Mod 名称
+	MapName    string   `json:"map_name"`
+	PlayerRace string   `json:"player_race"` // "P", "T", "Z", "R"
+	Difficulty string   `json:"difficulty"`  // "VeryEasy" ~ "CheatInsane"
+	Opponents  []string `json:"opponents"`   // 电脑对手种族清单
+	Mods       []string `json:"mods"`        // 挂载 Mod 名称
+	Launch     bool     `json:"launch"`      // 是否直接拉起游戏进程
 }
 
 // ListMaps 扫描指定地图目录下的全部 .SC2Map 文件（第 10.1.2 节）。

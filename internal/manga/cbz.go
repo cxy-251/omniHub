@@ -69,6 +69,11 @@ func OpenCBZ(cbzPath string) (*CBZReader, error) {
 	return reader, nil
 }
 
+// ListImageEntries 返回包内所有经过自然排序的图片条目名称列表。
+func (r *CBZReader) ListImageEntries() []string {
+	return r.allImages
+}
+
 // Close 关闭 CBZ 文件句柄。
 func (r *CBZReader) Close() error {
 	return r.zr.Close()
