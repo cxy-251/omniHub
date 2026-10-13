@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
+
+	"omnihub/internal/library"
 )
 
 // ServerConfig 定义 HTTP 服务端的监听与网络参数。
@@ -29,6 +32,43 @@ type Config struct {
 	Libraries []string `json:"libraries"`
 	// ReadOnlyLibraries 指定只读资源库路径，与 Libraries/PrimaryLibrary 中的路径匹配。
 	ReadOnlyLibraries []string `json:"read_only_libraries,omitempty"`
+	// LibraryIdentities 按根路径保存稳定物理标识，离线启动不能重新生成 ID。
+	LibraryIdentities map[string]library.Marker `json:"library_identities,omitempty"`
+	// StateDirectory 固定全局状态所在目录，仅由显式主库迁移流程改变。
+	StateDirectory string `json:"state_directory,omitempty"`
+	// StateInitialized 标记用户数据库已落盘，介质丢失时禁止创建空白账号库。
+	StateInitialized bool `json:"state_initialized,omitempty"`
+}
+
+var saveMu sync.Mutex
+
+// KnownLibrary 返回路径对应的已记录标识副本，未记录时返回 nil。
+func (c *Config) KnownLibrary(root string) *library.Marker {
+	path, err := filepath.Abs(root)
+	if err != nil {
+		return nil
+	}
+	marker, ok := c.LibraryIdentities[path]
+	if !ok {
+		return nil
+	}
+	return &marker
+}
+
+// RememberLibrary 保存在线物理库身份，返回是否发生了配置变更。
+func (c *Config) RememberLibrary(lib *library.Library) bool {
+	if lib == nil || !lib.IsOnline {
+		return false
+	}
+	marker := library.Marker{ID: lib.ID, Name: lib.Name}
+	if c.LibraryIdentities[lib.RootPath] == marker {
+		return false
+	}
+	if c.LibraryIdentities == nil {
+		c.LibraryIdentities = make(map[string]library.Marker)
+	}
+	c.LibraryIdentities[lib.RootPath] = marker
+	return true
 }
 
 // IsLibraryReadOnly 查询指定资源库是否以只读模式配置。
@@ -105,6 +145,12 @@ func (c *Config) Validate() error {
 	if c.Server.Host == "" {
 		return errors.New("server host cannot be empty")
 	}
+	if c.StateDirectory != "" && !filepath.IsAbs(c.StateDirectory) {
+		return errors.New("state directory must be absolute")
+	}
+	if c.StateInitialized && c.StateDirectory == "" {
+		return errors.New("initialized state requires a fixed directory")
+	}
 	return nil
 }
 
@@ -142,6 +188,8 @@ func Load() (*Config, error) {
 
 // Save 将配置实例安全写入磁盘。
 func Save(cfg *Config) error {
+	saveMu.Lock()
+	defer saveMu.Unlock()
 	if cfg == nil {
 		return errors.New("cannot save nil config")
 	}
@@ -164,15 +212,31 @@ func Save(cfg *Config) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	// 写入临时文件后重命名，防止写入中断导致损坏
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temporary config: %w", err)
-	}
+	return WritePrivateFile(path, data)
+}
 
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("failed to commit config file: %w", err)
+// WritePrivateFile 将应用拥有的配置或凭证通过独立临时文件同步后替换，权限为 0600。
+// 临时文件属于内部写入事务，不是用户资源；失败时清理临时文件并保留原文件。
+func WritePrivateFile(path string, data []byte) (result error) {
+	f, err := os.CreateTemp(filepath.Dir(path), ".omnihub-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create configuration transaction: %w", err)
 	}
-
+	name := f.Name()
+	defer func() {
+		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			result = errors.Join(result, fmt.Errorf("clean configuration transaction: %w", err))
+		}
+	}()
+	_, writeErr := f.Write(data)
+	if writeErr == nil {
+		writeErr = f.Sync()
+	}
+	if err := errors.Join(writeErr, f.Close()); err != nil {
+		return fmt.Errorf("persist configuration transaction: %w", err)
+	}
+	if err := os.Rename(name, path); err != nil {
+		return fmt.Errorf("commit configuration transaction: %w", err)
+	}
 	return nil
 }

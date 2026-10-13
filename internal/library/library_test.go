@@ -6,6 +6,35 @@ import (
 	"testing"
 )
 
+func TestKnownLibraryRetainsOfflineIdentityAndRejectsWrongMedium(t *testing.T) {
+	root := t.TempDir()
+	mgr := NewManager()
+	lib, err := mgr.AddLibrary(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	known := &Marker{ID: lib.ID, Name: lib.Name}
+	if err := os.Rename(root, root+"-unplugged"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Rename(root+"-unplugged", root); err != nil {
+			t.Error(err)
+		}
+	})
+	offline, err := NewManager().MountKnownLibrary(root, true, false, known)
+	if err != nil || offline.IsOnline || offline.ID != lib.ID {
+		t.Fatalf("offline identity: %+v, %v", offline, err)
+	}
+	other := t.TempDir()
+	if _, err := NewManager().AddLibrary(other, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewManager().MountKnownLibrary(other, false, false, known); err == nil {
+		t.Fatal("accepted a different medium at configured mount point")
+	}
+}
+
 func TestMountSnapshotsAndExplicitPrimaryRemoval(t *testing.T) {
 	mgr := NewManager()
 	first, err := mgr.AddLibrary(t.TempDir(), false)

@@ -46,30 +46,54 @@ func main() {
 
 	// 3. 初始化媒体库管理器（支持 0 库安全启动）
 	libMgr := library.NewManager()
+	identityChanged := false
 	if cfg.PrimaryLibrary != "" {
-		_, err := libMgr.MountLibrary(cfg.PrimaryLibrary, true, cfg.IsLibraryReadOnly(cfg.PrimaryLibrary))
+		lib, err := libMgr.MountKnownLibrary(cfg.PrimaryLibrary, true, cfg.IsLibraryReadOnly(cfg.PrimaryLibrary), cfg.KnownLibrary(cfg.PrimaryLibrary))
 		if err != nil {
 			log.Printf("Warning: failed to mount primary library %s: %v", cfg.PrimaryLibrary, err)
+		} else {
+			identityChanged = cfg.RememberLibrary(lib) || identityChanged
 		}
 	}
 	for _, libPath := range cfg.Libraries {
 		if libPath != cfg.PrimaryLibrary {
-			_, _ = libMgr.MountLibrary(libPath, false, cfg.IsLibraryReadOnly(libPath))
+			lib, err := libMgr.MountKnownLibrary(libPath, false, cfg.IsLibraryReadOnly(libPath), cfg.KnownLibrary(libPath))
+			if err != nil {
+				log.Printf("Warning: failed to mount library %s: %v", libPath, err)
+			} else {
+				identityChanged = cfg.RememberLibrary(lib) || identityChanged
+			}
+		}
+	}
+	if identityChanged {
+		if err := config.Save(cfg); err != nil {
+			log.Fatalf("Persist library identities: %v", err)
 		}
 	}
 
-	// 4. 初始化用户认证数据库（主库存在时放主库，否则放用户配置目录）
-	authDBPath := filepath.Join(configDir, "users.db")
-	primaryLib := libMgr.GetPrimary()
-	if primaryLib != nil && primaryLib.IsOnline && !primaryLib.ReadOnly {
-		authDBPath = filepath.Join(primaryLib.RootPath, library.DataDirName, "users.db")
+	// 4. 固定全局状态位置；离线或新增主库不能隐式换成另一套账号。
+	stateDir, stateChanged, err := cfg.ResolveStateDirectory(configDir, libMgr.GetPrimary())
+	if err != nil {
+		log.Fatalf("Resolve global state: %v", err)
 	}
+	if stateChanged {
+		if err := config.Save(cfg); err != nil {
+			log.Fatalf("Persist global state location: %v", err)
+		}
+	}
+	authDBPath := filepath.Join(stateDir, "users.db")
 
 	authDB, err := auth.OpenDB(authDBPath)
 	if err != nil {
 		log.Fatalf("Failed to open auth db at %s: %v", authDBPath, err)
 	}
 	defer authDB.Close()
+	if !cfg.StateInitialized {
+		cfg.StateInitialized = true
+		if err := config.Save(cfg); err != nil {
+			log.Fatalf("Persist global state initialization: %v", err)
+		}
+	}
 
 	// 5. 组装 HTTP 路由
 	localToken, err := auth.GenerateSecureToken()
@@ -101,7 +125,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Encode local connection: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "local-client.json"), localInfo, 0600); err != nil {
+	if err := config.WritePrivateFile(filepath.Join(configDir, "local-client.json"), localInfo); err != nil {
 		log.Fatalf("Write local connection: %v", err)
 	}
 

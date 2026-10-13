@@ -167,6 +167,12 @@ func (m *Manager) AddLibrary(rootPath string, isPrimary bool) (*Library, error) 
 
 // MountLibrary 挂载资源库；只读库必须已有合法标识，绝不补建目录或状态文件。
 func (m *Manager) MountLibrary(rootPath string, isPrimary, readOnly bool) (*Library, error) {
+	return m.MountKnownLibrary(rootPath, isPrimary, readOnly, nil)
+}
+
+// MountKnownLibrary 使用持久化标识恢复离线库；在线介质必须与已记录标识一致。
+// known 为 nil 时兼容首次挂载，调用方应保存返回的标识以便下次恢复。
+func (m *Manager) MountKnownLibrary(rootPath string, isPrimary, readOnly bool, known *Marker) (*Library, error) {
 	if rootPath == "" {
 		return nil, errors.New("library root path cannot be empty")
 	}
@@ -188,6 +194,19 @@ func (m *Manager) MountLibrary(rootPath string, isPrimary, readOnly bool) (*Libr
 
 	var marker *Marker
 	if isOnline {
+		if known != nil && known.ID != "" {
+			data, err := os.ReadFile(filepath.Join(cleanPath, LibraryMarkerFile))
+			if err != nil {
+				return nil, fmt.Errorf("read known library identity: %w", err)
+			}
+			var current Marker
+			if err := json.Unmarshal(data, &current); err != nil {
+				return nil, fmt.Errorf("parse known library identity: %w", err)
+			}
+			if current.ID != known.ID {
+				return nil, errors.New("mounted medium does not match configured library identity")
+			}
+		}
 		// 在线状态下确保标识文件与骨架存在
 		if readOnly {
 			var data []byte
@@ -215,6 +234,10 @@ func (m *Manager) MountLibrary(rootPath string, isPrimary, readOnly bool) (*Libr
 		marker = &Marker{
 			ID:   "offline-" + cleanPath,
 			Name: filepath.Base(cleanPath),
+		}
+		if known != nil && known.ID != "" {
+			copy := *known
+			marker = &copy
 		}
 	}
 
