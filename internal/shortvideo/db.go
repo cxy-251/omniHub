@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 // Storage 管理 shortvideo 专区的独立数据库（第 2.1 节）。
 type Storage struct {
+	metaDB  *sql.DB // meta.db
 	thumbDB *sql.DB // thumbnails.db
 	albumDB *sql.DB // albums.db
 }
@@ -22,20 +24,29 @@ func OpenStorage(shortvideoDir string) (*Storage, error) {
 		return nil, fmt.Errorf("failed to create shortvideo dir: %w", err)
 	}
 
+	metaPath := filepath.Join(shortvideoDir, "meta.db")
+	mDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", metaPath))
+	if err != nil {
+		return nil, fmt.Errorf("failed to open meta.db: %w", err)
+	}
+
 	thumbPath := filepath.Join(shortvideoDir, "thumbnails.db")
 	tDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", thumbPath))
 	if err != nil {
+		_ = mDB.Close()
 		return nil, fmt.Errorf("failed to open thumbnails.db: %w", err)
 	}
 
 	albumPath := filepath.Join(shortvideoDir, "albums.db")
 	aDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", albumPath))
 	if err != nil {
+		_ = mDB.Close()
 		_ = tDB.Close()
 		return nil, fmt.Errorf("failed to open albums.db: %w", err)
 	}
 
 	s := &Storage{
+		metaDB:  mDB,
 		thumbDB: tDB,
 		albumDB: aDB,
 	}
@@ -50,20 +61,48 @@ func OpenStorage(shortvideoDir string) (*Storage, error) {
 
 // Close 关闭数据库连接。
 func (s *Storage) Close() error {
-	var err1, err2 error
+	var errs []error
+	if s.metaDB != nil {
+		if err := s.metaDB.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if s.thumbDB != nil {
-		err1 = s.thumbDB.Close()
+		if err := s.thumbDB.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if s.albumDB != nil {
-		err2 = s.albumDB.Close()
+		if err := s.albumDB.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	if err1 != nil {
-		return err1
+	if len(errs) > 0 {
+		return errs[0]
 	}
-	return err2
+	return nil
 }
 
 func (s *Storage) migrate() error {
+	metaSchema := `
+	CREATE TABLE IF NOT EXISTS creators (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		platform TEXT NOT NULL,
+		item_count INTEGER DEFAULT 0
+	);
+	CREATE TABLE IF NOT EXISTS posts (
+		id TEXT PRIMARY KEY,
+		creator_id TEXT NOT NULL,
+		title TEXT NOT NULL,
+		type TEXT NOT NULL,
+		rel_path TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	);`
+	if _, err := s.metaDB.Exec(metaSchema); err != nil {
+		return err
+	}
+
 	thumbSchema := `
 	CREATE TABLE IF NOT EXISTS thumbnails (
 		target_id TEXT PRIMARY KEY,
@@ -178,5 +217,78 @@ func (s *Storage) ListAlbums() (map[string]int, error) {
 		res[postID] = cnt
 	}
 	return res, rows.Err()
+}
+
+// UpsertCreator 插入或更新博主元数据。
+func (s *Storage) UpsertCreator(c *Creator) error {
+	if c.ID == "" {
+		return errors.New("empty creator id")
+	}
+	_, err := s.metaDB.Exec(`
+		INSERT INTO creators (id, name, platform, item_count) VALUES (?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET name = excluded.name, platform = excluded.platform, item_count = excluded.item_count`,
+		c.ID, c.Name, c.Platform, c.ItemCount,
+	)
+	return err
+}
+
+// UpsertPost 插入或更新作品元数据。
+func (s *Storage) UpsertPost(p *Post) error {
+	if p.ID == "" {
+		return errors.New("empty post id")
+	}
+	_, err := s.metaDB.Exec(`
+		INSERT INTO posts (id, creator_id, title, type, rel_path, created_at) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET creator_id = excluded.creator_id, title = excluded.title, type = excluded.type, rel_path = excluded.rel_path`,
+		p.ID, p.CreatorID, p.Title, p.Type, p.RelPath, p.CreatedAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+// ListCreators 列出博主。
+func (s *Storage) ListCreators(platform string) ([]*Creator, error) {
+	query := "SELECT id, name, platform, item_count FROM creators"
+	var args []interface{}
+	if platform != "" {
+		query += " WHERE platform = ?"
+		args = append(args, platform)
+	}
+	rows, err := s.metaDB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []*Creator
+	for rows.Next() {
+		var c Creator
+		if err := rows.Scan(&c.ID, &c.Name, &c.Platform, &c.ItemCount); err != nil {
+			return nil, err
+		}
+		list = append(list, &c)
+	}
+	return list, rows.Err()
+}
+
+// ListPosts 列出博主作品。
+func (s *Storage) ListPosts(creatorID string) ([]*Post, error) {
+	query := "SELECT id, creator_id, title, type, rel_path, created_at FROM posts WHERE creator_id = ?"
+	rows, err := s.metaDB.Query(query, creatorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []*Post
+	for rows.Next() {
+		var p Post
+		var createdAtStr string
+		if err := rows.Scan(&p.ID, &p.CreatorID, &p.Title, &p.Type, &p.RelPath, &createdAtStr); err != nil {
+			return nil, err
+		}
+		p.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
+		list = append(list, &p)
+	}
+	return list, rows.Err()
 }
 

@@ -43,4 +43,24 @@ func TestScannerGamesAndManga(t *testing.T) {
 	if mangaCount != 1 {
 		t.Errorf("expected 1 manga, got %d", mangaCount)
 	}
+
+	// 模拟 shortvideo 目录结构与博主/作品
+	svDir := filepath.Join(tmpDir, "media_library", "shortvideo")
+	creatorVideoDir := filepath.Join(svDir, "抖音", "creator_a")
+	_ = os.MkdirAll(creatorVideoDir, 0755)
+	_ = os.WriteFile(filepath.Join(creatorVideoDir, "video1.mp4"), []byte("dummy mp4"), 0644)
+
+	creatorAlbumDir := filepath.Join(svDir, "抖音", "creator_a", "album1")
+	_ = os.MkdirAll(creatorAlbumDir, 0755)
+	_ = os.WriteFile(filepath.Join(creatorAlbumDir, "01.jpg"), []byte("dummy image 1"), 0644)
+	_ = os.WriteFile(filepath.Join(creatorAlbumDir, "02.jpg"), []byte("dummy image 2"), 0644)
+
+	svCount, err := ScanShortVideos(svDir, true)
+	if err != nil {
+		t.Fatalf("ScanShortVideos error: %v", err)
+	}
+	if svCount != 2 {
+		t.Errorf("expected 2 shortvideo posts (1 video + 1 album), got %d", svCount)
+	}
 }
+
