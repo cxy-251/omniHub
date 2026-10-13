@@ -16,6 +16,7 @@ import (
 	"omnihub/internal/config"
 	"omnihub/internal/library"
 	"omnihub/internal/network"
+	"omnihub/internal/scanner"
 	"omnihub/internal/server"
 )
 
@@ -50,6 +51,12 @@ func main() {
 		_, err := libMgr.AddLibrary(cfg.PrimaryLibrary, true)
 		if err != nil {
 			log.Printf("Warning: failed to mount primary library %s: %v", cfg.PrimaryLibrary, err)
+		} else {
+			go func(root string) {
+				gCount, _ := scanner.ScanGames(filepath.Join(root, "standalone_games"))
+				mCount, _ := scanner.ScanManga(filepath.Join(root, "media_library", "manga"))
+				log.Printf("Read-only scan complete: %d games, %d mangas indexed", gCount, mCount)
+			}(cfg.PrimaryLibrary)
 		}
 	}
 	for _, libPath := range cfg.Libraries {
