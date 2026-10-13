@@ -159,3 +159,24 @@ func (s *Storage) MergeFromExternal(extThumbDBPath, extAlbumDBPath string) error
 
 	return nil
 }
+
+// ListAlbums 列出所有图集 post_id 与其图片数量。
+func (s *Storage) ListAlbums() (map[string]int, error) {
+	rows, err := s.albumDB.Query("SELECT post_id, count(*) FROM album_images GROUP BY post_id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	res := make(map[string]int)
+	for rows.Next() {
+		var postID string
+		var cnt int
+		if err := rows.Scan(&postID, &cnt); err != nil {
+			return nil, err
+		}
+		res[postID] = cnt
+	}
+	return res, rows.Err()
+}
+

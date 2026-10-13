@@ -156,3 +156,34 @@ func (d *DB) GetProgress(userID int64, mangaID string) (*MangaProgress, error) {
 	p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
 	return &p, nil
 }
+
+// ListMangas 列出所有漫画。
+func (d *DB) ListMangas() ([]*Manga, error) {
+	rows, err := d.db.Query(`
+		SELECT id, title, author, description, tags_json, chapter_count,
+		       total_pages, is_complete, rel_path, custom_cover
+		FROM mangas ORDER BY title ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []*Manga
+	for rows.Next() {
+		var m Manga
+		var tagsStr string
+		var compInt int
+		if err := rows.Scan(
+			&m.ID, &m.Title, &m.Author, &m.Description, &tagsStr,
+			&m.ChapterCount, &m.TotalPages, &compInt, &m.RelPath, &m.CustomCover,
+		); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(tagsStr), &m.Tags)
+		m.IsComplete = compInt == 1
+		list = append(list, &m)
+	}
+	return list, rows.Err()
+}
+

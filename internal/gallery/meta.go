@@ -193,3 +193,48 @@ func (m *MetaDB) GetPhoto(photoID string) (*Photo, error) {
 
 	return &p, nil
 }
+
+// ListPhotos 列出所有照片（支持是否包含软删除）。
+func (m *MetaDB) ListPhotos(includeDeleted bool) ([]*Photo, error) {
+	query := `
+		SELECT id, filename, size_bytes, mime_type, width, height,
+		       volume, color_family, color_hex, is_favorite, created_at, deleted_at
+		FROM photos
+	`
+	if !includeDeleted {
+		query += " WHERE deleted_at IS NULL"
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := m.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var photos []*Photo
+	for rows.Next() {
+		var p Photo
+		var favInt int
+		var createdStr string
+		var deletedStr sql.NullString
+
+		if err := rows.Scan(
+			&p.ID, &p.Filename, &p.SizeBytes, &p.MimeType, &p.Width, &p.Height,
+			&p.Volume, &p.ColorFamily, &p.ColorHex, &favInt, &createdStr, &deletedStr,
+		); err != nil {
+			return nil, err
+		}
+
+		p.IsFavorite = favInt == 1
+		p.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+		if deletedStr.Valid {
+			t, _ := time.Parse(time.RFC3339, deletedStr.String)
+			p.DeletedAt = &t
+		}
+		photos = append(photos, &p)
+	}
+
+	return photos, rows.Err()
+}
+
