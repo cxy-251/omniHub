@@ -31,6 +31,7 @@ const Omni = {
       p.classList.toggle('active', p.id === `pane-${tabId}`);
     });
     if (tabId === 'media' && window.MediaHub && window.MediaHub.activate) window.MediaHub.activate();
+    if (tabId === 'games' && window.GamesHub && window.GamesHub.activate) window.GamesHub.activate();
     if (tabId === 'tools' && window.ToolsHub && window.ToolsHub.activate) window.ToolsHub.activate();
     if (tabId === 'admin' && window.AdminHub && window.AdminHub.activate) window.AdminHub.activate();
   },
