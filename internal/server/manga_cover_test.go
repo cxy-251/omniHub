@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"image"
+	"image/png"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -26,6 +28,15 @@ func TestMangaCustomCoverUsesOwningIndexAndPreservesArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := library.NewManager()
+	coverData := make(map[string][]byte)
+	for name, width := range map[string]int{"cover.jpg": 2, "02.jpg": 3} {
+		var data bytes.Buffer
+		if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, width, 2))); err != nil {
+			t.Fatal(err)
+		}
+		coverData[name] = data.Bytes()
+	}
+	coverData["broken.jpg"] = []byte("not an image")
 	var keys, paths []string
 	for i := 0; i < 2; i++ {
 		root := t.TempDir()
@@ -39,12 +50,12 @@ func TestMangaCustomCoverUsesOwningIndexAndPreservesArchive(t *testing.T) {
 			t.Fatal(err)
 		}
 		z := zip.NewWriter(f)
-		for name, body := range map[string]string{"cover.jpg": "default cover", "02.jpg": "selected cover"} {
+		for name, body := range coverData {
 			entry, err := z.Create(name)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := entry.Write([]byte(body)); err != nil {
+			if _, err := entry.Write(body); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -101,7 +112,7 @@ func TestMangaCustomCoverUsesOwningIndexAndPreservesArchive(t *testing.T) {
 		Total   int               `json:"total"`
 		Version string            `json:"file_version"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &pageList); err != nil || pageList.Total != 1 || len(pageList.Pages) != 1 || pageList.Pages[0].Entry != "02.jpg" || pageList.Version == "" {
+	if err := json.Unmarshal(w.Body.Bytes(), &pageList); err != nil || pageList.Total != 2 || len(pageList.Pages) != 1 || pageList.Pages[0].Entry != "02.jpg" || pageList.Version == "" {
 		t.Fatalf("wrong window: %d %s", w.Code, w.Body.String())
 	}
 	if w := request("GET", "/api/media/manga/page?path="+url.QueryEscape(keys[0])+"&entry=02.jpg&version=old", nil); w.Code != 409 {
@@ -112,11 +123,11 @@ func TestMangaCustomCoverUsesOwningIndexAndPreservesArchive(t *testing.T) {
 	}
 	for i, key := range keys {
 		w := request("GET", "/api/media/manga/cover?path="+url.QueryEscape(key), nil)
-		expected := "selected cover"
+		expected := coverData["02.jpg"]
 		if i == 1 {
-			expected = "default cover"
+			expected = coverData["cover.jpg"]
 		}
-		if w.Code != 200 || w.Body.String() != expected {
+		if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), expected) {
 			t.Fatalf("incorrect indexed cover: %d %s", w.Code, w.Body.String())
 		}
 	}
@@ -126,6 +137,9 @@ func TestMangaCustomCoverUsesOwningIndexAndPreservesArchive(t *testing.T) {
 	if w := request("POST", "/api/media/manga/custom-cover", map[string]string{"path": keys[0], "entry": "missing.jpg"}); w.Code != 400 {
 		t.Fatal("nonexistent page set as cover")
 	}
+	if w := request("POST", "/api/media/manga/custom-cover", map[string]string{"path": keys[0], "entry": "broken.jpg"}); w.Code != 400 {
+		t.Fatal("undecodable image persisted as a cover")
+	}
 	if w := request("POST", "/api/media/manga/custom-cover", map[string]string{"path": keys[0], "entry": "metadata.json"}); w.Code != 400 {
 		t.Fatal("non-image set as cover")
 	}
@@ -133,7 +147,7 @@ func TestMangaCustomCoverUsesOwningIndexAndPreservesArchive(t *testing.T) {
 		t.Fatal("cover reset failed")
 	}
 	w = request("GET", "/api/media/manga/cover?path="+url.QueryEscape(keys[0]), nil)
-	if w.Body.String() != "default cover" {
+	if !bytes.Equal(w.Body.Bytes(), coverData["cover.jpg"]) {
 		t.Fatal("reset did not restore fallback")
 	}
 	after, err := os.ReadFile(paths[0])

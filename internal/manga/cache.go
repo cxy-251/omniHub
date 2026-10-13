@@ -49,7 +49,8 @@ func NewReaderCache() *ReaderCache {
 }
 
 func readerBytes(r *CBZReader) int {
-	bytes := len(r.allImages) * 16
+	// Reserve the maximum custom-cover key retained after lazy validation.
+	bytes := 4096 + len(r.allImages)*16
 	for _, page := range r.pages {
 		bytes += 32 + len(page.Entry)
 	}

@@ -93,13 +93,13 @@ func (r *Router) handleMangaCustomCover(w http.ResponseWriter, req *http.Request
 			http.Error(w, "book archive unavailable", 503)
 			return
 		}
-		valid := lease.Reader.GetCoverEntry(payload.Entry) == payload.Entry && manga.ImageExtensions[strings.ToLower(filepath.Ext(payload.Entry))]
+		validationErr := lease.Reader.ValidateCoverEntryContext(req.Context(), payload.Entry)
 		if err := lease.Close(); err != nil {
 			http.Error(w, "book archive unavailable", 503)
 			return
 		}
-		if !valid {
-			http.Error(w, "cover must be an existing image page", 400)
+		if validationErr != nil {
+			http.Error(w, "cover must be a readable image within the pixel budget", 400)
 			return
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -44,11 +45,14 @@ type PackageMetadata struct {
 
 // CBZReader 封装基于 ReaderAt 的 CBZ 零落盘随机寻址阅读器（第 7.1.3 节）。
 type CBZReader struct {
-	zr        *archiveutil.Reader
-	filePath  string
-	entryMap  map[string]*zip.File
-	allImages []string
-	pages     []PageEntry
+	zr         *archiveutil.Reader
+	filePath   string
+	entryMap   map[string]*zip.File
+	allImages  []string
+	pages      []PageEntry
+	coverMu    sync.Mutex
+	coverKey   string
+	coverEntry string
 }
 
 // PageEntry identifies one reading page; an independent root cover is excluded.
@@ -229,13 +233,9 @@ func (r *CBZReader) GetCoverEntry(customCover string) string {
 	return ""
 }
 
-// ReadCoverBytes 提取封面图片数据流。
+// ReadCoverBytes returns a verified cover using the bounded fallback policy.
 func (r *CBZReader) ReadCoverBytes(customCover string) ([]byte, error) {
-	entry := r.GetCoverEntry(customCover)
-	if entry == "" {
-		return nil, errors.New("no cover image available in cbz")
-	}
-	return r.ReadEntry(entry)
+	return r.ReadCoverContext(context.Background(), customCover)
 }
 
 // ScanMangaFromCBZ 扫描单个 CBZ 构建 Manga 元数据实体。

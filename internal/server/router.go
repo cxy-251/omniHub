@@ -974,7 +974,7 @@ func (r *Router) handleMangaCover(w http.ResponseWriter, req *http.Request) {
 	defer releaseMangaReader(lease)
 	reader := lease.Reader
 
-	coverBytes, err := reader.ReadEntryContext(req.Context(), reader.GetCoverEntry(customCover))
+	coverBytes, err := reader.ReadCoverContext(req.Context(), customCover)
 	if err != nil {
 		http.Error(w, "cover not found", http.StatusNotFound)
 		return

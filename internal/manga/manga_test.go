@@ -2,6 +2,9 @@ package manga
 
 import (
 	"archive/zip"
+	"bytes"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,7 +34,9 @@ func createMockCBZ(t *testing.T, cbzPath string) {
 
 	// 写入 cover.jpg
 	wCover, _ := zw.Create("cover.jpg")
-	_, _ = wCover.Write([]byte("mock_cover_bytes"))
+	if err := png.Encode(wCover, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
 
 	// 写入 01_话/001.webp
 	wP1, _ := zw.Create("01_话/001.webp")
@@ -56,8 +61,12 @@ func TestMangaCBZAndProgress(t *testing.T) {
 
 	// 验证封面多级回退
 	coverBytes, err := reader.ReadCoverBytes("")
-	if err != nil || string(coverBytes) != "mock_cover_bytes" {
-		t.Errorf("expected cover 'mock_cover_bytes', got %s, err %v", string(coverBytes), err)
+	var expectedCover bytes.Buffer
+	if err := png.Encode(&expectedCover, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	if err != nil || !bytes.Equal(coverBytes, expectedCover.Bytes()) {
+		t.Errorf("expected encoded cover, got %d bytes, err %v", len(coverBytes), err)
 	}
 
 	// 随机读取第 2 页
