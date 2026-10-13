@@ -33,6 +33,9 @@ const Omni = {
     if (tabId !== 'media' && window.MediaHub && window.MediaHub.pauseMatrixVideos) {
       window.MediaHub.pauseMatrixVideos();
     }
+    if (tabId !== 'tools' && window.ToolsHub && window.ToolsHub.deactivate) {
+      window.ToolsHub.deactivate();
+    }
     if (tabId === 'media' && window.MediaHub && window.MediaHub.activate) window.MediaHub.activate();
     if (tabId === 'games' && window.GamesHub && window.GamesHub.activate) window.GamesHub.activate();
     if (tabId === 'tools' && window.ToolsHub && window.ToolsHub.activate) window.ToolsHub.activate();

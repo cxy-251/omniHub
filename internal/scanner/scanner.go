@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -204,14 +203,6 @@ func ScanShortVideos(shortvideoDir string, readOnly bool) (int, error) {
 					postID := fmt.Sprintf("%s_%s", creatorID, strings.TrimSuffix(itemName, filepath.Ext(itemName)))
 					relPath, _ := filepath.Rel(shortvideoDir, itemPath)
 
-					// 缩略图检查与提取
-					thumb, _ := storage.GetThumbnail(postID)
-					if len(thumb) == 0 {
-						if tb := extractVideoThumbnail(itemPath); len(tb) > 0 {
-							_ = storage.SaveThumbnail(postID, tb)
-						}
-					}
-
 					p := &shortvideo.Post{
 						ID:        postID,
 						CreatorID: creatorID,
@@ -246,21 +237,8 @@ func ScanShortVideos(shortvideoDir string, readOnly bool) (int, error) {
 						continue
 					}
 
-					sort.Strings(imgFiles)
 					postID := fmt.Sprintf("%s_%s", creatorID, itemName)
 					relPath, _ := filepath.Rel(shortvideoDir, itemPath)
-
-					for idx, imgFile := range imgFiles {
-						imgPath := filepath.Join(itemPath, imgFile)
-						imgData, err := os.ReadFile(imgPath)
-						if err != nil {
-							continue
-						}
-						_ = storage.SaveAlbumImage(postID, idx+1, imgData)
-						if idx == 0 {
-							_ = storage.SaveThumbnail(postID, imgData)
-						}
-					}
 
 					p := &shortvideo.Post{
 						ID:        postID,

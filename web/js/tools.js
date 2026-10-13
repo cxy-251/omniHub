@@ -7,13 +7,25 @@ const ToolsHub = {
   },
 
   activate() {
-    if (this.initialized) return;
-    this.initialized = true;
     this.loadClipboard();
     this.loadMetrics();
     this.loadSharedFiles();
     this.initWebShell();
     this.loadMegaStatus();
+    if (!this.metricsTimer) {
+      this.metricsTimer = setInterval(() => this.loadMetrics(), 3000);
+    }
+  },
+
+  deactivate() {
+    if (this.metricsTimer) {
+      clearInterval(this.metricsTimer);
+      this.metricsTimer = null;
+    }
+    if (this.megaTimer) {
+      clearInterval(this.megaTimer);
+      this.megaTimer = null;
+    }
   },
 
   renderContainer() {
