@@ -5,5 +5,5 @@ import "embed"
 
 // FS 编译嵌入的静态网页资源文件系统。
 //
-//go:embed index.html
+//go:embed index.html css js
 var FS embed.FS
