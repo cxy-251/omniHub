@@ -68,7 +68,7 @@ func (r *Router) handleAudioCover(w http.ResponseWriter, req *http.Request) {
 	}
 	ext := strings.ToLower(filepath.Ext(path))
 	if audio.SupportedExtensions[ext] {
-		metadata, err := r.readAudioMetadata(req)
+		metadata, err := r.readAudioMetadata(req, true)
 		if err != nil {
 			http.Error(w, "embedded cover unavailable", 422)
 			return
