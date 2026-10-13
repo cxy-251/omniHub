@@ -75,3 +75,49 @@ func TestLibrarySoftDisableCategory(t *testing.T) {
 		t.Error("category should be re-enabled")
 	}
 }
+
+func TestEnsureMarkerPreservesInvalidIdentity(t *testing.T) {
+	for _, contents := range []string{"broken json", `{"id":""}`} {
+		t.Run(contents, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, LibraryMarkerFile)
+			if err := os.WriteFile(path, []byte(contents), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := EnsureMarker(root, ""); err == nil {
+				t.Fatal("expected invalid marker error")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != contents {
+				t.Fatalf("marker was modified: %q, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestResolvePathRejectsLibraryEscape(t *testing.T) {
+	root := t.TempDir()
+	mgr := NewManager()
+	lib, err := mgr.AddLibrary(root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"../secret", "a/../../secret", "/absolute", `..\secret`, "C:/secret", "", "a\x00b"} {
+		if _, err := mgr.ResolvePath(lib.ID + ":" + path); err == nil {
+			t.Errorf("accepted invalid path %q", path)
+		}
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.ResolvePath("escape/not-created/file"); err == nil {
+		t.Fatal("accepted escaping symlink for nonexistent file")
+	}
+	if err := os.Symlink(filepath.Join(root, "media_library"), filepath.Join(root, "inside")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.ResolvePath("inside/manga/new.cbz"); err != nil {
+		t.Fatalf("rejected internal symlink: %v", err)
+	}
+}

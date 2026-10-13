@@ -84,10 +84,12 @@ func NewManager() *Manager {
 }
 
 // generateUUID 生成 16 字节十六进制随机字符串作为资源库唯一标识。
-func generateUUID() string {
+func generateUUID() (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate library ID: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // EnsureMarker 检查并确保指定根目录下存在物理标识文件，不存在则自动生成。
@@ -96,17 +98,28 @@ func EnsureMarker(rootPath string, defaultName string) (*Marker, error) {
 	data, err := os.ReadFile(markerPath)
 	if err == nil {
 		var m Marker
-		if err := json.Unmarshal(data, &m); err == nil && m.ID != "" {
-			return &m, nil
+		if err := json.Unmarshal(data, &m); err != nil {
+			return nil, fmt.Errorf("invalid library marker: %w", err)
 		}
+		if m.ID == "" {
+			return nil, errors.New("library marker has empty ID")
+		}
+		return &m, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("failed to read library marker: %w", err)
 	}
 
 	if defaultName == "" {
 		defaultName = filepath.Base(rootPath)
 	}
 
+	id, err := generateUUID()
+	if err != nil {
+		return nil, err
+	}
 	m := &Marker{
-		ID:   generateUUID(),
+		ID:   id,
 		Name: defaultName,
 	}
 
@@ -115,8 +128,18 @@ func EnsureMarker(rootPath string, defaultName string) (*Marker, error) {
 		return nil, fmt.Errorf("failed to marshal library marker: %w", err)
 	}
 
-	if err := os.WriteFile(markerPath, raw, 0644); err != nil {
+	// 独占创建，避免并发挂载覆盖另一进程刚生成的稳定标识。
+	f, err := os.OpenFile(markerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if errors.Is(err, os.ErrExist) {
+		return EnsureMarker(rootPath, defaultName)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("failed to write library marker: %w", err)
+	}
+	_, writeErr := f.Write(raw)
+	closeErr := f.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return nil, fmt.Errorf("failed to persist library marker: %w", err)
 	}
 
 	return m, nil
@@ -281,5 +304,32 @@ func (m *Manager) ResolvePath(logicalPath string) (string, error) {
 	}
 
 	cleanRel := filepath.Clean(filepath.FromSlash(relPath))
-	return filepath.Join(targetLib.RootPath, cleanRel), nil
+	if relPath == "" || !filepath.IsLocal(cleanRel) || strings.ContainsAny(relPath, "\\\x00") || strings.Contains(relPath, ":") {
+		return "", errors.New("resource path must be relative and remain inside its library")
+	}
+	root, err := filepath.EvalSymlinks(targetLib.RootPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve library root: %w", err)
+	}
+	target := filepath.Join(root, cleanRel)
+	// 未创建的文件也允许解析，但其最近的已有父目录不能通过符号链接越界。
+	ancestor := target
+	for {
+		resolved, err := filepath.EvalSymlinks(ancestor)
+		if err == nil {
+			rel, err := filepath.Rel(root, resolved)
+			if err != nil || !filepath.IsLocal(rel) {
+				return "", errors.New("resource symlink escapes library root")
+			}
+			return target, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("failed to resolve resource path: %w", err)
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return "", errors.New("resource path has no accessible parent")
+		}
+		ancestor = parent
+	}
 }
