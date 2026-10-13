@@ -533,25 +533,37 @@ const MediaHub = {
   },
 
   // --- 漫画书架与条漫实现 ---
-  async loadMangaShelf() {
+  async loadMangaShelf(offset = 0) {
     const grid = document.getElementById('manga-shelf-grid');
     if (!grid) return;
     try {
-      const res = await fetch('/api/media/manga/list');
+      const res = await fetch('/api/media/manga/list?limit=100&offset=' + offset);
+      const hasMore = res.headers.get('X-Has-More') === 'true';
       const mangas = await res.json();
       if (!Array.isArray(mangas) || mangas.length === 0) {
         grid.innerHTML = '<div style="color:var(--text-muted)">书架暂无漫画</div>';
         return;
       }
-      grid.innerHTML = mangas.map(m => `
-        <div class="gallery-item" style="aspect-ratio:3/4;" onclick="MediaHub.openMangaBook('${encodeURIComponent(m.rel_path)}', '${encodeURIComponent(m.title)}')">
-          <img src="/api/media/manga/cover?path=${encodeURIComponent('media_library/manga/' + m.rel_path)}" loading="lazy" alt="${m.title}">
-          <div class="overlay-info">
-            <span style="font-weight:bold;">${m.title}</span>
-            <span>共 ${m.total_pages} 页</span>
-          </div>
-        </div>
-      `).join('');
+      grid.replaceChildren();
+      for (const m of mangas) {
+        const logical = m.logical_path || 'media_library/manga/' + m.rel_path;
+        const card = document.createElement('div');
+        card.className = 'gallery-item'; card.style.aspectRatio = '3/4';
+        card.addEventListener('click', () => this.openMangaBook(encodeURIComponent(logical), encodeURIComponent(m.title)));
+        const image = document.createElement('img');
+        image.src = '/api/media/manga/cover?path=' + encodeURIComponent(logical); image.loading = 'lazy'; image.alt = m.title;
+        const info = document.createElement('div'); info.className = 'overlay-info';
+        const title = document.createElement('span'); title.textContent = m.title;
+        const subtitle = document.createElement('span'); subtitle.textContent = `${m.library_name || ''} · 共 ${m.total_pages} 页`;
+        info.append(title, subtitle); card.append(image, info); grid.append(card);
+      }
+      const navigation = document.createElement('div');
+      for (const [label, next, show] of [['上一页', Math.max(0, offset - 100), offset > 0], ['下一页', offset + 100, hasMore]]) {
+        if (!show) continue;
+        const button = document.createElement('button'); button.className = 'btn-primary'; button.textContent = label;
+        button.addEventListener('click', () => this.loadMangaShelf(next)); navigation.append(button);
+      }
+      grid.append(navigation);
     } catch (e) {
  if (e.name === 'AbortError') return;
       grid.innerHTML = `<div style="color:var(--danger)">加载书架失败: ${e.message}</div>`;
@@ -580,7 +592,7 @@ const MediaHub = {
   },
 
   async loadManga(relPath, title) {
-    const fullRelPath = 'media_library/manga/' + relPath;
+    const fullRelPath = relPath.includes(':') || relPath.startsWith('media_library/manga/') ? relPath : 'media_library/manga/' + relPath;
     this.currentMangaId = fullRelPath;
     const box = document.getElementById('manga-waterfall-box');
     const badge = document.getElementById('manga-title-badge');

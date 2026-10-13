@@ -469,6 +469,12 @@ func (m *Manager) resolvePathLocked(logicalPath string) (string, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("failed to resolve resource path: %w", err)
 		}
+		// 悬空链接也是已有目录项，不能把它当成待创建的普通文件；SQLite 可能沿它写到库外。
+		if info, statErr := os.Lstat(ancestor); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("resource contains unresolved symbolic link")
+		} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect resource ancestor: %w", statErr)
+		}
 		parent := filepath.Dir(ancestor)
 		if parent == ancestor {
 			return "", errors.New("resource path has no accessible parent")

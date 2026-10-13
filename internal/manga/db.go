@@ -164,11 +164,36 @@ func (d *DB) GetProgress(userID int64, mangaID string) (*MangaProgress, error) {
 
 // ListMangas 列出所有漫画。
 func (d *DB) ListMangas() ([]*Manga, error) {
-	rows, err := d.db.Query(`
+	return d.listMangas(0, 0)
+}
+
+// CountMangas 返回索引中的记录数量，用于跨库分页跳过完整物理库。
+func (d *DB) CountMangas() (int, error) {
+	var count int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM mangas").Scan(&count)
+	return count, err
+}
+
+// ListMangasPage 按标题和 ID 稳定分页，单次最多 200 条，避免全库加载。
+func (d *DB) ListMangasPage(limit, offset int) ([]*Manga, error) {
+	if limit < 1 || limit > 200 || offset < 0 {
+		return nil, errors.New("invalid manga page bounds")
+	}
+	return d.listMangas(limit, offset)
+}
+
+func (d *DB) listMangas(limit, offset int) ([]*Manga, error) {
+	query := `
 		SELECT id, title, author, description, tags_json, chapter_count,
 		       total_pages, is_complete, rel_path, custom_cover
-		FROM mangas ORDER BY title ASC
-	`)
+		FROM mangas ORDER BY title ASC, id ASC
+	`
+	var args []any
+	if limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		args = []any{limit, offset}
+	}
+	rows, err := d.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

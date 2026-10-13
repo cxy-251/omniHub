@@ -23,6 +23,11 @@ func TestModuleConnectionsStayWithTheirLibrary(t *testing.T) {
 	}
 	defer r.Close()
 	rootA, rootB := t.TempDir(), t.TempDir()
+	for _, root := range []string{rootA, rootB} {
+		if _, err := r.libMgr.AddLibrary(root, false); err != nil {
+			t.Fatal(err)
+		}
+	}
 	mangaA, err := r.getMangaDB(rootA)
 	if err != nil {
 		t.Fatal(err)
