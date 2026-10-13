@@ -42,6 +42,7 @@ type mangaItem struct {
 	LibraryID   string `json:"library_id"`
 	LibraryName string `json:"library_name"`
 	LogicalPath string `json:"logical_path"`
+	ReadOnly    bool   `json:"read_only"`
 }
 
 func (r *Router) queryLibraries(w http.ResponseWriter, req *http.Request) ([]*library.Library, bool) {
@@ -118,7 +119,7 @@ func (r *Router) listMangaLibraries(w http.ResponseWriter, req *http.Request) {
 				http.Error(w, "invalid manga index path", 503)
 				return
 			}
-			items = append(items, mangaItem{Manga: book, LibraryID: lib.ID, LibraryName: lib.Name, LogicalPath: lib.ID + ":media_library/manga/" + filepath.ToSlash(book.RelPath)})
+			items = append(items, mangaItem{Manga: book, LibraryID: lib.ID, LibraryName: lib.Name, LogicalPath: lib.ID + ":media_library/manga/" + filepath.ToSlash(book.RelPath), ReadOnly: lib.ReadOnly})
 		}
 		if len(items) > limit {
 			break

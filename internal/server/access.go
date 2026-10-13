@@ -85,7 +85,7 @@ func bufferedMediaRead(path string) bool {
 	switch path {
 	case "/api/media/gallery/original", "/api/media/gallery/thumbnail",
 		"/api/media/shortvideo/album/image", "/api/media/shortvideo/thumbnail",
-		"/api/media/manga/page", "/api/media/manga/cover", "/api/media/manga/pages",
+		"/api/media/manga/page", "/api/media/manga/cover", "/api/media/manga/pages", "/api/media/manga/custom-cover",
 		"/api/media/text/chunk", "/api/media/text/epub/book":
 		return true
 	}

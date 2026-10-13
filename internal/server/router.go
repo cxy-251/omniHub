@@ -47,6 +47,7 @@ type Router struct {
 	videoCatalog *shortvideo.VideoCatalog
 	textCatalog  *catalog.Catalog
 	audioCatalog *catalog.Catalog
+	mangaReaders *manga.ReaderCache
 	mediaReads   chan struct{}
 
 	// 专区数据库连接复用缓存（第 12.2 节避免高频请求重复 Open 与 Migrate）
@@ -91,6 +92,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		videoCatalog: shortvideo.NewVideoCatalog(),
 		textCatalog:  catalog.New(".txt", ".epub", ".md", ".rst"),
 		audioCatalog: catalog.New(audio.FileExtensions()...),
+		mangaReaders: manga.NewReaderCache(),
 		mediaReads:   make(chan struct{}, 2),
 	}
 	r.registerRoutes()
@@ -234,7 +236,7 @@ func (r *Router) Close() error {
 	for _, db := range r.gamesDB {
 		errs = append(errs, db.Close())
 	}
-	errs = append(errs, r.progressDB.Close(), r.userState.Close(), r.taskMgr.Close())
+	errs = append(errs, r.progressDB.Close(), r.userState.Close(), r.taskMgr.Close(), r.mangaReaders.Close())
 	return errors.Join(errs...)
 }
 
@@ -290,6 +292,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/manga/list", r.handleMangaList)
 	r.mux.HandleFunc("/api/media/manga/pages", r.handleMangaPages)
 	r.mux.HandleFunc("/api/media/manga/cover", r.handleMangaCover)
+	r.mux.HandleFunc("/api/media/manga/custom-cover", r.handleMangaCustomCover)
 	r.mux.HandleFunc("/api/media/manga/page", r.handleMangaPage)
 	r.mux.HandleFunc("/api/media/manga/progress", r.handleMangaProgress)
 
@@ -930,12 +933,13 @@ func (r *Router) handleMangaPages(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "cbz not found", http.StatusNotFound)
 		return
 	}
-	reader, err := manga.OpenCBZ(fullPath)
+	lease, err := r.mangaReaders.Acquire(req.Context(), fullPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer reader.Close()
+	defer releaseMangaReader(lease)
+	reader := lease.Reader
 
 	entries := reader.ListImageEntries()
 	writeJSON(w, http.StatusOK, entries)
@@ -943,19 +947,30 @@ func (r *Router) handleMangaPages(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleMangaCover(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
+	logical, lib, identityErr := r.mangaIdentity(relPath)
+	if identityErr != nil {
+		http.Error(w, "book unavailable", 404)
+		return
+	}
+	_, customCover, coverErr := r.indexedMangaCover(req, logical, lib)
+	if coverErr != nil {
+		http.Error(w, "book index unavailable", 503)
+		return
+	}
 	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/manga")
 	if err != nil {
 		http.Error(w, "cbz not found", http.StatusNotFound)
 		return
 	}
-	reader, err := manga.OpenCBZ(fullPath)
+	lease, err := r.mangaReaders.Acquire(req.Context(), fullPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer reader.Close()
+	defer releaseMangaReader(lease)
+	reader := lease.Reader
 
-	coverBytes, err := reader.ReadEntryContext(req.Context(), reader.GetCoverEntry(""))
+	coverBytes, err := reader.ReadEntryContext(req.Context(), reader.GetCoverEntry(customCover))
 	if err != nil {
 		http.Error(w, "cover not found", http.StatusNotFound)
 		return
@@ -974,12 +989,13 @@ func (r *Router) handleMangaPage(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "cbz not found", http.StatusNotFound)
 		return
 	}
-	reader, err := manga.OpenCBZ(fullPath)
+	lease, err := r.mangaReaders.Acquire(req.Context(), fullPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer reader.Close()
+	defer releaseMangaReader(lease)
+	reader := lease.Reader
 
 	if !manga.ImageExtensions[strings.ToLower(filepath.Ext(entry))] {
 		http.Error(w, "unsupported page format", 400)

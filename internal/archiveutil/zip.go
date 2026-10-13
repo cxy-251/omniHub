@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 )
 
 // ErrCapacity reports a container or entry exceeding the supported read budget.
@@ -21,7 +22,21 @@ const maxEntries = 20000
 // Reader owns the file behind a validated, bounded ZIP directory.
 type Reader struct {
 	*zip.Reader
+	source *fileSource
+}
+
+type fileSource struct {
+	mu   sync.RWMutex
 	file *os.File
+}
+
+func (s *fileSource) ReadAt(data []byte, offset int64) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.file == nil {
+		return 0, os.ErrClosed
+	}
+	return s.file.ReadAt(data, offset)
 }
 
 // Open accepts regular single-disk ZIP/ZIP64 containers, at most 20,000 entries
@@ -53,7 +68,8 @@ func Open(path string) (_ *Reader, result error) {
 	if err := validateDirectory(f, opened.Size()); err != nil {
 		return nil, err
 	}
-	zr, err := zip.NewReader(f, opened.Size())
+	source := &fileSource{file: f}
+	zr, err := zip.NewReader(source, opened.Size())
 	if err != nil {
 		return nil, err
 	}
@@ -64,11 +80,61 @@ func Open(path string) (_ *Reader, result error) {
 		}
 		names[entry.Name] = true
 	}
-	return &Reader{Reader: zr, file: f}, nil
+	return &Reader{Reader: zr, source: source}, nil
 }
 
 // Close releases the underlying container file.
-func (r *Reader) Close() error { return r.file.Close() }
+func (r *Reader) Close() error {
+	r.source.mu.Lock()
+	defer r.source.mu.Unlock()
+	if r.source.file == nil {
+		return nil
+	}
+	f := r.source.file
+	r.source.file = nil
+	return f.Close()
+}
+
+// Stat returns the identity of the open container, independent of path replacement.
+func (r *Reader) Stat() (os.FileInfo, error) {
+	r.source.mu.RLock()
+	defer r.source.mu.RUnlock()
+	if r.source.file == nil {
+		return nil, os.ErrClosed
+	}
+	return r.source.file.Stat()
+}
+
+// Reopen attaches the same unchanged regular file to retained ZIP metadata,
+// without reparsing its directory. Callers must hold an exclusive reader lease.
+// Identity, size and mtime must match the metadata's original file version.
+func (r *Reader) Reopen(path string, expected os.FileInfo) error {
+	if expected == nil {
+		return errors.New("archive identity is required")
+	}
+	r.source.mu.Lock()
+	defer r.source.mu.Unlock()
+	if r.source.file != nil {
+		return errors.New("archive is already open")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || !os.SameFile(expected, info) || info.Size() != expected.Size() || !info.ModTime().Equal(expected.ModTime()) {
+		return errors.New("archive version changed")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	opened, err := f.Stat()
+	if err != nil || !os.SameFile(expected, opened) || opened.Size() != expected.Size() || !opened.ModTime().Equal(expected.ModTime()) {
+		return errors.Join(errors.New("archive changed while reopening"), err, f.Close())
+	}
+	r.source.file = f
+	return nil
+}
 
 func validateDirectory(r io.ReaderAt, size int64) error {
 	if size < 22 {

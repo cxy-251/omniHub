@@ -122,7 +122,32 @@ func (d *DB) UpsertManga(m *Manga) error {
 
 // SetCustomCover 用户在界面一键设为封面（第 7.2.3 节）。
 func (d *DB) SetCustomCover(mangaID, coverEntry string) error {
-	_, err := d.db.Exec("UPDATE mangas SET custom_cover = ? WHERE id = ?", coverEntry, mangaID)
+	return d.SetCustomCoverContext(context.Background(), mangaID, coverEntry)
+}
+
+// IndexedCover resolves one file's index identity and custom cover without
+// loading the entire shelf. Ambiguous duplicate paths return an error.
+func (d *DB) IndexedCover(ctx context.Context, logical, relative string) (id, cover string, result error) {
+	rows, err := d.db.QueryContext(ctx, "SELECT id,custom_cover FROM mangas WHERE rel_path IN (?,?,?) ORDER BY id LIMIT 2", logical, relative, "media_library/manga/"+relative)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() { result = errors.Join(result, rows.Close()) }()
+	if rows.Next() {
+		if err := rows.Scan(&id, &cover); err != nil {
+			return "", "", err
+		}
+	}
+	if rows.Next() {
+		return "", "", errors.New("multiple index records refer to the same book")
+	}
+	return id, cover, rows.Err()
+}
+
+// SetCustomCoverContext updates a verified index record, respecting cancellation
+// and avoiding an unchanged write. The service verifies the archive entry first.
+func (d *DB) SetCustomCoverContext(ctx context.Context, id, entry string) error {
+	_, err := d.db.ExecContext(ctx, "UPDATE mangas SET custom_cover=? WHERE id=? AND custom_cover!=?", entry, id, entry)
 	return err
 }
 
