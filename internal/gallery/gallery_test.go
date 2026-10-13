@@ -113,4 +113,13 @@ func TestGalleryVolumeAndMetadata(t *testing.T) {
 	if len(photos) != 1 {
 		t.Errorf("expected 1 photo from pagination, got %d", len(photos))
 	}
+
+	// 8. 测试 ReadOriginalDirect 纯只读解耦读取
+	directBytes, err := ReadOriginalDirect(originalsDir, volName, photoID)
+	if err != nil {
+		t.Fatalf("ReadOriginalDirect failed: %v", err)
+	}
+	if string(directBytes) != string(originalBytes) {
+		t.Errorf("expected directBytes %s, got %s", string(originalBytes), string(directBytes))
+	}
 }

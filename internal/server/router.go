@@ -305,14 +305,7 @@ func (r *Router) handleGalleryOriginal(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	originalsDir := filepath.Join(primary.RootPath, "media_library", "gallery", "originals")
-	vm, err := gallery.NewVolumeManager(originalsDir)
-	if err != nil {
-		http.Error(w, "volume manager error", http.StatusInternalServerError)
-		return
-	}
-	defer vm.Close()
-
-	data, err := vm.ReadOriginal(vol, photoID)
+	data, err := gallery.ReadOriginalDirect(originalsDir, vol, photoID)
 	if err != nil || len(data) == 0 {
 		http.Error(w, "original image not found", http.StatusNotFound)
 		return

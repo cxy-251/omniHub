@@ -192,3 +192,28 @@ func (vm *VolumeManager) ReadOriginal(volumeName, id string) ([]byte, error) {
 
 	return blob, nil
 }
+
+// ReadOriginalDirect 纯只读方式直接从分卷读取原图（严格以 mode=ro 打开，零写操作零建表，第 3.1.2 节）。
+func ReadOriginalDirect(originalsDir, volumeName, id string) ([]byte, error) {
+	dbPath := filepath.Join(originalsDir, volumeName)
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("volume file not found: %s", volumeName)
+	}
+
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(3000)", dbPath)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open read-only volume %s: %w", volumeName, err)
+	}
+	defer db.Close()
+
+	var blob []byte
+	err = db.QueryRow("SELECT data FROM originals WHERE id = ?", id).Scan(&blob)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read original from %s: %w", volumeName, err)
+	}
+	return blob, nil
+}

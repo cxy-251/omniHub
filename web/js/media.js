@@ -346,7 +346,7 @@ const MediaHub = {
       }
 
       const html = photos.map(p => `
-        <div class="gallery-item" onclick="MediaHub.viewOriginal('${p.id}', '${p.volume}')">
+        <div class="gallery-item" style="aspect-ratio: ${p.width || 4} / ${p.height || 3}; background-color: ${p.color_hex || 'var(--surface)'};" onclick="MediaHub.viewOriginal('${p.id}', '${p.volume}')">
           <img src="/api/media/gallery/thumbnail?id=${p.id}" loading="lazy" alt="${p.filename}">
           <div class="overlay-info">
             <span>${p.filename}</span>
