@@ -273,6 +273,8 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/text/list", r.handleTextList)
 	r.mux.HandleFunc("/api/media/text/chunk", r.handleTextChunk)
 	r.mux.HandleFunc("/api/media/text/epub", r.handleTextEpub)
+	r.mux.HandleFunc("/api/media/text/epub/book", r.handleEpubBook)
+	r.mux.HandleFunc("/api/media/text/epub-content/", r.handleEpubContent)
 
 	// 音频业务接口
 	r.mux.HandleFunc("/api/media/audio/albums", r.handleAudioAlbums)
@@ -769,27 +771,6 @@ func (r *Router) handleTextChunk(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
-}
-
-func (r *Router) handleTextEpub(w http.ResponseWriter, req *http.Request) {
-	relPath := req.URL.Query().Get("path")
-	entry := req.URL.Query().Get("entry")
-	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/docs", "media_library/novels")
-	if err != nil {
-		http.Error(w, "file not found", http.StatusNotFound)
-		return
-	}
-
-	data, err := text.ReadEpubEntryContext(req.Context(), fullPath, entry)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Type", "application/xhtml+xml; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
 }
 
 // --- 音频 ---

@@ -1,15 +1,4 @@
 import { request } from '../src/api';
-let markedReady;
-async function renderMarkdown(raw) {
- if (!markedReady) markedReady = new Promise((resolve, reject) => {
-  const script = document.createElement('script');
-  script.src = '/vendor/marked.min.js';
-  script.onload = resolve; script.onerror = () => { markedReady = undefined; reject(new Error('Markdown 渲染器加载失败')); };
-  document.head.appendChild(script);
- });
- const [{ default: DOMPurify }] = await Promise.all([import('dompurify'), markedReady]);
- return DOMPurify.sanitize(window.marked.parse(raw));
-}
 // omniHub 媒体专区交互逻辑
 let lifetime = new AbortController();
 const fetch = (input, options = {}) => request(input, { ...options, signal: lifetime.signal });
@@ -48,32 +37,6 @@ const MediaHub = {
         <button data-sub="text">📖 文本阅读器</button>
         <button data-sub="manga">📚 漫画条漫</button>
         <button data-sub="audio">🎧 音频专辑</button>
-      </div>
-
-      <!-- 文本阅读器 -->
-      <div id="subpane-text" class="media-subpane">
-        <div style="display:grid; grid-template-columns: 280px 1fr; gap:16px;">
-          <div style="background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:12px; max-height:650px; overflow-y:auto;">
-            <h4 style="margin:0 0 8px 0; color:var(--accent);">📚 小说与文档</h4>
-            <div id="text-file-list" style="display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--text-muted);">
-              正在获取文本列表…
-            </div>
-          </div>
-          <div>
-            <div class="reader-toolbar">
-              <div style="display:flex; gap:8px;">
-                <input type="text" id="text-path-input" placeholder="输入相对路径" style="width: 300px;">
-                <button id="btn-text-load" class="btn-primary">加载</button>
-              </div>
-              <div style="display:flex; gap:8px;">
-                <button id="btn-text-prev" class="btn-primary">上一页</button>
-                <span id="text-page-info" style="font-size:13px; align-self:center;">-</span>
-                <button id="btn-text-next" class="btn-primary">下一页</button>
-              </div>
-            </div>
-            <div id="reader-content" class="reader-container">请从左侧选择文档或在上方输入路径进行阅读</div>
-          </div>
-        </div>
       </div>
 
       <!-- 漫画专区 -->
@@ -126,38 +89,6 @@ const MediaHub = {
       });
     });
 
-    // 文本分页
-    this.textState = { path: '', start: 1, offset: 0, nextOffset: 0, nextStart: 1, history: [], limit: 100, hasMore: false, sequence: 0 };
-    const btnTextLoad = document.getElementById('btn-text-load');
-    if (btnTextLoad) {
-      btnTextLoad.addEventListener('click', () => {
-        this.selectTextFile(document.getElementById('text-path-input').value.trim());
-      });
-    }
-    const btnTextPrev = document.getElementById('btn-text-prev');
-    if (btnTextPrev) {
-      btnTextPrev.addEventListener('click', () => {
-        if (this.textState.start > 1) {
-          const previous = this.textState.history.pop();
-          this.textState.start = previous?.start ?? Math.max(1, this.textState.start - this.textState.limit);
-          this.textState.offset = previous?.offset ?? -1;
-          this.loadTextChunk();
-        }
-      });
-    }
-    const btnTextNext = document.getElementById('btn-text-next');
-    if (btnTextNext) {
-      btnTextNext.addEventListener('click', () => {
-        if (this.textState.hasMore) {
-          this.textState.history.push({ start: this.textState.start, offset: this.textState.offset });
-          if (this.textState.history.length > 256) this.textState.history.shift();
-          this.textState.start = this.textState.nextStart;
-          this.textState.offset = this.textState.nextOffset;
-          this.loadTextChunk();
-        }
-      });
-    }
-
     // 漫画书架与条漫导航
     const btnMangaRefresh = document.getElementById('btn-manga-refresh');
     if (btnMangaRefresh) {
@@ -202,83 +133,6 @@ const MediaHub = {
       p.classList.toggle('active', p.id === `subpane-${subId}`);
     });
     if (subId === 'manga') this.loadMangaShelf();
-    if (subId === 'text') this.loadTextList();
-  },
-
-  // --- 文本阅读器实现 ---
-  async loadTextChunk() {
-    const contentEl = document.getElementById('reader-content');
-    const pageInfo = document.getElementById('text-page-info');
-    if (!this.textState.path) return;
-
-    const state = this.textState;
-    const sequence = ++state.sequence;
-    const current = () => this.textState === state && state.sequence === sequence && !lifetime.signal.aborted;
-    const previousButton = document.getElementById('btn-text-prev');
-    const nextButton = document.getElementById('btn-text-next');
-    previousButton.disabled = true; nextButton.disabled = true;
-
-    contentEl.textContent = '加载中…';
-    try {
-      const cursor = state.offset >= 0 ? `&offset=${state.offset}` : '';
-      const res = await fetch(`/api/media/text/chunk?path=${encodeURIComponent(state.path)}&start=${state.start}&limit=${state.limit}${cursor}`);
-      const data = await res.json();
-      if (!current()) return;
-
-      state.hasMore = data.has_more;
-      state.nextOffset = data.next_offset;
-      state.nextStart = data.start_line + data.lines.length;
-      pageInfo.textContent = data.lines.length ? `行号: ${data.start_line} - ${state.nextStart - 1}${data.total_lines >= 0 ? ` (共 ${data.total_lines} 行)` : ''}` : '已到文件末尾';
-
-      // 使用离线 marked.min.js 进行富文本与图表排版 (第 6.1 节)
-      const rawText = data.lines.join('\n');
-      if (state.path.toLowerCase().endsWith('.md')) {
-        const html = await renderMarkdown(rawText);
-        if (current()) contentEl.innerHTML = html;
-      } else {
-        contentEl.innerHTML = data.lines.map(line => `<div>${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") || '&nbsp;'}</div>`).join('');
-      }
-    } catch (e) {
- if (e.name === 'AbortError') return;
-      if (current()) contentEl.textContent = `加载错误: ${e.message}`;
-    } finally {
-      if (current()) { previousButton.disabled = state.start <= 1; nextButton.disabled = !state.hasMore; }
-    }
-  },
-
-  async loadTextList(offset = 0) {
-    const listEl = document.getElementById('text-file-list');
-    if (!listEl) return;
-    try {
-      const res = await fetch('/api/media/text/list?limit=100&offset=' + offset);
-      const hasMore = res.headers.get('X-Has-More') === 'true';
-      const items = await res.json();
-      if (!Array.isArray(items) || items.length === 0) {
-        listEl.innerHTML = '<div style="color:var(--text-muted)">暂无可用文本</div>';
-        return;
-      }
-      listEl.replaceChildren();
-      for (const item of items) {
-        const button = document.createElement('button'); button.className = 'btn-primary';
-        button.textContent = `${item.name} · ${item.library_name}`; button.title = item.rel_path;
-        button.addEventListener('click', () => this.selectTextFile(item.rel_path)); listEl.append(button);
-      }
-      for (const [label, next, show] of [['上一页', Math.max(0, offset - 100), offset > 0], ['下一页', offset + 100, hasMore]]) {
-        if (!show) continue;
-        const button = document.createElement('button'); button.textContent = label; button.className = 'btn-primary';
-        button.addEventListener('click', () => this.loadTextList(next)); listEl.append(button);
-      }
-    } catch (e) {
- if (e.name === 'AbortError') return;
-      listEl.textContent = `加载失败: ${e.message}`;
-    }
-  },
-
-  selectTextFile(relPath) {
-    const inp = document.getElementById('text-path-input');
-    if (inp) inp.value = relPath;
-    this.textState = { ...this.textState, path: relPath, start: 1, offset: 0, nextOffset: 0, nextStart: 1, history: [], hasMore: false, sequence: 0 };
-    this.loadTextChunk();
   },
 
   // --- 漫画书架与条漫实现 ---

@@ -21,6 +21,7 @@ const loaders = {
 const AudioLibrary = lazy(() => import('./AudioLibrary'));
 const GalleryLibrary = lazy(() => import('./GalleryLibrary'));
 const VideoMatrix = lazy(() => import('./VideoMatrix'));
+const TextLibrary = lazy(() => import('./TextLibrary'));
 
 // Transitional lifecycle adapter: existing modules remain runnable while each is moved to typed components.
 export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'libraries'>; sections: string[] }) {
@@ -31,12 +32,17 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
   const [galleryVisited, setGalleryVisited] = useState(false);
   const [videoActive, setVideoActive] = useState(false);
   const [videoVisited, setVideoVisited] = useState(false);
+  const [textActive, setTextActive] = useState(false);
+  const [textVisited, setTextVisited] = useState(false);
   const moduleRef = useRef<ExistingModule | undefined>(undefined);
   useEffect(() => {
     let disposed = false;
     let module: ExistingModule | undefined;
     const tabChanged = (event: Event) => {
       const tab = (event as CustomEvent<string>).detail;
+      const text = sections.includes('text') && tab === 'text';
+      setTextActive(text);
+      if (text) setTextVisited(true);
       const video = sections.includes('shortvideo') && tab === 'shortvideo';
       setVideoActive(video);
       if (video) setVideoVisited(true);
@@ -66,6 +72,9 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
   return <section className="tab-pane active" id={`pane-${id}`}>
     {error ? <p role="alert" className="mb-4 whitespace-pre-wrap text-danger">{error}</p> : null}
     <div id={`${id}-container`} />
+    {id === 'media' && sections.includes('text') && textVisited ? <div hidden={!textActive} className="mt-4">
+      <Suspense fallback={<p role="status">正在加载文本阅读器…</p>}><TextLibrary active={textActive} /></Suspense>
+    </div> : null}
     {id === 'media' && sections.includes('shortvideo') && videoVisited ? <div hidden={!videoActive} className="mt-4">
       <Suspense fallback={<p role="status">正在加载视频矩阵…</p>}><VideoMatrix active={videoActive} onAccompany={sections.includes('audio') ? () => moduleRef.current?.showAudioBar?.() : undefined} /></Suspense>
     </div> : null}
