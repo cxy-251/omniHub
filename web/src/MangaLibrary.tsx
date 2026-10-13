@@ -168,7 +168,13 @@ function BookReader({ book, active, onBack }: { book: Book; active: boolean; onB
 
   useLayoutEffect(() => {
     const root = viewport.current;
-    if (!root || !model || !active) return;
+    if (!active) {
+      // Hidden elements report zero scroll geometry. Keep the last decoded
+      // position so reopening can load its images before measuring again.
+      if (latest.current) restore.current = { page: latest.current.value.page_index, ratio: latest.current.value.scroll_offset_ratio };
+      return;
+    }
+    if (!root || !model) return;
     const target = restore.current;
     if (target) {
       const image = root.querySelector<HTMLImageElement>(`img[data-page="${target.page}"]`);
@@ -247,7 +253,9 @@ function BookReader({ book, active, onBack }: { book: Book; active: boolean; onB
           {Array.from({ length: columns }, (_, column) => {
             const index = row * columns + column;
             if (index >= boot.total) return null;
-            const page = pages.current.get(index), visible = mode === 'single' || row >= focusRow - 1 && row <= visibleEnd;
+            // A jump changes the window before scrollTop can move: load the
+            // target first, then restore using its measured image height.
+            const page = pages.current.get(index), visible = mode === 'single' || (restore.current ? Math.abs(row - focusRow) <= 1 : row >= focusRow - 1 && row <= visibleEnd);
             const src = active && visible && page ? `/api/media/manga/page?${new URLSearchParams({ path: book.logical_path, entry: page.entry, version: boot.version })}` : undefined;
             return <div key={index} className="min-w-0 flex-1"><img data-page={index} src={src} alt={`第 ${index + 1} 页`} className="w-full object-contain object-top" style={{ maxHeight: 65536 }} decoding="async" onLoad={() => measure(row)} onClick={() => { selectedPage.current = index; capture(); }} onError={event => { if (event.currentTarget.getAttribute('src')) setError('页面无法读取或解码；若书包已改变，请重新打开。'); }} /></div>;
           })}
