@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"omnihub/internal/auth"
@@ -25,6 +26,15 @@ func (r *Router) protectRoutes(next http.Handler) http.Handler {
 			req.Body = http.MaxBytesReader(w, req.Body, 64*1024)
 		}
 		path := req.URL.Path
+		if req.Method == http.MethodPost && strings.HasPrefix(path, "/api/media/") {
+			if expected := req.Header.Get("X-Omni-Account-ID"); expected != "" {
+				id, err := strconv.ParseInt(expected, 10, 64)
+				if err != nil || id <= 0 || id != auth.UserFromContext(req.Context()).ID {
+					http.Error(w, "account changed; reopen media before saving", 409)
+					return
+				}
+			}
+		}
 		for _, section := range []string{"gallery", "shortvideo", "text", "audio", "manga"} {
 			if strings.HasPrefix(path, "/api/media/"+section+"/") && !r.sectionEnabled(section) {
 				http.Error(w, "category disabled", http.StatusNotFound)
@@ -80,6 +90,9 @@ func (r *Router) protectRoutes(next http.Handler) http.Handler {
 // admitting only two together also limits their aggregate allocation pressure.
 func bufferedMediaRead(path string) bool {
 	if strings.HasPrefix(path, "/api/media/text/epub-content/") {
+		return true
+	}
+	if path == "/api/media/manga/page-list" {
 		return true
 	}
 	switch path {

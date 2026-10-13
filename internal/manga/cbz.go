@@ -3,13 +3,16 @@ package manga
 import (
 	"archive/zip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"omnihub/internal/archiveutil"
 	"omnihub/internal/ordering"
@@ -45,6 +48,50 @@ type CBZReader struct {
 	filePath  string
 	entryMap  map[string]*zip.File
 	allImages []string
+	pages     []PageEntry
+}
+
+// PageEntry identifies one reading page; an independent root cover is excluded.
+// Entry is an opaque URL-safe key when ZIP names contain non-UTF8/control bytes.
+type PageEntry struct {
+	Index        int    `json:"index"`
+	ChapterIndex int    `json:"chapter_index"`
+	Entry        string `json:"entry"`
+}
+
+const encodedEntryPrefix = "@zip:"
+
+// EncodeEntry preserves ordinary names and encodes names JSON cannot round-trip.
+func EncodeEntry(name string) string {
+	encode := !utf8.ValidString(name) || strings.HasPrefix(name, encodedEntryPrefix) || strings.ContainsAny(name, "\"\\")
+	for _, ch := range name {
+		if ch < 32 {
+			encode = true
+			break
+		}
+	}
+	if encode {
+		return encodedEntryPrefix + base64.RawURLEncoding.EncodeToString([]byte(name))
+	}
+	return name
+}
+
+// DecodeEntry validates an opaque page key and recovers the exact ZIP name bytes.
+func DecodeEntry(value string) (string, error) {
+	if len(value) > 5500 {
+		return "", errors.New("image entry exceeds capacity")
+	}
+	if strings.HasPrefix(value, encodedEntryPrefix) {
+		data, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(value, encodedEntryPrefix))
+		if err != nil || len(data) > 4096 {
+			return "", errors.New("invalid image entry key")
+		}
+		return string(data), nil
+	}
+	if len(value) > 4096 {
+		return "", errors.New("image entry exceeds capacity")
+	}
+	return value, nil
 }
 
 // OpenCBZ 打开指定路径的 CBZ 封箱包。
@@ -65,6 +112,9 @@ func OpenCBZ(cbzPath string) (*CBZReader, error) {
 		if f.FileInfo().IsDir() {
 			continue
 		}
+		if len(f.Name) > 4096 {
+			return nil, errors.Join(errors.New("archive entry name exceeds capacity"), zr.Close())
+		}
 		reader.entryMap[f.Name] = f
 		ext := strings.ToLower(filepath.Ext(f.Name))
 		if ImageExtensions[ext] {
@@ -73,7 +123,41 @@ func OpenCBZ(cbzPath string) (*CBZReader, error) {
 	}
 
 	sort.Slice(reader.allImages, func(i, j int) bool { return ordering.NaturalLess(reader.allImages[i], reader.allImages[j]) })
+	chapters := make(map[string]int)
+	for _, name := range reader.allImages {
+		if !strings.Contains(name, "/") && strings.HasPrefix(strings.ToLower(name), "cover.") {
+			continue
+		}
+		dir := path.Dir(name)
+		chapter, found := chapters[dir]
+		if !found {
+			chapter = len(chapters)
+			chapters[dir] = chapter
+		}
+		reader.pages = append(reader.pages, PageEntry{Index: len(reader.pages), ChapterIndex: chapter, Entry: EncodeEntry(name)})
+	}
 	return reader, nil
+}
+
+// PageWindow copies up to 100 reading page keys without allocating a whole-book response.
+func (r *CBZReader) PageWindow(offset, limit int) ([]PageEntry, int, error) {
+	if offset < 0 || limit < 1 || limit > 100 {
+		return nil, 0, errors.New("invalid page window")
+	}
+	if offset >= len(r.pages) {
+		return []PageEntry{}, len(r.pages), nil
+	}
+	return append([]PageEntry(nil), r.pages[offset:min(offset+limit, len(r.pages))]...), len(r.pages), nil
+}
+
+// Version identifies the currently leased container by size and modification time.
+// This is a metadata revision, not a content hash.
+func (r *CBZReader) Version() (string, error) {
+	info, err := r.zr.Stat()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x-%x", info.Size(), info.ModTime().UnixNano()), nil
 }
 
 // ListImageEntries 返回包内所有经过自然排序的图片条目名称列表。
@@ -131,7 +215,7 @@ func (r *CBZReader) GetCoverEntry(customCover string) string {
 
 	// 2. 根目录 cover.* 优先
 	for _, img := range r.allImages {
-		base := strings.ToLower(filepath.Base(img))
+		base := strings.ToLower(path.Base(img))
 		if !strings.Contains(img, "/") && strings.HasPrefix(base, "cover.") {
 			return img
 		}
@@ -167,7 +251,7 @@ func ScanMangaFromCBZ(cbzPath string) (_ *Manga, result error) {
 		ID:         stem,
 		Title:      stem,
 		RelPath:    filepath.Base(cbzPath),
-		TotalPages: len(r.allImages),
+		TotalPages: len(r.pages),
 		UpdatedAt:  time.Now().UTC(),
 	}
 

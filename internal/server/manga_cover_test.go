@@ -95,6 +95,18 @@ func TestMangaCustomCoverUsesOwningIndexAndPreservesArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	w := request("GET", "/api/media/manga/page-list?path="+url.QueryEscape(keys[0])+"&limit=1", nil)
+	var pageList struct {
+		Pages   []manga.PageEntry `json:"pages"`
+		Total   int               `json:"total"`
+		Version string            `json:"file_version"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &pageList); err != nil || pageList.Total != 1 || len(pageList.Pages) != 1 || pageList.Pages[0].Entry != "02.jpg" || pageList.Version == "" {
+		t.Fatalf("wrong window: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("GET", "/api/media/manga/page?path="+url.QueryEscape(keys[0])+"&entry=02.jpg&version=old", nil); w.Code != 409 {
+		t.Fatal("stale page version accepted")
+	}
 	if w := request("POST", "/api/media/manga/custom-cover", map[string]string{"path": keys[0], "entry": "02.jpg"}); w.Code != 200 {
 		t.Fatalf("set cover: %d %s", w.Code, w.Body.String())
 	}
@@ -120,7 +132,7 @@ func TestMangaCustomCoverUsesOwningIndexAndPreservesArchive(t *testing.T) {
 	if w := request("POST", "/api/media/manga/custom-cover", map[string]string{"path": keys[0], "entry": ""}); w.Code != 200 {
 		t.Fatal("cover reset failed")
 	}
-	w := request("GET", "/api/media/manga/cover?path="+url.QueryEscape(keys[0]), nil)
+	w = request("GET", "/api/media/manga/cover?path="+url.QueryEscape(keys[0]), nil)
 	if w.Body.String() != "default cover" {
 		t.Fatal("reset did not restore fallback")
 	}

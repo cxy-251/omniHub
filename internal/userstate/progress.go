@@ -43,6 +43,39 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
+	rows, err := db.Query("PRAGMA table_info(manga_progress)")
+	if err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	hasMode := false
+	hasVersion := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &pk); err != nil {
+			return nil, errors.Join(err, rows.Close(), db.Close())
+		}
+		if name == "position_mode" {
+			hasMode = true
+		}
+		if name == "file_version" {
+			hasVersion = true
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	if !hasMode {
+		if _, err := db.Exec("ALTER TABLE manga_progress ADD COLUMN position_mode TEXT NOT NULL DEFAULT 'book'"); err != nil {
+			return nil, errors.Join(err, db.Close())
+		}
+	}
+	if !hasVersion {
+		if _, err := db.Exec("ALTER TABLE manga_progress ADD COLUMN file_version TEXT NOT NULL DEFAULT ''"); err != nil {
+			return nil, errors.Join(err, db.Close())
+		}
+	}
 	return &DB{db: db}, nil
 }
 
@@ -55,12 +88,19 @@ func (d *DB) SaveManga(ctx context.Context, p *manga.MangaProgress) error {
 	if p == nil || p.UserID <= 0 || strings.IndexByte(p.MangaID, ':') < 1 || len(p.MangaID) > 4096 || p.ChapterIndex < 0 || p.ChapterIndex > 20000 || p.PageIndex < 0 || p.PageIndex > 20000 || math.IsNaN(p.ScrollOffsetRatio) || math.IsInf(p.ScrollOffsetRatio, 0) || p.ScrollOffsetRatio < 0 || p.ScrollOffsetRatio > 1 {
 		return ErrInvalidProgress
 	}
-	_, err := d.db.ExecContext(ctx, `INSERT INTO manga_progress(user_id,manga_id,chapter_index,page_index,scroll_offset_ratio,updated_at)
-		VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,manga_id) DO UPDATE SET
+	mode := p.PositionMode
+	if mode == "" {
+		mode = "book"
+	}
+	if (mode != "page" && mode != "book") || len(p.FileVersion) > 128 {
+		return ErrInvalidProgress
+	}
+	_, err := d.db.ExecContext(ctx, `INSERT INTO manga_progress(user_id,manga_id,chapter_index,page_index,scroll_offset_ratio,updated_at,position_mode,file_version)
+		VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(user_id,manga_id) DO UPDATE SET
 		chapter_index=excluded.chapter_index,page_index=excluded.page_index,
-		scroll_offset_ratio=excluded.scroll_offset_ratio,updated_at=excluded.updated_at
-		WHERE manga_progress.chapter_index!=excluded.chapter_index OR manga_progress.page_index!=excluded.page_index OR manga_progress.scroll_offset_ratio!=excluded.scroll_offset_ratio`,
-		p.UserID, p.MangaID, p.ChapterIndex, p.PageIndex, p.ScrollOffsetRatio, time.Now().UTC().Format(time.RFC3339))
+		scroll_offset_ratio=excluded.scroll_offset_ratio,updated_at=excluded.updated_at,position_mode=excluded.position_mode,file_version=excluded.file_version
+		WHERE manga_progress.chapter_index!=excluded.chapter_index OR manga_progress.page_index!=excluded.page_index OR manga_progress.scroll_offset_ratio!=excluded.scroll_offset_ratio OR manga_progress.position_mode!=excluded.position_mode OR manga_progress.file_version!=excluded.file_version`,
+		p.UserID, p.MangaID, p.ChapterIndex, p.PageIndex, p.ScrollOffsetRatio, time.Now().UTC().Format(time.RFC3339), mode, p.FileVersion)
 	return err
 }
 
@@ -71,13 +111,16 @@ func (d *DB) Manga(ctx context.Context, userID int64, id string) (*manga.MangaPr
 	}
 	var p manga.MangaProgress
 	var updated string
-	err := d.db.QueryRowContext(ctx, `SELECT user_id,manga_id,chapter_index,page_index,scroll_offset_ratio,updated_at FROM manga_progress WHERE user_id=? AND manga_id=?`, userID, id).
-		Scan(&p.UserID, &p.MangaID, &p.ChapterIndex, &p.PageIndex, &p.ScrollOffsetRatio, &updated)
+	err := d.db.QueryRowContext(ctx, `SELECT user_id,manga_id,chapter_index,page_index,scroll_offset_ratio,updated_at,position_mode,file_version FROM manga_progress WHERE user_id=? AND manga_id=?`, userID, id).
+		Scan(&p.UserID, &p.MangaID, &p.ChapterIndex, &p.PageIndex, &p.ScrollOffsetRatio, &updated, &p.PositionMode, &p.FileVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if p.ChapterIndex < 0 || p.ChapterIndex > 20000 || p.PageIndex < 0 || p.PageIndex > 20000 || math.IsNaN(p.ScrollOffsetRatio) || math.IsInf(p.ScrollOffsetRatio, 0) || p.ScrollOffsetRatio < 0 || p.ScrollOffsetRatio > 1 || (p.PositionMode != "book" && p.PositionMode != "page") {
+		return nil, ErrInvalidProgress
 	}
 	p.UpdatedAt, err = time.Parse(time.RFC3339, updated)
 	if err != nil {

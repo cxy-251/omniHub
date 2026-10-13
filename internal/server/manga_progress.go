@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -84,7 +85,25 @@ func (r *Router) handleMangaProgress(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "user state unavailable", 503)
 		return
 	}
+	physical, err := r.libMgr.ResolveCategoryPath(canonical, "media_library/manga")
+	if err != nil {
+		http.Error(w, "book unavailable", 404)
+		return
+	}
+	info, err := os.Stat(physical)
+	if err != nil {
+		http.Error(w, "book unavailable", 404)
+		return
+	}
+	version := fmt.Sprintf("%x-%x", info.Size(), info.ModTime().UnixNano())
 	if req.Method == http.MethodPost {
+		if position.FileVersion != "" && position.FileVersion != version {
+			http.Error(w, "book changed; reopen before saving", 409)
+			return
+		}
+		if position.PositionMode == "page" {
+			position.FileVersion = version
+		}
 		position.MangaID = canonical
 		position.UserID = user.ID
 		if err := r.userState.SaveManga(req.Context(), &position); err != nil {
@@ -129,7 +148,14 @@ func (r *Router) handleMangaProgress(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	if positionStored != nil {
+		if positionStored.FileVersion != "" && positionStored.FileVersion != version {
+			writeJSON(w, 200, nil)
+			return
+		}
 		positionStored.MangaID = canonical
+		if positionStored.PositionMode == "" {
+			positionStored.PositionMode = "book"
+		}
 	}
 	writeJSON(w, 200, positionStored)
 }

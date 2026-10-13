@@ -50,6 +50,9 @@ func NewReaderCache() *ReaderCache {
 
 func readerBytes(r *CBZReader) int {
 	bytes := len(r.allImages) * 16
+	for _, page := range r.pages {
+		bytes += 32 + len(page.Entry)
+	}
 	for _, f := range r.zr.File {
 		bytes += 256 + len(f.Name) + len(f.Extra) + len(f.Comment)
 	}

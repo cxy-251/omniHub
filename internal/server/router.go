@@ -291,6 +291,7 @@ func (r *Router) registerRoutes() {
 	// 漫画业务接口
 	r.mux.HandleFunc("/api/media/manga/list", r.handleMangaList)
 	r.mux.HandleFunc("/api/media/manga/pages", r.handleMangaPages)
+	r.mux.HandleFunc("/api/media/manga/page-list", r.handleMangaPageList)
 	r.mux.HandleFunc("/api/media/manga/cover", r.handleMangaCover)
 	r.mux.HandleFunc("/api/media/manga/custom-cover", r.handleMangaCustomCover)
 	r.mux.HandleFunc("/api/media/manga/page", r.handleMangaPage)
@@ -942,6 +943,9 @@ func (r *Router) handleMangaPages(w http.ResponseWriter, req *http.Request) {
 	reader := lease.Reader
 
 	entries := reader.ListImageEntries()
+	for i, entry := range entries {
+		entries[i] = manga.EncodeEntry(entry)
+	}
 	writeJSON(w, http.StatusOK, entries)
 }
 
@@ -983,7 +987,11 @@ func (r *Router) handleMangaCover(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleMangaPage(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
-	entry := req.URL.Query().Get("entry")
+	entry, entryErr := manga.DecodeEntry(req.URL.Query().Get("entry"))
+	if entryErr != nil {
+		http.Error(w, "invalid page key", 400)
+		return
+	}
 	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/manga")
 	if err != nil {
 		http.Error(w, "cbz not found", http.StatusNotFound)
@@ -996,6 +1004,13 @@ func (r *Router) handleMangaPage(w http.ResponseWriter, req *http.Request) {
 	}
 	defer releaseMangaReader(lease)
 	reader := lease.Reader
+	if expected := req.URL.Query().Get("version"); expected != "" {
+		version, err := reader.Version()
+		if err != nil || version != expected {
+			http.Error(w, "book changed; reopen before reading", 409)
+			return
+		}
+	}
 
 	if !manga.ImageExtensions[strings.ToLower(filepath.Ext(entry))] {
 		http.Error(w, "unsupported page format", 400)
@@ -1008,6 +1023,7 @@ func (r *Router) handleMangaPage(w http.ResponseWriter, req *http.Request) {
 	}
 	w.Header().Set("Content-Type", http.DetectContentType(data))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }

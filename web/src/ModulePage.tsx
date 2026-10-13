@@ -22,36 +22,22 @@ const AudioLibrary = lazy(() => import('./AudioLibrary'));
 const GalleryLibrary = lazy(() => import('./GalleryLibrary'));
 const VideoMatrix = lazy(() => import('./VideoMatrix'));
 const TextLibrary = lazy(() => import('./TextLibrary'));
+const MangaLibrary = lazy(() => import('./MangaLibrary'));
 
 // Transitional lifecycle adapter: existing modules remain runnable while each is moved to typed components.
 export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'libraries'>; sections: string[] }) {
   const [error, setError] = useState('');
-  const [audioActive, setAudioActive] = useState(false);
-  const [audioVisited, setAudioVisited] = useState(false);
-  const [galleryActive, setGalleryActive] = useState(false);
-  const [galleryVisited, setGalleryVisited] = useState(false);
-  const [videoActive, setVideoActive] = useState(false);
-  const [videoVisited, setVideoVisited] = useState(false);
-  const [textActive, setTextActive] = useState(false);
-  const [textVisited, setTextVisited] = useState(false);
+  const [mediaTab, setMediaTab] = useState('');
+  const [visited, setVisited] = useState<string[]>([]);
   const moduleRef = useRef<ExistingModule | undefined>(undefined);
   useEffect(() => {
     let disposed = false;
     let module: ExistingModule | undefined;
     const tabChanged = (event: Event) => {
       const tab = (event as CustomEvent<string>).detail;
-      const text = sections.includes('text') && tab === 'text';
-      setTextActive(text);
-      if (text) setTextVisited(true);
-      const video = sections.includes('shortvideo') && tab === 'shortvideo';
-      setVideoActive(video);
-      if (video) setVideoVisited(true);
-      const gallery = sections.includes('gallery') && tab === 'gallery';
-      setGalleryActive(gallery);
-      if (gallery) setGalleryVisited(true);
-      const active = sections.includes('audio') && tab === 'audio';
-      setAudioActive(active);
-      if (active) setAudioVisited(true);
+      if (!sections.includes(tab)) return;
+      setMediaTab(tab);
+      setVisited(previous => previous.includes(tab) ? previous : [...previous, tab]);
     };
     if (id === 'media') window.addEventListener('omni-media-tab', tabChanged);
     loaders[id]().then(imported => {
@@ -69,9 +55,16 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
     }).catch((e: Error) => { if (!disposed) setError(e.message); });
     return () => { disposed = true; window.removeEventListener('omni-media-tab', tabChanged); moduleRef.current = undefined; module?.dispose(); };
   }, [id, sections]);
+  const audioActive = mediaTab === 'audio', audioVisited = visited.includes('audio');
+  const textActive = mediaTab === 'text', textVisited = visited.includes('text');
+  const videoActive = mediaTab === 'shortvideo', videoVisited = visited.includes('shortvideo');
+  const galleryActive = mediaTab === 'gallery', galleryVisited = visited.includes('gallery');
   return <section className="tab-pane active" id={`pane-${id}`}>
     {error ? <p role="alert" className="mb-4 whitespace-pre-wrap text-danger">{error}</p> : null}
     <div id={`${id}-container`} />
+    {id === 'media' && sections.includes('manga') && visited.includes('manga') ? <div hidden={mediaTab !== 'manga'} className="mt-4">
+      <Suspense fallback={<p role="status">正在加载漫画阅读器…</p>}><MangaLibrary active={mediaTab === 'manga'} /></Suspense>
+    </div> : null}
     {id === 'media' && sections.includes('text') && textVisited ? <div hidden={!textActive} className="mt-4">
       <Suspense fallback={<p role="status">正在加载文本阅读器…</p>}><TextLibrary active={textActive} /></Suspense>
     </div> : null}

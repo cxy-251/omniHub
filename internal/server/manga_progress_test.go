@@ -133,6 +133,15 @@ func TestReadOnlyMangaProgressGlobalStorageLegacyAndAccountIsolation(t *testing.
 	if w.Code != 200 || w.Body.String() != "null\n" {
 		t.Fatalf("account progress leaked: %s", w.Body.String())
 	}
+	req := httptest.NewRequest("POST", "/api/media/manga/progress", bytes.NewBufferString(`{"manga_id":"`+keys[0]+`","page_index":1,"scroll_offset_ratio":0.1}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Authorization", "Bearer reader-session")
+	req.Header.Set("X-Omni-Account-ID", "1")
+	staleAccount := httptest.NewRecorder()
+	r.ServeHTTP(staleAccount, req)
+	if staleAccount.Code != 409 {
+		t.Fatal("delayed save crossed account switch")
+	}
 	w = request("POST", "/api/media/manga/progress", map[string]any{"user_id": owner.ID, "manga_id": keys[0], "page_index": 1, "scroll_offset_ratio": 0.1}, true)
 	if w.Code != 200 {
 		t.Fatal(w.Body.String())

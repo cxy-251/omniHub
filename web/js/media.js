@@ -5,7 +5,6 @@ const fetch = (input, options = {}) => request(input, { ...options, signal: life
 const MediaHub = {
   dispose() { this.saveAudioProgress(true, true); lifetime.abort();
     if (this.audioTimer) clearInterval(this.audioTimer);
-    if (this.mangaScrollTimer) clearTimeout(this.mangaScrollTimer);
     this.audioTimer = null;
     if (this.audioPlayer) { this.audioPlayer.onloadedmetadata = null; this.audioPlayer.pause(); this.audioPlayer.removeAttribute('src'); this.audioPlayer.load(); this.audioPlayer = null; }
     this.currentAudioId = '';
@@ -16,8 +15,6 @@ const MediaHub = {
   audioPlayer: null,
   currentAudioId: '',
   audioTimer: null,
-  mangaScrollTimer: null,
-  currentMangaId: '',
 
   init() {
     lifetime = new AbortController();
@@ -37,30 +34,6 @@ const MediaHub = {
         <button data-sub="text">📖 文本阅读器</button>
         <button data-sub="manga">📚 漫画条漫</button>
         <button data-sub="audio">🎧 音频专辑</button>
-      </div>
-
-      <!-- 漫画专区 -->
-      <div id="subpane-manga" class="media-subpane">
-        <!-- 书架视图 -->
-        <div id="manga-shelf-view">
-          <div style="margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
-            <span style="font-size:14px; color:var(--text-muted);">已索引漫画书架 (点击直接阅读条漫)</span>
-            <button id="btn-manga-refresh" class="btn-primary" style="padding:4px 10px;">🔄 刷新书架</button>
-          </div>
-          <div id="manga-shelf-grid" class="gallery-grid">
-            <div style="color:var(--text-muted);">正在加载漫画书架…</div>
-          </div>
-        </div>
-
-        <!-- 条漫阅读视口 -->
-        <div id="manga-reader-view" style="display:none;">
-          <div style="margin-bottom: 8px; display:flex; gap:8px; align-items:center;">
-            <button id="btn-manga-back" class="btn-primary" style="padding:4px 12px;">🔙 返回书架</button>
-            <span id="manga-title-badge" style="font-weight:bold; color:#58a6ff;">-</span>
-            <span id="manga-scroll-badge" style="font-size:12px; color:var(--text-muted);">断点: 0.0%</span>
-          </div>
-          <div id="manga-waterfall-box" class="manga-waterfall"></div>
-        </div>
       </div>
 
       <div id="subpane-audio" class="media-subpane"><div id="audio-browser"></div></div>
@@ -89,38 +62,6 @@ const MediaHub = {
       });
     });
 
-    // 漫画书架与条漫导航
-    const btnMangaRefresh = document.getElementById('btn-manga-refresh');
-    if (btnMangaRefresh) {
-      btnMangaRefresh.addEventListener('click', () => this.loadMangaShelf());
-    }
-    const btnMangaBack = document.getElementById('btn-manga-back');
-    if (btnMangaBack) {
-      btnMangaBack.addEventListener('click', () => this.closeMangaBook());
-    }
-
-    const btnManga = document.getElementById('btn-manga-load');
-    if (btnManga) {
-      btnManga.addEventListener('click', () => {
-        const path = document.getElementById('manga-path-input').value.trim();
-        if (path) this.loadManga(path);
-      });
-    }
-
-    // 条漫垂直滚动监听防抖上报（第 7.3.3 节）
-    const mangaBox = document.getElementById('manga-waterfall-box');
-    if (mangaBox) {
-      mangaBox.addEventListener('scroll', () => {
-        if (!this.currentMangaId) return;
-        const ratio = mangaBox.scrollTop / Math.max(1, (mangaBox.scrollHeight - mangaBox.clientHeight));
-        document.getElementById('manga-scroll-badge').textContent = `断点: ${(ratio * 100).toFixed(1)}%`;
-
-        clearTimeout(this.mangaScrollTimer);
-        this.mangaScrollTimer = setTimeout(() => {
-          this.saveMangaProgress(this.currentMangaId, ratio);
-        }, 500);
-      });
-    }
   },
 
   switchSubtab(subId) {
@@ -132,128 +73,6 @@ const MediaHub = {
     document.querySelectorAll('.media-subpane').forEach(p => {
       p.classList.toggle('active', p.id === `subpane-${subId}`);
     });
-    if (subId === 'manga') this.loadMangaShelf();
-  },
-
-  // --- 漫画书架与条漫实现 ---
-  async loadMangaShelf(offset = 0) {
-    const grid = document.getElementById('manga-shelf-grid');
-    if (!grid) return;
-    try {
-      const res = await fetch('/api/media/manga/list?limit=100&offset=' + offset);
-      const hasMore = res.headers.get('X-Has-More') === 'true';
-      const mangas = await res.json();
-      if (!Array.isArray(mangas) || mangas.length === 0) {
-        grid.innerHTML = '<div style="color:var(--text-muted)">书架暂无漫画</div>';
-        return;
-      }
-      grid.replaceChildren();
-      for (const m of mangas) {
-        const logical = m.logical_path || 'media_library/manga/' + m.rel_path;
-        const card = document.createElement('div');
-        card.className = 'gallery-item'; card.style.aspectRatio = '3/4';
-        card.addEventListener('click', () => this.openMangaBook(encodeURIComponent(logical), encodeURIComponent(m.title)));
-        const image = document.createElement('img');
-        image.src = '/api/media/manga/cover?path=' + encodeURIComponent(logical); image.loading = 'lazy'; image.alt = m.title;
-        const info = document.createElement('div'); info.className = 'overlay-info';
-        const title = document.createElement('span'); title.textContent = m.title;
-        const subtitle = document.createElement('span'); subtitle.textContent = `${m.library_name || ''} · 共 ${m.total_pages} 页`;
-        info.append(title, subtitle); card.append(image, info); grid.append(card);
-      }
-      const navigation = document.createElement('div');
-      for (const [label, next, show] of [['上一页', Math.max(0, offset - 100), offset > 0], ['下一页', offset + 100, hasMore]]) {
-        if (!show) continue;
-        const button = document.createElement('button'); button.className = 'btn-primary'; button.textContent = label;
-        button.addEventListener('click', () => this.loadMangaShelf(next)); navigation.append(button);
-      }
-      grid.append(navigation);
-    } catch (e) {
- if (e.name === 'AbortError') return;
-      grid.innerHTML = `<div style="color:var(--danger)">加载书架失败: ${e.message}</div>`;
-    }
-  },
-
-  openMangaBook(encodedRelPath, encodedTitle) {
-    const relPath = decodeURIComponent(encodedRelPath);
-    const title = decodeURIComponent(encodedTitle);
-    const shelf = document.getElementById('manga-shelf-view');
-    const reader = document.getElementById('manga-reader-view');
-    if (shelf && reader) {
-      shelf.style.display = 'none';
-      reader.style.display = 'block';
-    }
-    this.loadManga(relPath, title);
-  },
-
-  closeMangaBook() {
-    const shelf = document.getElementById('manga-shelf-view');
-    const reader = document.getElementById('manga-reader-view');
-    if (shelf && reader) {
-      shelf.style.display = 'block';
-      reader.style.display = 'none';
-    }
-  },
-
-  async loadManga(relPath, title) {
-    const fullRelPath = relPath.includes(':') || relPath.startsWith('media_library/manga/') ? relPath : 'media_library/manga/' + relPath;
-    this.currentMangaId = fullRelPath;
-    const box = document.getElementById('manga-waterfall-box');
-    const badge = document.getElementById('manga-title-badge');
-    badge.textContent = title || relPath;
-    box.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding-top:100px;">正在提取 CBZ 页面流…</div>';
-
-    // 历史阅读进度
-    let savedRatio = 0;
-    try {
-      const progRes = await fetch(`/api/media/manga/progress?manga_id=${encodeURIComponent(fullRelPath)}`);
-      if (progRes.ok) {
-        const prog = await progRes.json();
-        if (prog && prog.scroll_offset_ratio) {
-          savedRatio = prog.scroll_offset_ratio;
-        }
-      }
-    } catch (_) {}
-
-    // 获取 CBZ 内真实图片条目列表
-    try {
-      const pagesRes = await fetch(`/api/media/manga/pages?path=${encodeURIComponent(fullRelPath)}`);
-      const entries = await pagesRes.json();
-      if (!Array.isArray(entries) || entries.length === 0) {
-        box.innerHTML = '<div style="color:var(--danger); text-align:center; padding-top:100px;">CBZ 包内未发现有效图片页面</div>';
-        return;
-      }
-
-      box.innerHTML = entries.map((entry, idx) => `
-        <img src="/api/media/manga/page?path=${encodeURIComponent(fullRelPath)}&entry=${encodeURIComponent(entry)}" loading="lazy" alt="Page ${idx + 1}">
-      `).join('');
-
-      if (savedRatio > 0) {
-        setTimeout(() => {
-          box.scrollTop = savedRatio * (box.scrollHeight - box.clientHeight);
-        }, 300);
-      }
-    } catch (e) {
- if (e.name === 'AbortError') return;
-      box.innerHTML = `<div style="color:var(--danger); text-align:center; padding-top:100px;">读取 CBZ 失败: ${e.message}</div>`;
-    }
-  },
-
-  async saveMangaProgress(mangaId, ratio) {
-    try {
-      await fetch('/api/media/manga/progress', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          manga_id: mangaId,
-          chapter_index: 0,
-          page_index: 0,
-          scroll_offset_ratio: ratio,
-        })
-      });
-    } catch (e) {
- if (e.name === 'AbortError') return;
-      console.warn('Failed to save manga progress', e);
-    }
   },
 
   showAudioBar() { const bar = document.getElementById('audio-bar'); if (bar) bar.style.display = 'flex'; },

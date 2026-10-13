@@ -54,10 +54,16 @@ func (r *Router) handleMangaCustomCover(w http.ResponseWriter, req *http.Request
 		Path  string `json:"path"`
 		Entry string `json:"entry"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil || len(payload.Entry) > 4096 {
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil || len(payload.Entry) > 5500 {
 		http.Error(w, "invalid cover selection", 400)
 		return
 	}
+	entry, err := manga.DecodeEntry(payload.Entry)
+	if err != nil {
+		http.Error(w, "invalid cover key", 400)
+		return
+	}
+	payload.Entry = entry
 	logical, lib, err := r.mangaIdentity(payload.Path)
 	if err != nil {
 		http.Error(w, "book unavailable", 404)
