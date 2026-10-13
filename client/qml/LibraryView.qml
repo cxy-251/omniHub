@@ -5,6 +5,10 @@ import QtQuick.Layouts
 ScrollView {
     id: libraryView
     clip: true
+    Connections {
+        target: backendApi
+        function onCategoryDirectoriesChanged() { categoryInput.text = backendApi.categoryDirectories.join("\n") }
+    }
     ColumnLayout {
         width: libraryView.availableWidth
         spacing: 14
@@ -55,6 +59,27 @@ ScrollView {
             }
         }
         BusyIndicator { running: backendApi.libraryBusy; visible: running; Layout.alignment: Qt.AlignHCenter }
+        Frame {
+            Layout.fillWidth: true; Layout.margins: 16
+            ColumnLayout {
+                anchors.fill: parent
+                Label { text: "启用的分类目录"; font.bold: true; color: "#c9d1d9" }
+                Label { text: "每行一个分类，如 media_library/audio。新增目录仅在在线可写库中补建；移除分类会停用访问并保留文件。空清单停用全部分类。"; color: "#8b949e"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                TextArea {
+                    id: categoryInput
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 220
+                    wrapMode: TextEdit.NoWrap
+                    selectByMouse: true
+                    Component.onCompleted: text = backendApi.categoryDirectories.join("\n")
+                }
+                Button {
+                    text: "保存分类配置"
+                    enabled: !backendApi.libraryBusy
+                    onClicked: backendApi.saveCategories(categoryInput.text.split("\n").map(function (dir) { return dir.trim() }).filter(function (dir) { return dir.length > 0 }))
+                }
+            }
+        }
     }
     Dialog {
         id: removeDialog

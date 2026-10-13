@@ -72,6 +72,15 @@ func (a *Application) journalPath() string { return filepath.Join(a.configDir, "
 func (a *Application) build() *generation {
 	ctx, cancel := context.WithCancel(context.Background())
 	g := &generation{ctx: ctx, cancel: cancel, libraries: library.NewManager()}
+	configured, err := library.NewConfiguredManager(a.cfg.CategoryDirectories)
+	if err != nil {
+		g.stateError = err.Error()
+		return g
+	}
+	g.libraries = configured
+	for _, dir := range a.cfg.DisabledCategories {
+		g.libraries.SetCategoryDisabled(dir, true)
+	}
 	if err := state.Recover(a.journalPath(), a.cfg.StateDirectory); err != nil {
 		g.stateError = err.Error()
 		return g

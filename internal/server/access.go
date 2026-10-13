@@ -26,11 +26,23 @@ func (r *Router) protectRoutes(next http.Handler) http.Handler {
 		}
 		path := req.URL.Path
 		for _, section := range []string{"gallery", "shortvideo", "text", "audio", "manga"} {
+			if strings.HasPrefix(path, "/api/media/"+section+"/") && !r.sectionEnabled(section) {
+				http.Error(w, "category disabled", http.StatusNotFound)
+				return
+			}
 			if strings.HasPrefix(path, "/api/media/"+section+"/") && !r.checkSectionAccess(w, req, section, auth.TargetAll) {
 				return
 			}
 		}
 		if (strings.HasPrefix(path, "/api/games/") || strings.HasPrefix(path, "/standalone_games/")) && !r.checkSectionAccess(w, req, "games", auth.TargetAll) {
+			return
+		}
+		if (strings.HasPrefix(path, "/api/games/") || strings.HasPrefix(path, "/standalone_games/")) && !r.sectionEnabled("games") {
+			http.Error(w, "category disabled", http.StatusNotFound)
+			return
+		}
+		if strings.HasPrefix(path, "/api/tools/shared/") && r.libMgr.IsCategoryDisabled("media_library/shared") {
+			http.Error(w, "category disabled", http.StatusNotFound)
 			return
 		}
 		if strings.HasPrefix(path, "/api/tasks/") || path == "/api/tools/webshell" || strings.HasPrefix(path, "/api/sc2/") {

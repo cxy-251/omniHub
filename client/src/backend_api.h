@@ -5,6 +5,7 @@
 #include <QNetworkRequest>
 #include <QVariantMap>
 #include <QVariantList>
+#include <QStringList>
 
 // BackendApi discovers the service through the user's protected local connection file.
 class BackendApi : public QObject {
@@ -18,6 +19,7 @@ class BackendApi : public QObject {
     Q_PROPERTY(QString libraryError READ libraryError NOTIFY librariesChanged)
     Q_PROPERTY(bool libraryBusy READ libraryBusy NOTIFY librariesChanged)
     Q_PROPERTY(QVariantMap migrationPreview READ migrationPreview NOTIFY librariesChanged)
+    Q_PROPERTY(QStringList categoryDirectories READ categoryDirectories NOTIFY categoryDirectoriesChanged)
 public:
     explicit BackendApi(QObject *parent = nullptr);
     bool hasAdmin() const { return m_hasAdmin; }
@@ -29,6 +31,7 @@ public:
     QString libraryError() const { return m_libraryError; }
     bool libraryBusy() const { return m_libraryBusy; }
     QVariantMap migrationPreview() const { return m_migrationPreview; }
+    QStringList categoryDirectories() const { return m_categoryDirectories; }
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void setupAdmin(const QString &username, const QString &password);
     // 管理入口使用本机保护凭证；busy 时拒绝重入，回复完成后释放请求对象。
@@ -39,10 +42,13 @@ public:
     Q_INVOKABLE void previewPrimary(const QString &id);
     Q_INVOKABLE void confirmPrimary();
     Q_INVOKABLE void cancelMigration();
+    // 保存启用分类，服务端会校验路径并保留停用分类的原文件。
+    Q_INVOKABLE void saveCategories(const QStringList &directories);
     static QNetworkRequest localRequest(const QString &path);
 signals:
     void statusChanged();
     void librariesChanged();
+    void categoryDirectoriesChanged();
 private:
     void consumeStatus(class QNetworkReply *reply);
     void libraryRequest(const QString &path, const QVariantMap &body, bool get = false, bool preview = false);
@@ -57,4 +63,5 @@ private:
     QString m_previewLibraryId;
     bool m_stateReady = false;
     bool m_libraryBusy = false;
+    QStringList m_categoryDirectories;
 };

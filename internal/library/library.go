@@ -123,6 +123,7 @@ type Manager struct {
 	libraries          map[string]*Library // key: library ID
 	primaryID          string
 	disabledCategories map[string]bool // 软停用分类相对目录（第 1.2.3 节）
+	skeletonDirs       []string
 }
 
 // NewManager 创建空的媒体库管理器实例，天然满足 0 库安全容错。
@@ -130,6 +131,7 @@ func NewManager() *Manager {
 	return &Manager{
 		libraries:          make(map[string]*Library),
 		disabledCategories: make(map[string]bool),
+		skeletonDirs:       append([]string{}, StandardDirs...),
 	}
 }
 
@@ -209,13 +211,7 @@ func EnsureMarker(rootPath string, defaultName string) (*Marker, error) {
 
 // EnsureSkeleton 依据统一规范为资源库补全骨架目录（遵循第 1.2.2 节）。
 func EnsureSkeleton(rootPath string) error {
-	for _, dir := range StandardDirs {
-		target := filepath.Join(rootPath, filepath.FromSlash(dir))
-		if err := os.MkdirAll(target, 0755); err != nil {
-			return fmt.Errorf("failed to create directory skeleton %s: %w", target, err)
-		}
-	}
-	return nil
+	return ensureDirectories(rootPath, StandardDirs)
 }
 
 // AddLibrary 挂载并校验一个物理资源库根目录。
@@ -271,7 +267,7 @@ func (m *Manager) MountKnownLibrary(rootPath string, isPrimary, readOnly bool, k
 			return nil, fmt.Errorf("failed to verify marker in %s: %w", cleanPath, err)
 		}
 		if !readOnly {
-			if err := EnsureSkeleton(cleanPath); err != nil {
+			if err := ensureDirectories(cleanPath, m.skeletonDirs); err != nil {
 				return nil, fmt.Errorf("failed to verify skeleton in %s: %w", cleanPath, err)
 			}
 		}
@@ -305,8 +301,7 @@ func (m *Manager) MountKnownLibrary(rootPath string, isPrimary, readOnly bool, k
 	if isPrimary || m.primaryID == "" {
 		// 若为主库，确保 .omni_data 目录存在（第 1.3.1 节）
 		if isOnline && !readOnly {
-			dataDir := filepath.Join(cleanPath, DataDirName)
-			if err := os.MkdirAll(dataDir, 0755); err != nil {
+			if err := ensureDirectories(cleanPath, []string{DataDirName}); err != nil {
 				return nil, fmt.Errorf("create primary state directory: %w", err)
 			}
 		}
@@ -396,7 +391,19 @@ func (m *Manager) IsCategoryDisabled(categoryRelPath string) bool {
 	defer m.mu.RUnlock()
 
 	normalized := filepath.ToSlash(filepath.Clean(categoryRelPath))
-	return m.disabledCategories[normalized]
+	return m.categoryDisabledLocked(normalized)
+}
+
+func (m *Manager) categoryDisabledLocked(dir string) bool {
+	if m.disabledCategories[dir] {
+		return true
+	}
+	for _, active := range m.skeletonDirs {
+		if active == dir {
+			return false
+		}
+	}
+	return true
 }
 
 // ResolvePath 将逻辑相对路径解析为具体的宿主机物理路径（第 1.1.4 节）。
@@ -497,7 +504,7 @@ func (m *Manager) ResolveCategoryPath(logicalPath string, allowedDirs ...string)
 	}
 	for _, dir := range allowedDirs {
 		dir = filepath.Clean(filepath.FromSlash(dir))
-		if m.disabledCategories[filepath.ToSlash(dir)] {
+		if m.categoryDisabledLocked(filepath.ToSlash(dir)) {
 			continue
 		}
 		if rel == dir || strings.HasPrefix(rel, dir+string(filepath.Separator)) {

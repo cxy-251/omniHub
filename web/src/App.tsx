@@ -24,6 +24,7 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [libraryRevision, setLibraryRevision] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -36,7 +37,7 @@ export default function App() {
       setLibrary(libraries.primary ? `主库：${libraries.primary.name}` : '尚未配置资源库');
     }).catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
-  }, []);
+  }, [libraryRevision]);
 
   const visible = modules.filter(m => m.id === 'media'
     ? sections.some(s => ['gallery', 'shortvideo', 'text', 'audio', 'manga'].includes(s))
@@ -73,7 +74,7 @@ export default function App() {
         {visible.map(m => <button key={m.id} className="rounded-lg border border-line bg-panel p-5 text-left transition-colors hover:border-primary focus-visible:outline-2 focus-visible:outline-primary" onClick={() => setActive(m.id)}><h3 className="mb-2 text-lg font-semibold">{m.title}</h3><p className="text-sm text-muted">{m.description}</p></button>)}
         {!status && !error ? <p role="status">正在连接服务…</p> : null}
       </section> : <Suspense fallback={<p role="status">正在加载模块…</p>}>
-        {active === 'libraries' ? <LibraryManager onChanged={name => setLibrary(name ? `主库：${name}` : '尚未配置主库')} /> : <ModulePage key={`${active}-${status?.user.id}`} id={active} sections={sections} />}
+        {active === 'libraries' ? <LibraryManager onChanged={name => { setLibrary(name ? `主库：${name}` : '尚未配置主库'); setLibraryRevision(value => value + 1); }} /> : <ModulePage key={`${active}-${status?.user.id}`} id={active} sections={sections} />}
       </Suspense>}
     </main>
   </div>;

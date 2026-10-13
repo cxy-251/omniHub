@@ -254,3 +254,39 @@ func TestReconfigurationUnblocksSlowRequestBody(t *testing.T) {
 	}
 	app.resumeWithFreshContext(app.current)
 }
+
+func TestCategoryConfigurationPersistsAndDisablesModuleRoutes(t *testing.T) {
+	app := newTestApplication(t)
+	root := t.TempDir()
+	if w := call(t, app, http.MethodPost, "/api/library/categories", map[string]any{"directories": []string{"media_library/audio", "media_library/custom"}}, true); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	if w := call(t, app, http.MethodPost, "/api/library/add", map[string]any{"path": root}, true); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "media_library", "custom")); err != nil {
+		t.Fatal("custom category not created")
+	}
+	if _, err := os.Stat(filepath.Join(root, "media_library", "gallery")); !os.IsNotExist(err) {
+		t.Fatal("default disabled category recreated")
+	}
+	if w := call(t, app, http.MethodGet, "/api/media/gallery/list", nil, true); w.Code != 404 {
+		t.Fatal("disabled gallery route not blocked")
+	}
+	if w := call(t, app, http.MethodPost, "/api/library/categories", map[string]any{"directories": []string{}}, true); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	loaded, err := config.Load()
+	if err != nil || loaded.CategoryDirectories == nil || len(loaded.CategoryDirectories) != 0 {
+		t.Fatal("empty configuration was not persisted")
+	}
+	if w := call(t, app, http.MethodPost, "/api/library/refresh", map[string]any{}, true); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "media_library", "custom")); err != nil {
+		t.Fatal("removed category deleted content container")
+	}
+	if !app.current.libraries.IsCategoryDisabled("media_library/custom") {
+		t.Fatal("custom disable history lost")
+	}
+}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from './api';
 
 type Library = { id: string; name: string; root_path: string; is_primary: boolean; is_online: boolean; read_only: boolean };
-type Snapshot = { libraries: Library[]; primary: Library | null; state_directory: string; state_ready: boolean; state_error: string };
+type Snapshot = { libraries: Library[]; primary: Library | null; state_directory: string; state_ready: boolean; state_error: string; category_directories: string[]; disabled_categories: string[] | null };
 type Preview = { confirmation_token: string; source: string; destination: string; message: string; expires_at: string };
 
 const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
@@ -15,6 +15,7 @@ export default function LibraryManager({ onChanged }: { onChanged: (name?: strin
   const [error, setError] = useState('');
   const [preview, setPreview] = useState<(Preview & { library_id: string })>();
   const [removing, setRemoving] = useState<Library>();
+  const [directories, setDirectories] = useState('');
   const lifetime = useRef<AbortController | null>(null);
   const changed = useRef(onChanged);
   changed.current = onChanged;
@@ -23,7 +24,7 @@ export default function LibraryManager({ onChanged }: { onChanged: (name?: strin
     const controller = new AbortController();
     lifetime.current = controller;
     api<Snapshot>('/api/library/manage', { signal: controller.signal }).then(next => {
-      if (!controller.signal.aborted) setSnapshot(next);
+      if (!controller.signal.aborted) { setSnapshot(next); setDirectories(next.category_directories.join('\n')); }
     }).catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
   }, []);
@@ -39,7 +40,7 @@ export default function LibraryManager({ onChanged }: { onChanged: (name?: strin
     finally { if (!signal?.aborted) setPending(false); }
   }
 
-  function update(next: Snapshot) { setSnapshot(next); changed.current(next.primary?.name); setPreview(undefined); setRemoving(undefined); }
+  function update(next: Snapshot) { setSnapshot(next); setDirectories(next.category_directories.join('\n')); changed.current(next.primary?.name); setPreview(undefined); setRemoving(undefined); }
   function add(event: FormEvent) {
     event.preventDefault();
     void perform<Snapshot>('/api/library/add', { path, read_only: readOnly }, next => { update(next); setPath(''); });
@@ -60,6 +61,13 @@ export default function LibraryManager({ onChanged }: { onChanged: (name?: strin
         <div className="flex gap-2"><button className={button} disabled={pending || !lib.is_online || lib.read_only || !snapshot.state_ready || snapshot.state_directory.replaceAll('\\', '/') === `${lib.root_path.replaceAll('\\', '/')}/.omni_data`} onClick={() => void perform<Preview>('/api/library/primary/preview', { library_id: lib.id }, next => { setPreview({ ...next, library_id: lib.id }); setRemoving(undefined); })}>设为主库</button><button className={button} disabled={pending} onClick={() => { setRemoving(lib); setPreview(undefined); }}>移除挂载</button></div></div>
       <p className="mt-2 break-all text-sm text-muted">{lib.root_path}</p>
     </article>)}</div>
+    <form className="space-y-3 rounded-lg border border-line bg-panel p-4" onSubmit={event => { event.preventDefault(); void perform<Snapshot>('/api/library/categories', { directories: directories.split('\n').map(dir => dir.trim()).filter(Boolean) }, update); }}>
+      <h3 className="font-semibold">启用的分类目录</h3>
+      <p className="text-sm text-muted">每行一个分类根目录，如 media_library/audio。新增分类在在线可写库中补建空目录；从清单移除分类会停止访问并保留文件，只读库不补建。空清单停用全部分类。</p>
+      <textarea className="min-h-48 w-full rounded-md border border-line bg-background p-3 font-mono text-sm" aria-label="分类目录清单" value={directories} onChange={event => setDirectories(event.target.value)} maxLength={10000} />
+      {snapshot?.disabled_categories?.length ? <p className="break-all text-sm text-muted">已停用：{snapshot.disabled_categories.join('、')}</p> : null}
+      <button className={button} disabled={pending || !snapshot}>保存分类配置</button>
+    </form>
     {preview ? <div role="dialog" aria-modal="false" aria-labelledby="migration-title" className="rounded-lg border border-primary bg-panel p-5">
       <h3 id="migration-title" className="font-semibold">确认迁移全局数据库</h3><p className="my-3 text-sm">{preview.message}</p><p className="break-all text-sm">从：{preview.source}<br />到：{preview.destination}</p>
       <div className="mt-4 flex gap-3"><button className={button} disabled={pending} onClick={() => void perform<Snapshot>('/api/library/primary/commit', { library_id: preview.library_id, confirmation_token: preview.confirmation_token }, update)}>确认迁移</button><button className={button} disabled={pending} onClick={() => setPreview(undefined)}>取消</button></div>

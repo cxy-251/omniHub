@@ -44,6 +44,10 @@ type Config struct {
 	// StateLibraryRoot/ID 固定承载账号状态的介质身份，即使移除其媒体挂载也保留。
 	StateLibraryRoot string `json:"state_library_root,omitempty"`
 	StateLibraryID   string `json:"state_library_id,omitempty"`
+	// CategoryDirectories 定义启用的分类目录；空列表停用所有分类，不删除内容。
+	CategoryDirectories []string `json:"category_directories"`
+	// DisabledCategories 保留已移除的自定义分类，供路径授权与重新启用使用。
+	DisabledCategories []string `json:"disabled_categories,omitempty"`
 }
 
 var saveMu sync.Mutex
@@ -113,8 +117,9 @@ func DefaultConfig() *Config {
 			Port: 8998,
 			Host: "0.0.0.0",
 		},
-		PrimaryLibrary: "",
-		Libraries:      []string{},
+		PrimaryLibrary:      "",
+		Libraries:           []string{},
+		CategoryDirectories: append([]string{}, library.StandardDirs...),
 	}
 }
 
@@ -164,6 +169,23 @@ func GetConfigFilePath() (string, error) {
 
 // Validate 执行防御性配置有效性校验。
 func (c *Config) Validate() error {
+	if err := library.ValidateCategories(c.CategoryDirectories); err != nil {
+		return err
+	}
+	if c.DisabledCategories != nil {
+		if err := library.ValidateCategories(c.DisabledCategories); err != nil {
+			return err
+		}
+	}
+	active := make(map[string]bool, len(c.CategoryDirectories))
+	for _, dir := range c.CategoryDirectories {
+		active[dir] = true
+	}
+	for _, dir := range c.DisabledCategories {
+		if active[dir] {
+			return errors.New("category cannot be active and disabled simultaneously")
+		}
+	}
 	if len(c.Libraries) > 128 || len(c.ReadOnlyLibraries) > 128 || len(c.LibraryIdentities) > 256 {
 		return errors.New("too many configured libraries")
 	}

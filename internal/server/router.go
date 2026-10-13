@@ -737,6 +737,14 @@ func (r *Router) handleTextList(w http.ResponseWriter, req *http.Request) {
 	validExts := map[string]bool{".txt": true, ".epub": true, ".md": true, ".rst": true}
 
 	for _, dir := range targetDirs {
+		category, err := filepath.Rel(primary.RootPath, dir)
+		if err != nil {
+			http.Error(w, "invalid text category", http.StatusInternalServerError)
+			return
+		}
+		if r.libMgr.IsCategoryDisabled(filepath.ToSlash(category)) {
+			continue
+		}
 		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err == nil && !info.IsDir() {
 				ext := strings.ToLower(filepath.Ext(info.Name()))
@@ -1031,7 +1039,13 @@ func (r *Router) handleGamesList(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+	visible := make([]*games.Game, 0, len(list))
+	for _, game := range list {
+		if !r.libMgr.IsCategoryDisabled("standalone_games/" + game.Category + "_games") {
+			visible = append(visible, game)
+		}
+	}
+	writeJSON(w, http.StatusOK, visible)
 }
 
 // --- 任务调试台 ---

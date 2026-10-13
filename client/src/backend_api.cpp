@@ -82,6 +82,11 @@ void BackendApi::libraryRequest(const QString &path, const QVariantMap &body, bo
                 m_previewLibraryId = body.value("library_id").toString();
             } else {
                 m_libraries = info.value("libraries").toArray().toVariantList();
+                const QStringList directories = info.value("category_directories").toVariant().toStringList();
+                if (directories != m_categoryDirectories) {
+                    m_categoryDirectories = directories;
+                    emit categoryDirectoriesChanged();
+                }
                 m_stateReady = info.value("state_ready").toBool();
                 m_stateDirectory = info.value("state_directory").toString();
                 m_libraryError = info.value("state_error").toString();
@@ -119,6 +124,10 @@ void BackendApi::cancelMigration() {
     m_migrationPreview.clear();
     m_previewLibraryId.clear();
     emit librariesChanged();
+}
+
+void BackendApi::saveCategories(const QStringList &directories) {
+    libraryRequest("/api/library/categories", {{"directories", directories}});
 }
 
 void BackendApi::setupAdmin(const QString &username, const QString &password) {

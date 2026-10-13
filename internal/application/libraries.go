@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"omnihub/internal/auth"
@@ -28,7 +29,7 @@ type confirmation struct {
 
 func isManagementPath(path string) bool {
 	switch path {
-	case "/api/library/manage", "/api/library/add", "/api/library/remove", "/api/library/refresh", "/api/library/primary/preview", "/api/library/primary/commit":
+	case "/api/library/manage", "/api/library/add", "/api/library/remove", "/api/library/refresh", "/api/library/categories", "/api/library/primary/preview", "/api/library/primary/commit":
 		return true
 	}
 	return false
@@ -100,7 +101,11 @@ func (a *Application) handleManagement(w http.ResponseWriter, req *http.Request)
 			return
 		}
 		// 验证标识但不把第一次新增库自动设为主库，初始化账号仍保留原位置。
-		probe := library.NewManager()
+		probe, err := library.NewConfiguredManager(a.cfg.CategoryDirectories)
+		if err != nil {
+			managementError(w, err)
+			return
+		}
 		lib, err := probe.MountLibrary(root, false, body.ReadOnly)
 		if err != nil {
 			managementError(w, err)
@@ -146,6 +151,43 @@ func (a *Application) handleManagement(w http.ResponseWriter, req *http.Request)
 		a.managementSnapshot(w)
 	case "/api/library/refresh":
 		if err := a.reconfigure(a.cfg); err != nil {
+			managementError(w, err)
+			return
+		}
+		a.managementSnapshot(w)
+	case "/api/library/categories":
+		var body struct {
+			Directories []string `json:"directories"`
+		}
+		if !decodeBody(w, req, &body) {
+			return
+		}
+		if err := library.ValidateCategories(body.Directories); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		next, err := cloneConfig(a.cfg)
+		if err != nil {
+			managementError(w, err)
+			return
+		}
+		active := make(map[string]bool, len(body.Directories))
+		for _, dir := range body.Directories {
+			active[dir] = true
+		}
+		disabled := make(map[string]bool)
+		for _, dir := range append(append([]string{}, a.cfg.DisabledCategories...), a.cfg.CategoryDirectories...) {
+			if !active[dir] {
+				disabled[dir] = true
+			}
+		}
+		next.CategoryDirectories = append([]string{}, body.Directories...)
+		next.DisabledCategories = nil
+		for dir := range disabled {
+			next.DisabledCategories = append(next.DisabledCategories, dir)
+		}
+		sort.Strings(next.DisabledCategories)
+		if err := a.reconfigure(next); err != nil {
 			managementError(w, err)
 			return
 		}
@@ -298,7 +340,7 @@ func (a *Application) resumeWithFreshContext(g *generation) {
 }
 
 func (a *Application) managementSnapshot(w http.ResponseWriter) {
-	respond(w, map[string]any{"libraries": a.current.libraries.ListLibraries(), "primary": a.current.libraries.GetPrimary(), "state_directory": a.cfg.StateDirectory, "state_ready": a.current.router != nil, "state_error": a.current.stateError})
+	respond(w, map[string]any{"libraries": a.current.libraries.ListLibraries(), "primary": a.current.libraries.GetPrimary(), "state_directory": a.cfg.StateDirectory, "state_ready": a.current.router != nil, "state_error": a.current.stateError, "category_directories": a.cfg.CategoryDirectories, "disabled_categories": a.cfg.DisabledCategories})
 }
 
 func samePath(a, b string) bool {

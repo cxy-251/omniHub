@@ -75,6 +75,10 @@ func (c *Config) CheckStateAvailability() error {
 		return errors.New("global state location not resolved")
 	}
 	if c.StateLibraryRoot != "" {
+		info, err := os.Lstat(c.StateDirectory)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("global state directory unavailable or symbolic link")
+		}
 		if c.IsLibraryReadOnly(c.StateLibraryRoot) {
 			return errors.New("global state medium is configured read-only; select a writable state location")
 		}
