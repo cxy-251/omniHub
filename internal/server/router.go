@@ -18,6 +18,7 @@ import (
 
 	"omnihub/internal/audio"
 	"omnihub/internal/auth"
+	"omnihub/internal/catalog"
 	"omnihub/internal/gallery"
 	"omnihub/internal/games"
 	"omnihub/internal/library"
@@ -42,6 +43,7 @@ type Router struct {
 	progressDB   *audio.ProgressDB
 	megaClient   *mega.Client
 	videoCatalog *shortvideo.VideoCatalog
+	textCatalog  *catalog.Catalog
 
 	// 专区数据库连接复用缓存（第 12.2 节避免高频请求重复 Open 与 Migrate）
 	dbMu      sync.RWMutex
@@ -78,6 +80,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		progressDB:   progDB,
 		megaClient:   mega.NewClient("", 5*time.Minute),
 		videoCatalog: shortvideo.NewVideoCatalog(),
+		textCatalog:  catalog.New(".txt", ".epub", ".md", ".rst"),
 	}
 	r.registerRoutes()
 	return r, nil
@@ -724,54 +727,7 @@ func (r *Router) handleTextList(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	primary := r.libMgr.GetPrimary()
-	if primary == nil {
-		writeJSON(w, http.StatusOK, []interface{}{})
-		return
-	}
-
-	type TextItem struct {
-		Name    string `json:"name"`
-		RelPath string `json:"rel_path"`
-		Ext     string `json:"ext"`
-		Size    int64  `json:"size"`
-	}
-
-	var items []TextItem
-	targetDirs := []string{
-		filepath.Join(primary.RootPath, "media_library", "novels"),
-		filepath.Join(primary.RootPath, "media_library", "docs"),
-	}
-
-	validExts := map[string]bool{".txt": true, ".epub": true, ".md": true, ".rst": true}
-
-	for _, dir := range targetDirs {
-		category, err := filepath.Rel(primary.RootPath, dir)
-		if err != nil {
-			http.Error(w, "invalid text category", http.StatusInternalServerError)
-			return
-		}
-		if r.libMgr.IsCategoryDisabled(filepath.ToSlash(category)) {
-			continue
-		}
-		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-			if err == nil && !info.IsDir() {
-				ext := strings.ToLower(filepath.Ext(info.Name()))
-				if validExts[ext] {
-					rel, _ := filepath.Rel(primary.RootPath, path)
-					items = append(items, TextItem{
-						Name:    info.Name(),
-						RelPath: rel,
-						Ext:     ext,
-						Size:    info.Size(),
-					})
-				}
-			}
-			return nil
-		})
-	}
-
-	writeJSON(w, http.StatusOK, items)
+	r.listTextLibraries(w, req)
 }
 
 func (r *Router) handleTextChunk(w http.ResponseWriter, req *http.Request) {

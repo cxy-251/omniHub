@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"omnihub/internal/library"
 	"omnihub/internal/manga"
 )
 
@@ -43,53 +44,42 @@ type mangaItem struct {
 	LogicalPath string `json:"logical_path"`
 }
 
+func (r *Router) queryLibraries(w http.ResponseWriter, req *http.Request) ([]*library.Library, bool) {
+	all := r.libMgr.ListLibraries()
+	requested := req.URL.Query().Get("library_id")
+	selected := make([]*library.Library, 0, len(all))
+	for _, lib := range all {
+		if requested != "" && requested != lib.ID {
+			continue
+		}
+		if !lib.IsOnline {
+			if requested != "" {
+				http.Error(w, "library offline", 503)
+				return nil, false
+			}
+			continue
+		}
+		selected = append(selected, lib)
+	}
+	if requested != "" && len(selected) == 0 {
+		http.Error(w, "library not found", 404)
+		return nil, false
+	}
+	return selected, true
+}
+
 func (r *Router) listMangaLibraries(w http.ResponseWriter, req *http.Request) {
-	limit, offset := 100, 0
-	var err error
-	if raw := req.URL.Query().Get("limit"); raw != "" {
-		limit, err = strconv.Atoi(raw)
-		if err != nil {
-			http.Error(w, "invalid limit", 400)
-			return
-		}
-	}
-	if raw := req.URL.Query().Get("offset"); raw != "" {
-		offset, err = strconv.Atoi(raw)
-		if err != nil {
-			http.Error(w, "invalid offset", 400)
-			return
-		}
-	}
-	if limit < 1 || limit > 100 || offset < 0 || offset > 1000000 {
+	limit, offset, err := pageBounds(req)
+	if err != nil {
 		http.Error(w, "invalid page bounds", 400)
 		return
 	}
 	items := make([]mangaItem, 0, limit+1)
-	libraries := r.libMgr.ListLibraries()
-	if requested := req.URL.Query().Get("library_id"); requested != "" {
-		found := false
-		for _, lib := range libraries {
-			if lib.ID == requested {
-				found = true
-				if !lib.IsOnline {
-					http.Error(w, "library offline", 503)
-					return
-				}
-				break
-			}
-		}
-		if !found {
-			http.Error(w, "library not found", 404)
-			return
-		}
+	libraries, ok := r.queryLibraries(w, req)
+	if !ok {
+		return
 	}
 	for _, lib := range libraries {
-		if !lib.IsOnline {
-			continue
-		}
-		if id := req.URL.Query().Get("library_id"); id != "" && id != lib.ID {
-			continue
-		}
 		dir, err := r.moduleDirectory(lib.RootPath, "media_library/manga", "manga.db")
 		if err != nil {
 			http.Error(w, "manga storage boundary invalid", 503)

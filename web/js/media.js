@@ -503,24 +503,31 @@ const MediaHub = {
     }
   },
 
-  async loadTextList() {
+  async loadTextList(offset = 0) {
     const listEl = document.getElementById('text-file-list');
     if (!listEl) return;
     try {
-      const res = await fetch('/api/media/text/list');
+      const res = await fetch('/api/media/text/list?limit=100&offset=' + offset);
+      const hasMore = res.headers.get('X-Has-More') === 'true';
       const items = await res.json();
       if (!Array.isArray(items) || items.length === 0) {
         listEl.innerHTML = '<div style="color:var(--text-muted)">暂无可用文本</div>';
         return;
       }
-      listEl.innerHTML = items.map(item => `
-        <div style="cursor:pointer; padding:6px 8px; border-radius:4px; background:var(--background); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" onclick="MediaHub.selectTextFile('${item.rel_path}')" title="${item.rel_path}">
-          📄 ${item.name}
-        </div>
-      `).join('');
+      listEl.replaceChildren();
+      for (const item of items) {
+        const button = document.createElement('button'); button.className = 'btn-primary';
+        button.textContent = `${item.name} · ${item.library_name}`; button.title = item.rel_path;
+        button.addEventListener('click', () => this.selectTextFile(item.rel_path)); listEl.append(button);
+      }
+      for (const [label, next, show] of [['上一页', Math.max(0, offset - 100), offset > 0], ['下一页', offset + 100, hasMore]]) {
+        if (!show) continue;
+        const button = document.createElement('button'); button.textContent = label; button.className = 'btn-primary';
+        button.addEventListener('click', () => this.loadTextList(next)); listEl.append(button);
+      }
     } catch (e) {
  if (e.name === 'AbortError') return;
-      listEl.innerHTML = `<div style="color:var(--danger)">加载失败: ${e.message}</div>`;
+      listEl.textContent = `加载失败: ${e.message}`;
     }
   },
 
