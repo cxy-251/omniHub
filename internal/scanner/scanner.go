@@ -110,6 +110,8 @@ func ScanManga(mangaDir string) (int, error) {
 	}
 	defer db.Close()
 
+	existing, _ := db.GetExistingIDs()
+
 	entries, err := os.ReadDir(mangaDir)
 	if err != nil {
 		return 0, err
@@ -118,6 +120,11 @@ func ScanManga(mangaDir string) (int, error) {
 	count := 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".cbz") {
+			continue
+		}
+
+		stem := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		if existing != nil && existing[stem] {
 			continue
 		}
 

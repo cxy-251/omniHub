@@ -187,3 +187,21 @@ func (d *DB) ListMangas() ([]*Manga, error) {
 	return list, rows.Err()
 }
 
+// GetExistingIDs 获取数据库中所有已索引的漫画 ID。
+func (d *DB) GetExistingIDs() (map[string]bool, error) {
+	rows, err := d.db.Query("SELECT id FROM mangas")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	res := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			res[id] = true
+		}
+	}
+	return res, rows.Err()
+}
+
