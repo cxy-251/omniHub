@@ -91,6 +91,10 @@ func TestBootstrapMigrationCopiesOnlyGlobalState(t *testing.T) {
 	if err := positions.SaveManga(context.Background(), &manga.MangaProgress{UserID: 1, MangaID: key, PageIndex: 5, ScrollOffsetRatio: 0.8}); err != nil {
 		t.Fatal(err)
 	}
+	textKey := "library:media_library/docs/book.epub"
+	if err := positions.SaveText(context.Background(), &userstate.TextPosition{UserID: 1, DocumentID: textKey, StartLine: 1, ChapterIndex: 5, FileVersion: "original"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := positions.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +114,10 @@ func TestBootstrapMigrationCopiesOnlyGlobalState(t *testing.T) {
 	p, err := copied.Manga(context.Background(), 1, key)
 	if err != nil || p == nil || p.ScrollOffsetRatio != 0.8 {
 		t.Fatal("user reading state not migrated")
+	}
+	textPosition, err := copied.Text(context.Background(), 1, textKey)
+	if err != nil || textPosition == nil || textPosition.ChapterIndex != 5 {
+		t.Fatal("text reading state not migrated")
 	}
 	if _, err := os.Stat(filepath.Join(destination, "config.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("copied application configuration into global state")

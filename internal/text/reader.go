@@ -25,11 +25,12 @@ var SupportedExtensions = map[string]bool{
 
 // ChunkResult 包含大文本分块切片结果。
 type ChunkResult struct {
-	Lines      []string `json:"lines"`
-	StartLine  int      `json:"start_line"`
-	TotalLines int      `json:"total_lines"`
-	HasMore    bool     `json:"has_more"`
-	NextOffset int64    `json:"next_offset"`
+	Lines       []string `json:"lines"`
+	StartLine   int      `json:"start_line"`
+	TotalLines  int      `json:"total_lines"`
+	HasMore     bool     `json:"has_more"`
+	NextOffset  int64    `json:"next_offset"`
+	StartOffset int64    `json:"start_offset"`
 }
 
 // ErrBounds reports invalid line, byte offset or page size parameters.
@@ -96,6 +97,7 @@ func ReadTextChunkContext(ctx context.Context, filePath string, startLine, limit
 	}
 	reader := bufio.NewReaderSize(file, 32<<10)
 	lines := make([]string, 0, limit)
+	startOffset := position
 	bytes := 0
 	for len(lines) < limit {
 		if err := ctx.Err(); err != nil {
@@ -108,10 +110,13 @@ func ReadTextChunkContext(ctx context.Context, filePath string, startLine, limit
 		if len(line) == 0 && errors.Is(err, io.EOF) {
 			break
 		}
+		if currentLine == startLine-1 {
+			startOffset = position
+		}
 		// Roll back the last line if it would overflow this page's byte budget.
 		// The client can request that line directly using NextOffset.
 		if currentLine >= startLine-1 && bytes+len(line) > maxChunkBytes {
-			return &ChunkResult{Lines: lines, StartLine: startLine, TotalLines: -1, HasMore: true, NextOffset: position}, nil
+			return &ChunkResult{Lines: lines, StartLine: startLine, TotalLines: -1, HasMore: true, NextOffset: position, StartOffset: startOffset}, nil
 		}
 		position += int64(len(line))
 		currentLine++
@@ -133,11 +138,12 @@ func ReadTextChunkContext(ctx context.Context, filePath string, startLine, limit
 		total = currentLine
 	}
 	return &ChunkResult{
-		Lines:      lines,
-		StartLine:  startLine,
-		TotalLines: total,
-		HasMore:    more,
-		NextOffset: position,
+		Lines:       lines,
+		StartLine:   startLine,
+		TotalLines:  total,
+		HasMore:     more,
+		NextOffset:  position,
+		StartOffset: startOffset,
 	}, nil
 }
 

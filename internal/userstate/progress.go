@@ -33,6 +33,12 @@ func Open(path string) (*DB, error) {
 		scroll_offset_ratio REAL NOT NULL,
 		updated_at TEXT NOT NULL,
 		PRIMARY KEY(user_id,manga_id)
+	);
+	CREATE TABLE IF NOT EXISTS text_progress (
+		user_id INTEGER NOT NULL, document_id TEXT NOT NULL,
+		start_line INTEGER NOT NULL, byte_offset INTEGER NOT NULL,
+		chapter_index INTEGER NOT NULL, file_version TEXT NOT NULL,
+		updated_at TEXT NOT NULL, PRIMARY KEY(user_id,document_id)
 	)`)
 	if err != nil {
 		return nil, errors.Join(err, db.Close())

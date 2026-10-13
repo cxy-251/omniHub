@@ -36,6 +36,9 @@ func TestReadTextChunk(t *testing.T) {
 	if !res.HasMore {
 		t.Error("expected has_more to be true")
 	}
+	if res.StartOffset != 7 {
+		t.Fatal("line-based fallback did not return physical page start")
+	}
 	next, err := ReadTextChunkContext(context.Background(), txtPath, 5, 3, res.NextOffset)
 	if err != nil || len(next.Lines) != 1 || next.Lines[0] != "Line 5" || next.TotalLines != 5 || next.HasMore {
 		t.Fatalf("cursor did not resume at final line: %+v, %v", next, err)

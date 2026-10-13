@@ -271,6 +271,7 @@ func (r *Router) registerRoutes() {
 
 	// 文本业务接口
 	r.mux.HandleFunc("/api/media/text/list", r.handleTextList)
+	r.mux.HandleFunc("/api/media/text/progress", r.handleTextProgress)
 	r.mux.HandleFunc("/api/media/text/chunk", r.handleTextChunk)
 	r.mux.HandleFunc("/api/media/text/epub", r.handleTextEpub)
 	r.mux.HandleFunc("/api/media/text/epub/book", r.handleEpubBook)
