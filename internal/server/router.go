@@ -33,14 +33,15 @@ import (
 
 // Router 负责 HTTP 请求的统一路由分发与鉴权控制。
 type Router struct {
-	mux        *http.ServeMux
-	libMgr     *library.Manager
-	authDB     *auth.DB
-	authMid    *auth.Middleware
-	clipboard  *tools.ClipboardManager
-	taskMgr    *tasks.Manager
-	progressDB *audio.ProgressDB
-	megaClient *mega.Client
+	mux          *http.ServeMux
+	libMgr       *library.Manager
+	authDB       *auth.DB
+	authMid      *auth.Middleware
+	clipboard    *tools.ClipboardManager
+	taskMgr      *tasks.Manager
+	progressDB   *audio.ProgressDB
+	megaClient   *mega.Client
+	videoCatalog *shortvideo.VideoCatalog
 
 	// 专区数据库连接复用缓存（第 12.2 节避免高频请求重复 Open 与 Migrate）
 	dbMu      sync.RWMutex
@@ -64,18 +65,19 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 	}
 
 	r := &Router{
-		mux:        http.NewServeMux(),
-		metaDB:     make(map[string]*gallery.MetaDB),
-		svStorage:  make(map[string]*shortvideo.Storage),
-		mangaDB:    make(map[string]*manga.DB),
-		gamesDB:    make(map[string]*games.DB),
-		libMgr:     libMgr,
-		authDB:     authDB,
-		authMid:    auth.NewMiddleware(authDB, localToken),
-		clipboard:  tools.NewClipboardManager(50),
-		taskMgr:    tasks.NewManager(),
-		progressDB: progDB,
-		megaClient: mega.NewClient("", 5*time.Minute),
+		mux:          http.NewServeMux(),
+		metaDB:       make(map[string]*gallery.MetaDB),
+		svStorage:    make(map[string]*shortvideo.Storage),
+		mangaDB:      make(map[string]*manga.DB),
+		gamesDB:      make(map[string]*games.DB),
+		libMgr:       libMgr,
+		authDB:       authDB,
+		authMid:      auth.NewMiddleware(authDB, localToken),
+		clipboard:    tools.NewClipboardManager(50),
+		taskMgr:      tasks.NewManager(),
+		progressDB:   progDB,
+		megaClient:   mega.NewClient("", 5*time.Minute),
+		videoCatalog: shortvideo.NewVideoCatalog(),
 	}
 	r.registerRoutes()
 	return r, nil
@@ -671,23 +673,35 @@ func (r *Router) handleShortVideoRandom(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	var mp4Files []string
-	_ = filepath.Walk(channelDir, func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".mp4") {
-			rel, _ := filepath.Rel(primary.RootPath, path)
-			mp4Files = append(mp4Files, rel)
+	var logicalPath string
+	for attempt := 0; attempt < 2; attempt++ {
+		video, err := r.videoCatalog.Random(req.Context(), channelDir)
+		if errors.Is(err, shortvideo.ErrNoVideos) {
+			http.Error(w, "no videos in channel", http.StatusNotFound)
+			return
 		}
-		return nil
-	})
-
-	if len(mp4Files) == 0 {
-		http.Error(w, "no videos in channel", http.StatusNotFound)
+		if err != nil {
+			http.Error(w, "video catalog unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		logicalPath = primary.ID + ":media_library/shortvideo/" + filepath.ToSlash(filepath.Join(channel, video))
+		// 缓存只保存目录索引；发送路径前重新校验被选文件，拒绝替换后的越界链接。
+		resolved, err := r.libMgr.ResolveCategoryPath(logicalPath, "media_library/shortvideo")
+		if err == nil {
+			info, statErr := os.Stat(resolved)
+			if statErr == nil && info.Mode().IsRegular() {
+				break
+			}
+		}
+		r.videoCatalog.Invalidate(channelDir)
+		logicalPath = ""
+	}
+	if logicalPath == "" {
+		http.Error(w, "video channel changed; retry", http.StatusServiceUnavailable)
 		return
 	}
-
-	idx := time.Now().UnixNano() % int64(len(mp4Files))
 	writeJSON(w, http.StatusOK, map[string]string{
-		"path": fmt.Sprintf("%s:%s", primary.ID, mp4Files[idx]),
+		"path": logicalPath,
 	})
 }
 
