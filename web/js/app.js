@@ -30,6 +30,9 @@ const Omni = {
     document.querySelectorAll('.tab-pane').forEach(p => {
       p.classList.toggle('active', p.id === `pane-${tabId}`);
     });
+    if (tabId !== 'media' && window.MediaHub && window.MediaHub.pauseMatrixVideos) {
+      window.MediaHub.pauseMatrixVideos();
+    }
     if (tabId === 'media' && window.MediaHub && window.MediaHub.activate) window.MediaHub.activate();
     if (tabId === 'games' && window.GamesHub && window.GamesHub.activate) window.GamesHub.activate();
     if (tabId === 'tools' && window.ToolsHub && window.ToolsHub.activate) window.ToolsHub.activate();

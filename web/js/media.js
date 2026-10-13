@@ -200,6 +200,9 @@ const MediaHub = {
   },
 
   switchSubtab(subId) {
+    if (this.currentSubtab === 'shortvideo' && subId !== 'shortvideo') {
+      this.pauseMatrixVideos();
+    }
     this.currentSubtab = subId;
     document.querySelectorAll('.media-subnav button').forEach(b => {
       b.classList.toggle('active', b.getAttribute('data-sub') === subId);
@@ -209,6 +212,13 @@ const MediaHub = {
     });
     if (subId === 'gallery') this.loadGallery(true);
     if (subId === 'shortvideo') this.initMatrix();
+  },
+
+  pauseMatrixVideos() {
+    const container = document.getElementById('matrix-slots-container');
+    if (container) {
+      container.querySelectorAll('video').forEach(v => v.pause());
+    }
   },
 
   // --- 短视频多联放映矩阵实现 (第 11.1 节) ---
