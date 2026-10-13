@@ -56,7 +56,8 @@ func main() {
 				time.Sleep(3 * time.Second) // 延迟启动，优先保证前端初始化响应
 				gCount, _ := scanner.ScanGames(filepath.Join(root, "standalone_games"))
 				mCount, _ := scanner.ScanManga(filepath.Join(root, "media_library", "manga"))
-				log.Printf("Read-only scan complete: %d games, %d mangas indexed", gCount, mCount)
+				svCount, _ := scanner.ScanShortVideos(filepath.Join(root, "media_library", "shortvideo"), true)
+				log.Printf("Read-only scan complete: %d games, %d mangas, %d shortvideos indexed", gCount, mCount, svCount)
 			}(cfg.PrimaryLibrary)
 		}
 	}
