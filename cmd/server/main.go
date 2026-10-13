@@ -53,6 +53,7 @@ func main() {
 			log.Printf("Warning: failed to mount primary library %s: %v", cfg.PrimaryLibrary, err)
 		} else {
 			go func(root string) {
+				time.Sleep(3 * time.Second) // 延迟启动，优先保证前端初始化响应
 				gCount, _ := scanner.ScanGames(filepath.Join(root, "standalone_games"))
 				mCount, _ := scanner.ScanManga(filepath.Join(root, "media_library", "manga"))
 				log.Printf("Read-only scan complete: %d games, %d mangas indexed", gCount, mCount)

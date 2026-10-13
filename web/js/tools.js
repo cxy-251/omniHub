@@ -1,8 +1,14 @@
 // omniHub 局域网小工具交互逻辑
 const ToolsHub = {
+  initialized: false,
   init() {
     this.renderContainer();
     this.bindEvents();
+  },
+
+  activate() {
+    if (this.initialized) return;
+    this.initialized = true;
     this.loadClipboard();
     this.loadMetrics();
     this.loadSharedFiles();

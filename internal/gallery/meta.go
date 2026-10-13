@@ -194,8 +194,15 @@ func (m *MetaDB) GetPhoto(photoID string) (*Photo, error) {
 	return &p, nil
 }
 
-// ListPhotos 列出所有照片（支持是否包含软删除）。
-func (m *MetaDB) ListPhotos(includeDeleted bool) ([]*Photo, error) {
+// ListPhotos 按分页列出照片（支持软删除过滤、limit与offset分页）。
+func (m *MetaDB) ListPhotos(includeDeleted bool, limit, offset int) ([]*Photo, error) {
+	if limit <= 0 {
+		limit = 48
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
 	query := `
 		SELECT id, filename, size_bytes, mime_type, width, height,
 		       volume, color_family, color_hex, is_favorite, created_at, deleted_at
@@ -204,9 +211,9 @@ func (m *MetaDB) ListPhotos(includeDeleted bool) ([]*Photo, error) {
 	if !includeDeleted {
 		query += " WHERE deleted_at IS NULL"
 	}
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
 
-	rows, err := m.db.Query(query)
+	rows, err := m.db.Query(query, limit, offset)
 	if err != nil {
 		return nil, err
 	}

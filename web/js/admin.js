@@ -12,8 +12,14 @@ const AdminHub = {
     { id: 'admin', name: '⚙️ 权限管理后台' }
   ],
 
+  initialized: false,
   init() {
     this.renderContainer();
+  },
+
+  activate() {
+    if (this.initialized) return;
+    this.initialized = true;
     this.loadPermissions();
     this.loadUsers();
   },

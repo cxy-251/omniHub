@@ -104,4 +104,13 @@ func TestGalleryVolumeAndMetadata(t *testing.T) {
 	if p.DeletedAt != nil {
 		t.Error("expected nil deleted_at after restore")
 	}
+
+	// 7. 测试分页查询
+	photos, err := meta.ListPhotos(false, 10, 0)
+	if err != nil {
+		t.Fatalf("ListPhotos failed: %v", err)
+	}
+	if len(photos) != 1 {
+		t.Errorf("expected 1 photo from pagination, got %d", len(photos))
+	}
 }

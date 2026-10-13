@@ -203,7 +203,9 @@ func (r *Router) handleGalleryList(w http.ResponseWriter, req *http.Request) {
 	defer metaDB.Close()
 
 	incDeleted := req.URL.Query().Get("include_deleted") == "1"
-	photos, err := metaDB.ListPhotos(incDeleted)
+	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(req.URL.Query().Get("offset"))
+	photos, err := metaDB.ListPhotos(incDeleted, limit, offset)
 	if err != nil {
 		writeJSON(w, http.StatusOK, []interface{}{})
 		return

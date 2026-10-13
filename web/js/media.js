@@ -7,11 +7,24 @@ const MediaHub = {
   mangaScrollTimer: null,
   currentMangaId: '',
 
+  galleryState: {
+    offset: 0,
+    limit: 48,
+    hasMore: true,
+    isLoading: false,
+    initialized: false
+  },
+
   init() {
     this.renderContainer();
     this.bindEvents();
     this.initAudioBar();
-    this.switchSubtab('gallery');
+  },
+
+  activate() {
+    if (this.currentSubtab === 'gallery' && !this.galleryState.initialized) {
+      this.loadGallery(true);
+    }
   },
 
   renderContainer() {
@@ -190,25 +203,45 @@ const MediaHub = {
     document.querySelectorAll('.media-subpane').forEach(p => {
       p.classList.toggle('active', p.id === `subpane-${subId}`);
     });
-    if (subId === 'gallery') this.loadGallery();
+    if (subId === 'gallery') this.loadGallery(true);
   },
 
-  // --- 画廊实现 ---
-  async loadGallery() {
+  // --- 画廊实现 (严格 48 张分页与追加加载) ---
+  async loadGallery(reset = false) {
     const listEl = document.getElementById('gallery-list');
     if (!listEl) return;
-    listEl.innerHTML = '<div style="color:var(--text-muted)">加载相册中…</div>';
+
+    if (reset) {
+      this.galleryState.offset = 0;
+      this.galleryState.hasMore = true;
+      this.galleryState.initialized = true;
+      listEl.innerHTML = '';
+      this.bindGalleryScroll();
+    }
+
+    if (this.galleryState.isLoading || !this.galleryState.hasMore) return;
+    this.galleryState.isLoading = true;
 
     const incTrash = document.getElementById('gallery-include-trash')?.checked ? '1' : '0';
     try {
-      const res = await fetch(`/api/media/gallery/list?include_deleted=${incTrash}`);
+      const res = await fetch(`/api/media/gallery/list?include_deleted=${incTrash}&limit=${this.galleryState.limit}&offset=${this.galleryState.offset}`);
       const photos = await res.json();
+      this.galleryState.isLoading = false;
+
       if (!Array.isArray(photos) || photos.length === 0) {
-        listEl.innerHTML = '<div style="color:var(--text-muted)">相册暂无照片</div>';
+        this.galleryState.hasMore = false;
+        if (this.galleryState.offset === 0) {
+          listEl.innerHTML = '<div style="color:var(--text-muted)">相册暂无照片</div>';
+        }
         return;
       }
 
-      listEl.innerHTML = photos.map(p => `
+      this.galleryState.offset += photos.length;
+      if (photos.length < this.galleryState.limit) {
+        this.galleryState.hasMore = false;
+      }
+
+      const html = photos.map(p => `
         <div class="gallery-item" onclick="MediaHub.viewOriginal('${p.id}', '${p.volume}')">
           <img src="/api/media/gallery/thumbnail?id=${p.id}" loading="lazy" alt="${p.filename}">
           <div class="overlay-info">
@@ -217,9 +250,24 @@ const MediaHub = {
           </div>
         </div>
       `).join('');
+      listEl.insertAdjacentHTML('beforeend', html);
     } catch (e) {
-      listEl.innerHTML = `<div style="color:var(--danger)">加载失败: ${e.message}</div>`;
+      this.galleryState.isLoading = false;
+      if (this.galleryState.offset === 0) {
+        listEl.innerHTML = `<div style="color:var(--danger)">加载失败: ${e.message}</div>`;
+      }
     }
+  },
+
+  bindGalleryScroll() {
+    if (this.scrollBound) return;
+    this.scrollBound = true;
+    window.addEventListener('scroll', () => {
+      if (this.currentSubtab !== 'gallery') return;
+      if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
+        this.loadGallery(false);
+      }
+    });
   },
 
   viewOriginal(id, vol) {
