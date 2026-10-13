@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +23,26 @@ const LibraryMarkerFile = "omnilibrary.json"
 
 // DataDirName 是主媒体库根目录下存放系统数据库与状态的隐藏目录名。
 const DataDirName = ".omni_data"
+
+// SameRoot 比较规范化资源库路径，Windows 上按不区分大小写的宿主路径语义处理。
+// 不访问磁盘，因此可用于离线库与只读权限查询。
+func SameRoot(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	left, err := filepath.Abs(a)
+	if err != nil {
+		return false
+	}
+	right, err := filepath.Abs(b)
+	if err != nil {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
 
 // StandardDirs 定义统一的资源库骨架子目录清单。
 var StandardDirs = []string{
@@ -55,6 +77,30 @@ type Marker struct {
 	Name string `json:"name"`
 }
 
+// ReadMarker 有界读取并验证物理库标识，拒绝超大文件与逻辑路径分隔符。
+func ReadMarker(root string) (marker *Marker, result error) {
+	f, err := os.Open(filepath.Join(root, LibraryMarkerFile))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { result = errors.Join(result, f.Close()) }()
+	data, err := io.ReadAll(io.LimitReader(f, (64<<10)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 64<<10 {
+		return nil, errors.New("library marker exceeds size limit")
+	}
+	var m Marker
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("invalid library marker: %w", err)
+	}
+	if m.ID == "" || len(m.ID) > 128 || strings.ContainsAny(m.ID, "/\\:\x00") || len(m.Name) > 256 {
+		return nil, errors.New("invalid library identity or name")
+	}
+	return &m, nil
+}
+
 // Library 表示已加载的单个物理资源库实例。
 type Library struct {
 	// ID 是从标识文件中读取的 UUID。
@@ -87,6 +133,21 @@ func NewManager() *Manager {
 	}
 }
 
+// SetPrimary 设置已挂载库的主库标记；空标识清除主库，不迁移或修改磁盘状态。
+// 仅供已经完成全局状态迁移的生命周期控制器调用。
+func (m *Manager) SetPrimary(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if id != "" && m.libraries[id] == nil {
+		return errors.New("primary library is not mounted")
+	}
+	m.primaryID = id
+	for _, lib := range m.libraries {
+		lib.IsPrimary = lib.ID == id
+	}
+	return nil
+}
+
 // generateUUID 生成 16 字节十六进制随机字符串作为资源库唯一标识。
 func generateUUID() (string, error) {
 	b := make([]byte, 16)
@@ -99,16 +160,9 @@ func generateUUID() (string, error) {
 // EnsureMarker 检查并确保指定根目录下存在物理标识文件，不存在则自动生成。
 func EnsureMarker(rootPath string, defaultName string) (*Marker, error) {
 	markerPath := filepath.Join(rootPath, LibraryMarkerFile)
-	data, err := os.ReadFile(markerPath)
+	m, err := ReadMarker(rootPath)
 	if err == nil {
-		var m Marker
-		if err := json.Unmarshal(data, &m); err != nil {
-			return nil, fmt.Errorf("invalid library marker: %w", err)
-		}
-		if m.ID == "" {
-			return nil, errors.New("library marker has empty ID")
-		}
-		return &m, nil
+		return m, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("failed to read library marker: %w", err)
@@ -122,7 +176,7 @@ func EnsureMarker(rootPath string, defaultName string) (*Marker, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &Marker{
+	m = &Marker{
 		ID:   id,
 		Name: defaultName,
 	}
@@ -135,12 +189,16 @@ func EnsureMarker(rootPath string, defaultName string) (*Marker, error) {
 	// 独占创建，避免并发挂载覆盖另一进程刚生成的稳定标识。
 	f, err := os.OpenFile(markerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if errors.Is(err, os.ErrExist) {
-		return EnsureMarker(rootPath, defaultName)
+		// 已有标识可能是悬空链接或其他进程正在写入，绝不递归生成新 ID。
+		return ReadMarker(rootPath)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to write library marker: %w", err)
 	}
 	_, writeErr := f.Write(raw)
+	if writeErr == nil {
+		writeErr = f.Sync()
+	}
 	closeErr := f.Close()
 	if err := errors.Join(writeErr, closeErr); err != nil {
 		return nil, fmt.Errorf("failed to persist library marker: %w", err)
@@ -195,13 +253,9 @@ func (m *Manager) MountKnownLibrary(rootPath string, isPrimary, readOnly bool, k
 	var marker *Marker
 	if isOnline {
 		if known != nil && known.ID != "" {
-			data, err := os.ReadFile(filepath.Join(cleanPath, LibraryMarkerFile))
+			current, err := ReadMarker(cleanPath)
 			if err != nil {
 				return nil, fmt.Errorf("read known library identity: %w", err)
-			}
-			var current Marker
-			if err := json.Unmarshal(data, &current); err != nil {
-				return nil, fmt.Errorf("parse known library identity: %w", err)
 			}
 			if current.ID != known.ID {
 				return nil, errors.New("mounted medium does not match configured library identity")
@@ -209,15 +263,7 @@ func (m *Manager) MountKnownLibrary(rootPath string, isPrimary, readOnly bool, k
 		}
 		// 在线状态下确保标识文件与骨架存在
 		if readOnly {
-			var data []byte
-			data, err = os.ReadFile(filepath.Join(cleanPath, LibraryMarkerFile))
-			if err == nil {
-				marker = &Marker{}
-				err = json.Unmarshal(data, marker)
-				if err == nil && marker.ID == "" {
-					err = errors.New("library marker has empty ID")
-				}
-			}
+			marker, err = ReadMarker(cleanPath)
 		} else {
 			marker, err = EnsureMarker(cleanPath, "")
 		}
@@ -253,7 +299,7 @@ func (m *Manager) MountKnownLibrary(rootPath string, isPrimary, readOnly bool, k
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if existing := m.libraries[lib.ID]; existing != nil && existing.RootPath != cleanPath {
+	if existing := m.libraries[lib.ID]; existing != nil && !SameRoot(existing.RootPath, cleanPath) {
 		return nil, errors.New("library ID already mounted at another root")
 	}
 	if isPrimary || m.primaryID == "" {
@@ -324,7 +370,7 @@ func (m *Manager) IsReadOnly(root string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, lib := range m.libraries {
-		if filepath.Clean(lib.RootPath) == filepath.Clean(root) {
+		if SameRoot(lib.RootPath, root) {
 			return lib.ReadOnly
 		}
 	}

@@ -18,10 +18,8 @@ func (c *Config) ResolveStateDirectory(configDir string, primary *library.Librar
 			return "", false, errors.New("global state location must be absolute")
 		}
 		path = filepath.Clean(c.StateDirectory)
-		if c.StateInitialized {
-			if err := requireStateDatabase(path); err != nil {
-				return "", false, err
-			}
+		if err := c.CheckStateAvailability(); err != nil {
+			return "", false, err
 		}
 		return path, false, nil
 	}
@@ -51,11 +49,14 @@ func (c *Config) ResolveStateDirectory(configDir string, primary *library.Librar
 		}
 	}
 	c.StateDirectory = path
+	if primary != nil && path == filepath.Join(primary.RootPath, library.DataDirName) {
+		c.StateLibraryRoot, c.StateLibraryID = primary.RootPath, primary.ID
+	}
 	return path, true, nil
 }
 
 func hasStateDatabase(dir string) (bool, error) {
-	info, err := os.Stat(filepath.Join(dir, "users.db"))
+	info, err := os.Lstat(filepath.Join(dir, "users.db"))
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -66,6 +67,26 @@ func hasStateDatabase(dir string) (bool, error) {
 		return false, errors.New("user database must be a regular file")
 	}
 	return true, nil
+}
+
+// CheckStateAvailability 只检查固定状态位置和介质身份，不修改配置或创建文件。
+func (c *Config) CheckStateAvailability() error {
+	if c.StateDirectory == "" {
+		return errors.New("global state location not resolved")
+	}
+	if c.StateLibraryRoot != "" {
+		if c.IsLibraryReadOnly(c.StateLibraryRoot) {
+			return errors.New("global state medium is configured read-only; select a writable state location")
+		}
+		marker, err := library.ReadMarker(c.StateLibraryRoot)
+		if err != nil || marker.ID != c.StateLibraryID {
+			return errors.New("global state medium identity unavailable or changed")
+		}
+	}
+	if c.StateInitialized {
+		return requireStateDatabase(c.StateDirectory)
+	}
+	return nil
 }
 
 func requireStateDatabase(dir string) error {

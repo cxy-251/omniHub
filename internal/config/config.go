@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"omnihub/internal/library"
+	"omnihub/internal/platform"
 )
 
 // ServerConfig 定义 HTTP 服务端的监听与网络参数。
@@ -26,7 +29,7 @@ type ServerConfig struct {
 type Config struct {
 	// Server 包含服务网络监听配置。
 	Server ServerConfig `json:"server"`
-	// PrimaryLibrary 是当前绑定的主媒体库 UUID 或路径标识。
+	// PrimaryLibrary 是当前绑定的主媒体库绝对根路径；UUID 单独持久化。
 	PrimaryLibrary string `json:"primary_library"`
 	// Libraries 记录所有挂载的物理资源库根路径列表。
 	Libraries []string `json:"libraries"`
@@ -38,9 +41,29 @@ type Config struct {
 	StateDirectory string `json:"state_directory,omitempty"`
 	// StateInitialized 标记用户数据库已落盘，介质丢失时禁止创建空白账号库。
 	StateInitialized bool `json:"state_initialized,omitempty"`
+	// StateLibraryRoot/ID 固定承载账号状态的介质身份，即使移除其媒体挂载也保留。
+	StateLibraryRoot string `json:"state_library_root,omitempty"`
+	StateLibraryID   string `json:"state_library_id,omitempty"`
 }
 
 var saveMu sync.Mutex
+
+// CommittedWriteError 表示文件已替换，但目录同步失败；调用方不能当作未提交回滚数据。
+type CommittedWriteError struct{ Cause error }
+
+// Error 描述已替换配置但持久性同步失败的边界。
+func (e *CommittedWriteError) Error() string {
+	return "configuration replaced but directory sync failed: " + e.Cause.Error()
+}
+
+// Unwrap 返回底层同步错误，供 errors.Is/errors.As 检查。
+func (e *CommittedWriteError) Unwrap() error { return e.Cause }
+
+// WriteWasCommitted 判断错误是否发生在配置文件已经替换之后。
+func WriteWasCommitted(err error) bool {
+	var committed *CommittedWriteError
+	return errors.As(err, &committed)
+}
 
 // KnownLibrary 返回路径对应的已记录标识副本，未记录时返回 nil。
 func (c *Config) KnownLibrary(root string) *library.Marker {
@@ -48,11 +71,13 @@ func (c *Config) KnownLibrary(root string) *library.Marker {
 	if err != nil {
 		return nil
 	}
-	marker, ok := c.LibraryIdentities[path]
-	if !ok {
-		return nil
+	for root, marker := range c.LibraryIdentities {
+		if library.SameRoot(root, path) {
+			copy := marker
+			return &copy
+		}
 	}
-	return &marker
+	return nil
 }
 
 // RememberLibrary 保存在线物理库身份，返回是否发生了配置变更。
@@ -74,7 +99,7 @@ func (c *Config) RememberLibrary(lib *library.Library) bool {
 // IsLibraryReadOnly 查询指定资源库是否以只读模式配置。
 func (c *Config) IsLibraryReadOnly(path string) bool {
 	for _, candidate := range c.ReadOnlyLibraries {
-		if filepath.Clean(candidate) == filepath.Clean(path) {
+		if library.SameRoot(candidate, path) {
 			return true
 		}
 	}
@@ -139,6 +164,20 @@ func GetConfigFilePath() (string, error) {
 
 // Validate 执行防御性配置有效性校验。
 func (c *Config) Validate() error {
+	if len(c.Libraries) > 128 || len(c.ReadOnlyLibraries) > 128 || len(c.LibraryIdentities) > 256 {
+		return errors.New("too many configured libraries")
+	}
+	paths := append(append(append([]string{}, c.Libraries...), c.ReadOnlyLibraries...), c.PrimaryLibrary)
+	for _, path := range paths {
+		if path != "" && (!filepath.IsAbs(path) || len(path) > 4096) {
+			return errors.New("library paths must be absolute and bounded")
+		}
+	}
+	for root, marker := range c.LibraryIdentities {
+		if !filepath.IsAbs(root) || len(root) > 4096 || marker.ID == "" || len(marker.ID) > 128 || strings.ContainsAny(marker.ID, "/\\:\x00") || len(marker.Name) > 256 {
+			return errors.New("invalid configured library identity")
+		}
+	}
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("invalid server port: %d (must be between 1 and 65535)", c.Server.Port)
 	}
@@ -151,6 +190,12 @@ func (c *Config) Validate() error {
 	if c.StateInitialized && c.StateDirectory == "" {
 		return errors.New("initialized state requires a fixed directory")
 	}
+	if (c.StateLibraryRoot == "") != (c.StateLibraryID == "") {
+		return errors.New("state medium requires both root and identity")
+	}
+	if c.StateLibraryRoot != "" && (!filepath.IsAbs(c.StateLibraryRoot) || filepath.Join(c.StateLibraryRoot, library.DataDirName) != c.StateDirectory) {
+		return errors.New("state medium does not match global state location")
+	}
 	return nil
 }
 
@@ -161,7 +206,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// 文件不存在时，使用并保存默认配置
@@ -172,6 +217,13 @@ func Load() (*Config, error) {
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("failed to read config file from %s: %w", path, err)
+	}
+	data, readErr := io.ReadAll(io.LimitReader(f, (2<<20)+1))
+	if err := errors.Join(readErr, f.Close()); err != nil {
+		return nil, fmt.Errorf("read configuration: %w", err)
+	}
+	if len(data) > 2<<20 {
+		return nil, errors.New("configuration exceeds size limit")
 	}
 
 	cfg := DefaultConfig()
@@ -235,8 +287,11 @@ func WritePrivateFile(path string, data []byte) (result error) {
 	if err := errors.Join(writeErr, f.Close()); err != nil {
 		return fmt.Errorf("persist configuration transaction: %w", err)
 	}
-	if err := os.Rename(name, path); err != nil {
+	if err := platform.ReplaceFile(name, path); err != nil {
 		return fmt.Errorf("commit configuration transaction: %w", err)
+	}
+	if err := platform.SyncDirectory(filepath.Dir(path)); err != nil {
+		return &CommittedWriteError{Cause: err}
 	}
 	return nil
 }

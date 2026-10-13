@@ -184,6 +184,21 @@ func TestEnsureMarkerPreservesInvalidIdentity(t *testing.T) {
 	}
 }
 
+func TestEnsureMarkerRejectsDanglingMarkerLink(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, LibraryMarkerFile)
+	if err := os.Symlink(filepath.Join(root, "missing.json"), path); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if _, err := EnsureMarker(root, ""); err == nil {
+		t.Fatal("dangling marker link accepted")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("existing marker link overwritten")
+	}
+}
+
 func TestResolvePathRejectsLibraryEscape(t *testing.T) {
 	root := t.TempDir()
 	mgr := NewManager()

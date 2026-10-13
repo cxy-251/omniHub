@@ -17,7 +17,7 @@ const loaders = {
 };
 
 // Transitional lifecycle adapter: existing modules remain runnable while each is moved to typed components.
-export default function ModulePage({ id, sections }: { id: ModuleID; sections: string[] }) {
+export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'libraries'>; sections: string[] }) {
   const [error, setError] = useState('');
   useEffect(() => {
     let disposed = false;

@@ -183,6 +183,9 @@ func (r *Router) getGamesDB(root string) (*games.DB, error) {
 	return gdb, nil
 }
 
+// CanReconfigure 返回是否没有运行中的资源任务，供生命周期控制器切换配置前检查。
+func (r *Router) CanReconfigure() bool { return !r.taskMgr.HasRunningTasks() }
+
 // Close 在 HTTP 服务完成退出后关闭所有模块连接，允许重复调用。
 func (r *Router) Close() error {
 	r.dbMu.Lock()

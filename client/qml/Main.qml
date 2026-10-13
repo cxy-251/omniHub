@@ -15,8 +15,12 @@ Window {
     Connections {
         target: backendApi
         function onStatusChanged() {
-            if (backendApi.connected && !backendApi.hasAdmin) setupDialog.open()
+            if (backendApi.stateReady && backendApi.connected && !backendApi.hasAdmin) setupDialog.open()
             if (backendApi.hasAdmin) setupDialog.close()
+        }
+        function onLibrariesChanged() {
+            if (backendApi.stateReady && backendApi.connected && !backendApi.hasAdmin) setupDialog.open()
+            if (!backendApi.stateReady) stack.currentIndex = 2
         }
     }
     Dialog {
@@ -58,6 +62,11 @@ Window {
                     highlighted: stack.currentIndex === 1
                     onClicked: stack.currentIndex = 1
                 }
+                Button {
+                    text: "资源库管理"
+                    highlighted: stack.currentIndex === 2
+                    onClicked: { stack.currentIndex = 2; backendApi.refreshLibraries() }
+                }
             }
         }
 
@@ -76,6 +85,7 @@ Window {
             GameLauncherView {
                 id: gameLauncher
             }
+            LibraryView { }
         }
     }
 }

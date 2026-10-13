@@ -21,7 +21,7 @@ func (r *Router) handleSections(w http.ResponseWriter, req *http.Request) {
 	if u.Role == auth.RoleAdmin {
 		allowed = append(allowed, "admin")
 		if !auth.IsWANFromContext(req.Context()) {
-			allowed = append(allowed, "tasks")
+			allowed = append(allowed, "tasks", "libraries")
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"sections": allowed})

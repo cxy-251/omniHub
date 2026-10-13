@@ -32,3 +32,9 @@
 ## 后续阶段
 
 实施计划及每阶段验证边界见 `IMPLEMENTATION_PLAN.md`。Web 技术栈已由用户确定为 React + TypeScript + Tailwind CSS，使用 pnpm/Vite；Python 使用 uv。CLI 的页面验证使用用户现有 Chrome，不安装 Playwright 或要求桌面插件。
+
+## 代码行数统计（2026-10-13，资源库生命周期阶段）
+
+接手前 `532001d`：12,065 行；当前：16,354 行。相对于接手前累计新增 5,054 行、删除 765 行，变更合计 5,819 行，净增加 4,289 行。
+
+统计包含测试、注释与空行，范围为 Go、C++/头文件、QML、JavaScript/TypeScript/TSX、CSS、HTML、Python、QRC 与 CMakeLists.txt；排除文档、依赖、vendor、dist 和其他构建/测试产物。生成的 Web dist 提交用于 Go 独立构建，但不计入源码行数。

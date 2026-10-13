@@ -67,6 +67,21 @@ func NewManager() *Manager {
 	}
 }
 
+// HasRunningTasks 判断是否有正在写资源库的任务；配置切换必须先由用户停止它们。
+func (m *Manager) HasRunningTasks() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, task := range m.tasks {
+		task.logsMu.RLock()
+		running := task.Running
+		task.logsMu.RUnlock()
+		if running {
+			return true
+		}
+	}
+	return false
+}
+
 // RunScript 运行已通过调用方注册和校验的脚本，相同 ID 同时仅有一个实例。
 func (m *Manager) RunScript(id, scriptPath string, args []string) (*Task, error) {
 	m.mu.Lock()

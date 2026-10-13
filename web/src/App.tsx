@@ -2,12 +2,14 @@ import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { api, post, type Status } from './api';
 
 const ModulePage = lazy(() => import('./ModulePage'));
+const LibraryManager = lazy(() => import('./LibraryManager'));
 const modules = [
   { id: 'media', title: '媒体专区', description: '相册、漫画、文本、音频与短视频' },
   { id: 'games', title: '网页游戏', description: 'RPG、模拟器、SLG 与 Flash' },
   { id: 'tools', title: '局域网工具', description: '文件共享、剪贴板与只读状态看板' },
   { id: 'tasks', title: '任务调试台', description: '脚本任务与实时日志' },
   { id: 'admin', title: '权限管理', description: '用户与分类访问权限' },
+  { id: 'libraries', title: '资源库管理', description: '挂载、离线恢复与主库状态迁移' },
 ] as const;
 export type ModuleID = typeof modules[number]['id'];
 type Libraries = { primary: { name: string } | null };
@@ -71,7 +73,7 @@ export default function App() {
         {visible.map(m => <button key={m.id} className="rounded-lg border border-line bg-panel p-5 text-left transition-colors hover:border-primary focus-visible:outline-2 focus-visible:outline-primary" onClick={() => setActive(m.id)}><h3 className="mb-2 text-lg font-semibold">{m.title}</h3><p className="text-sm text-muted">{m.description}</p></button>)}
         {!status && !error ? <p role="status">正在连接服务…</p> : null}
       </section> : <Suspense fallback={<p role="status">正在加载模块…</p>}>
-        <ModulePage key={`${active}-${status?.user.id}`} id={active} sections={sections} />
+        {active === 'libraries' ? <LibraryManager onChanged={name => setLibrary(name ? `主库：${name}` : '尚未配置主库')} /> : <ModulePage key={`${active}-${status?.user.id}`} id={active} sections={sections} />}
       </Suspense>}
     </main>
   </div>;
