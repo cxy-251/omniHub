@@ -18,12 +18,9 @@ const MediaHub = {
     this.pauseMatrixVideos();
     if (this.audioTimer) clearInterval(this.audioTimer);
     if (this.mangaScrollTimer) clearTimeout(this.mangaScrollTimer);
-    if (this.galleryScrollHandler) window.removeEventListener('scroll', this.galleryScrollHandler);
-    this.scrollBound = false;
     this.audioTimer = null;
     if (this.audioPlayer) { this.audioPlayer.onloadedmetadata = null; this.audioPlayer.pause(); this.audioPlayer.removeAttribute('src'); this.audioPlayer.load(); this.audioPlayer = null; }
     this.currentAudioId = '';
-    this.galleryState = { offset: 0, limit: 48, hasMore: true, isLoading: false, initialized: false };
     this.currentSubtab = 'gallery';
     document.querySelectorAll('video').forEach(video => { video.pause(); video.removeAttribute('src'); video.load(); });
   },
@@ -34,25 +31,11 @@ const MediaHub = {
   mangaScrollTimer: null,
   currentMangaId: '',
 
-  galleryState: {
-    offset: 0,
-    limit: 48,
-    hasMore: true,
-    isLoading: false,
-    initialized: false
-  },
-
   init() {
     lifetime = new AbortController();
     this.renderContainer();
     this.bindEvents();
     this.initAudioBar();
-  },
-
-  activate() {
-    if (this.currentSubtab === 'gallery' && !this.galleryState.initialized) {
-      this.loadGallery(true);
-    }
   },
 
   renderContainer() {
@@ -66,17 +49,6 @@ const MediaHub = {
         <button data-sub="text">📖 文本阅读器</button>
         <button data-sub="manga">📚 漫画条漫</button>
         <button data-sub="audio">🎧 音频专辑</button>
-      </div>
-
-      <!-- 相册画廊 -->
-      <div id="subpane-gallery" class="media-subpane active">
-        <div class="gallery-controls" style="margin-bottom: 12px; display: flex; gap: 8px;">
-          <button id="btn-gallery-refresh" class="btn-primary">🔄 刷新相册</button>
-          <label style="display:flex; align-items:center; gap:4px; font-size:13px;">
-            <input type="checkbox" id="gallery-include-trash"> 查看废纸篓
-          </label>
-        </div>
-        <div id="gallery-list" class="gallery-grid"></div>
       </div>
 
       <!-- 短视频多联放映矩阵 (第 11.1 节) -->
@@ -175,12 +147,6 @@ const MediaHub = {
       });
     });
 
-    // 画廊刷新
-    const btnRef = document.getElementById('btn-gallery-refresh');
-    if (btnRef) btnRef.addEventListener('click', () => this.loadGallery());
-    const chkTrash = document.getElementById('gallery-include-trash');
-    if (chkTrash) chkTrash.addEventListener('change', () => this.loadGallery());
-
     // 短视频多联放映矩阵事件 (第 11.1 节)
     const selectLayout = document.getElementById('matrix-layout-select');
     if (selectLayout) {
@@ -274,7 +240,6 @@ const MediaHub = {
     document.querySelectorAll('.media-subpane').forEach(p => {
       p.classList.toggle('active', p.id === `subpane-${subId}`);
     });
-    if (subId === 'gallery') this.loadGallery(true);
     if (subId === 'shortvideo') this.initMatrix();
     if (subId === 'manga') this.loadMangaShelf();
     if (subId === 'text') this.loadTextList();
@@ -411,76 +376,6 @@ const MediaHub = {
         container.querySelectorAll('video').forEach(v => v.muted = true);
       }
     }
-  },
-
-  // --- 画廊实现 (严格 48 张分页与追加加载) ---
-  async loadGallery(reset = false) {
-    const listEl = document.getElementById('gallery-list');
-    if (!listEl) return;
-
-    if (reset) {
-      this.galleryState.offset = 0;
-      this.galleryState.hasMore = true;
-      this.galleryState.initialized = true;
-      listEl.innerHTML = '';
-      this.bindGalleryScroll();
-    }
-
-    if (this.galleryState.isLoading || !this.galleryState.hasMore) return;
-    this.galleryState.isLoading = true;
-
-    const incTrash = document.getElementById('gallery-include-trash')?.checked ? '1' : '0';
-    try {
-      const res = await fetch(`/api/media/gallery/list?include_deleted=${incTrash}&limit=${this.galleryState.limit}&offset=${this.galleryState.offset}`);
-      const photos = await res.json();
-      this.galleryState.isLoading = false;
-
-      if (!Array.isArray(photos) || photos.length === 0) {
-        this.galleryState.hasMore = false;
-        if (this.galleryState.offset === 0) {
-          listEl.innerHTML = '<div style="color:var(--text-muted)">相册暂无照片</div>';
-        }
-        return;
-      }
-
-      this.galleryState.offset += photos.length;
-      if (photos.length < this.galleryState.limit) {
-        this.galleryState.hasMore = false;
-      }
-
-      const html = photos.map(p => `
-        <div class="gallery-item" style="aspect-ratio: ${p.width || 4} / ${p.height || 3}; background-color: ${p.color_hex || 'var(--surface)'};" onclick="MediaHub.viewOriginal('${p.id}', '${p.volume}')">
-          <img src="/api/media/gallery/thumbnail?id=${p.id}" loading="lazy" alt="${p.filename}">
-          <div class="overlay-info">
-            <span>${p.filename}</span>
-            <span>${(p.size_bytes / 1024).toFixed(0)} KB</span>
-          </div>
-        </div>
-      `).join('');
-      listEl.insertAdjacentHTML('beforeend', html);
-    } catch (e) {
- if (e.name === 'AbortError') return;
-      this.galleryState.isLoading = false;
-      if (this.galleryState.offset === 0) {
-        listEl.innerHTML = `<div style="color:var(--danger)">加载失败: ${e.message}</div>`;
-      }
-    }
-  },
-
-  bindGalleryScroll() {
-    if (this.scrollBound) return;
-    this.scrollBound = true;
-    this.galleryScrollHandler = () => {
-      if (this.currentSubtab !== 'gallery') return;
-      if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
-        this.loadGallery(false);
-      }
-    };
-    window.addEventListener('scroll', this.galleryScrollHandler, { passive: true });
-  },
-
-  viewOriginal(id, vol) {
-    window.open(`/api/media/gallery/original?id=${id}&vol=${vol}`, '_blank');
   },
 
   // --- 文本阅读器实现 ---

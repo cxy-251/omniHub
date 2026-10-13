@@ -18,19 +18,25 @@ const loaders = {
 };
 
 const AudioLibrary = lazy(() => import('./AudioLibrary'));
+const GalleryLibrary = lazy(() => import('./GalleryLibrary'));
 
 // Transitional lifecycle adapter: existing modules remain runnable while each is moved to typed components.
 export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'libraries'>; sections: string[] }) {
   const [error, setError] = useState('');
   const [audioActive, setAudioActive] = useState(false);
   const [audioVisited, setAudioVisited] = useState(false);
+  const [galleryActive, setGalleryActive] = useState(false);
+  const [galleryVisited, setGalleryVisited] = useState(false);
   const moduleRef = useRef<ExistingModule | undefined>(undefined);
   useEffect(() => {
     let disposed = false;
     let module: ExistingModule | undefined;
     const tabChanged = (event: Event) => {
-      if (!sections.includes('audio')) return;
-      const active = (event as CustomEvent<string>).detail === 'audio';
+      const tab = (event as CustomEvent<string>).detail;
+      const gallery = sections.includes('gallery') && tab === 'gallery';
+      setGalleryActive(gallery);
+      if (gallery) setGalleryVisited(true);
+      const active = sections.includes('audio') && tab === 'audio';
       setAudioActive(active);
       if (active) setAudioVisited(true);
     };
@@ -53,6 +59,9 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
   return <section className="tab-pane active" id={`pane-${id}`}>
     {error ? <p role="alert" className="mb-4 whitespace-pre-wrap text-danger">{error}</p> : null}
     <div id={`${id}-container`} />
+    {id === 'media' && sections.includes('gallery') && galleryVisited ? <div hidden={!galleryActive} className="mt-4">
+      <Suspense fallback={<p role="status">正在加载相册…</p>}><GalleryLibrary active={galleryActive} canEdit={sections.includes('admin')} /></Suspense>
+    </div> : null}
     {id === 'media' && sections.includes('audio') && audioVisited ? <div hidden={!audioActive} className="mt-4">
       <Suspense fallback={<p role="status">正在加载音频专辑…</p>}><AudioLibrary active={audioActive} onPlay={(path, title, album) => moduleRef.current?.playAudio?.(path, title, album)} /></Suspense>
     </div> : null}

@@ -197,7 +197,8 @@ func (vm *VolumeManager) ReadOriginal(volumeName, id string) ([]byte, error) {
 }
 
 // ReadOriginalDirect 纯只读方式直接从分卷读取原图（严格以 mode=ro 打开，零写操作零建表，第 3.1.2 节）。
-func ReadOriginalDirect(originalsDir, volumeName, id string) ([]byte, error) {
+// 单次原图读取限制 32MiB，超限时不加载 BLOB 内容。
+func ReadOriginalDirect(originalsDir, volumeName, id string) (data []byte, result error) {
 	if !volumeNamePattern.MatchString(volumeName) {
 		return nil, errors.New("invalid originals volume name")
 	}
@@ -210,15 +211,18 @@ func ReadOriginalDirect(originalsDir, volumeName, id string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open read-only volume %s: %w", volumeName, err)
 	}
-	defer db.Close()
+	defer func() { result = errors.Join(result, db.Close()) }()
 
 	var blob []byte
-	err = db.QueryRow("SELECT data FROM originals WHERE id = ?", id).Scan(&blob)
+	err = db.QueryRow("SELECT CASE WHEN length(data) <= ? THEN data ELSE NULL END FROM originals WHERE id = ?", 32<<20, id).Scan(&blob)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to read original from %s: %w", volumeName, err)
+	}
+	if blob == nil {
+		return nil, ErrImageCapacity
 	}
 	return blob, nil
 }

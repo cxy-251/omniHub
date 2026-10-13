@@ -143,15 +143,18 @@ func (m *MetaDB) SaveThumbnail(t *Thumbnail) error {
 	return err
 }
 
-// GetThumbnail 读取指定照片的缩略图 BLOB。
+// GetThumbnail 读取最多 2MiB 的缩略图 BLOB，超限时不加载图像内容。
 func (m *MetaDB) GetThumbnail(photoID string) ([]byte, error) {
 	var data []byte
-	err := m.db.QueryRow("SELECT data FROM thumbnails WHERE photo_id = ? AND size_type = 'm'", photoID).Scan(&data)
+	err := m.db.QueryRow("SELECT CASE WHEN length(data) <= ? THEN data ELSE NULL END FROM thumbnails WHERE photo_id = ? AND size_type = 'm'", 2<<20, photoID).Scan(&data)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if data == nil {
+		return nil, ErrImageCapacity
 	}
 	return data, nil
 }
@@ -164,7 +167,7 @@ func (m *MetaDB) SoftDelete(photoID string, deleted bool) error {
 		deletedAtStr = &s
 	}
 
-	_, err := m.db.Exec("UPDATE photos SET deleted_at = ? WHERE id = ?", deletedAtStr, photoID)
+	_, err := m.db.Exec("UPDATE photos SET deleted_at = ? WHERE id = ? AND (deleted_at IS NULL) = ?", deletedAtStr, photoID, deleted)
 	return err
 }
 
@@ -209,6 +212,9 @@ func (m *MetaDB) ListPhotos(includeDeleted bool, limit, offset int) ([]*Photo, e
 	if offset < 0 {
 		offset = 0
 	}
+	if limit > 101 {
+		return nil, errors.New("photo page exceeds capacity")
+	}
 
 	query := `
 		SELECT id, filename, size_bytes, mime_type, width, height,
@@ -218,7 +224,7 @@ func (m *MetaDB) ListPhotos(includeDeleted bool, limit, offset int) ([]*Photo, e
 	if !includeDeleted {
 		query += " WHERE deleted_at IS NULL"
 	}
-	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	query += " ORDER BY created_at DESC, id ASC LIMIT ? OFFSET ?"
 
 	rows, err := m.db.Query(query, limit, offset)
 	if err != nil {
@@ -250,4 +256,15 @@ func (m *MetaDB) ListPhotos(includeDeleted bool, limit, offset int) ([]*Photo, e
 	}
 
 	return photos, rows.Err()
+}
+
+// CountPhotos counts the same visible set as ListPhotos without reading image data.
+func (m *MetaDB) CountPhotos(includeDeleted bool) (int, error) {
+	query := "SELECT COUNT(*) FROM photos"
+	if !includeDeleted {
+		query += " WHERE deleted_at IS NULL"
+	}
+	var count int
+	err := m.db.QueryRow(query).Scan(&count)
+	return count, err
 }

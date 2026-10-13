@@ -481,32 +481,16 @@ func (r *Router) handleGalleryList(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	primary := r.libMgr.GetPrimary()
-	if primary == nil {
-		writeJSON(w, http.StatusOK, []interface{}{})
-		return
-	}
-	metaDB, err := r.getMetaDB(primary.RootPath)
-	if err != nil {
-		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
-		return
-	}
-
-	incDeleted := req.URL.Query().Get("include_deleted") == "1"
-	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(req.URL.Query().Get("offset"))
-	photos, err := metaDB.ListPhotos(incDeleted, limit, offset)
-	if err != nil {
-		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	writeJSON(w, http.StatusOK, photos)
+	r.listGalleryLibraries(w, req)
 }
 
 func (r *Router) handleGalleryThumbnail(w http.ResponseWriter, req *http.Request) {
 	photoID := req.URL.Query().Get("id")
-	primary := r.libMgr.GetPrimary()
-	if primary == nil || photoID == "" {
+	primary := r.galleryLibrary(w, req)
+	if primary == nil {
+		return
+	}
+	if photoID == "" || len(photoID) > 256 {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
@@ -517,30 +501,61 @@ func (r *Router) handleGalleryThumbnail(w http.ResponseWriter, req *http.Request
 	}
 
 	thumb, err := metaDB.GetThumbnail(photoID)
+	if errors.Is(err, gallery.ErrImageCapacity) {
+		http.Error(w, "thumbnail exceeds read capacity", 413)
+		return
+	}
 	if err != nil || len(thumb) == 0 {
 		http.Error(w, "thumbnail not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Type", http.DetectContentType(thumb))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(thumb)
 }
 
 func (r *Router) handleGalleryOriginal(w http.ResponseWriter, req *http.Request) {
 	photoID := req.URL.Query().Get("id")
-	vol := req.URL.Query().Get("vol")
-	primary := r.libMgr.GetPrimary()
-	if primary == nil || photoID == "" {
+	primary := r.galleryLibrary(w, req)
+	if primary == nil {
+		return
+	}
+	if photoID == "" || len(photoID) > 256 {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	originalsDir := filepath.Join(primary.RootPath, "media_library", "gallery", "originals")
-	data, err := gallery.ReadOriginalDirect(originalsDir, vol, photoID)
+	metaDB, err := r.getMetaDB(primary.RootPath)
+	if err != nil {
+		http.Error(w, "gallery index unavailable", 503)
+		return
+	}
+	photo, err := metaDB.GetPhoto(photoID)
+	if err != nil || photo == nil {
+		http.Error(w, "photo not found", 404)
+		return
+	}
+	// The index owns the volume mapping. A query parameter cannot select arbitrary DBs.
+	if vol := req.URL.Query().Get("vol"); vol != "" && vol != photo.Volume {
+		http.Error(w, "incorrect photo volume", 400)
+		return
+	}
+	dir, err := r.moduleDirectory(primary.RootPath, "media_library/gallery", "originals/"+photo.Volume)
+	if err != nil {
+		http.Error(w, "original storage boundary invalid", 503)
+		return
+	}
+	data, err := gallery.ReadOriginalDirect(filepath.Join(dir, "originals"), photo.Volume, photoID)
+	if errors.Is(err, gallery.ErrImageCapacity) {
+		http.Error(w, "original exceeds read capacity", 413)
+		return
+	}
 	if err != nil || len(data) == 0 {
 		http.Error(w, "original image not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Type", http.DetectContentType(data))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
@@ -550,11 +565,22 @@ func (r *Router) handleGalleryTrash(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if auth.UserFromContext(req.Context()).Role != auth.RoleAdmin || auth.IsWANFromContext(req.Context()) {
+		http.Error(w, "trusted environment administrator required", 403)
+		return
+	}
 	photoID := req.URL.Query().Get("id")
 	restore := req.URL.Query().Get("restore") == "1"
-	primary := r.libMgr.GetPrimary()
-	if primary == nil || photoID == "" {
+	primary := r.galleryLibrary(w, req)
+	if primary == nil {
+		return
+	}
+	if photoID == "" || len(photoID) > 256 {
 		http.Error(w, "not found", http.StatusBadRequest)
+		return
+	}
+	if primary.ReadOnly {
+		http.Error(w, "gallery library is read-only", 403)
 		return
 	}
 	metaDB, err := r.getMetaDB(primary.RootPath)
@@ -563,7 +589,19 @@ func (r *Router) handleGalleryTrash(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	_ = metaDB.SoftDelete(photoID, !restore)
+	photo, err := metaDB.GetPhoto(photoID)
+	if err != nil {
+		http.Error(w, "gallery index unavailable", 503)
+		return
+	}
+	if photo == nil {
+		http.Error(w, "photo not found", 404)
+		return
+	}
+	if err := metaDB.SoftDelete(photoID, !restore); err != nil {
+		http.Error(w, "photo update failed", 503)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

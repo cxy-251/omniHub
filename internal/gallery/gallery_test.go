@@ -1,9 +1,12 @@
 package gallery
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"omnihub/internal/storage"
 )
 
 func TestGalleryVolumeAndMetadata(t *testing.T) {
@@ -121,5 +124,35 @@ func TestGalleryVolumeAndMetadata(t *testing.T) {
 	}
 	if string(directBytes) != string(originalBytes) {
 		t.Errorf("expected directBytes %s, got %s", string(originalBytes), string(directBytes))
+	}
+}
+
+func TestOversizedImageBlobsDoNotLoadIntoMemory(t *testing.T) {
+	dir := t.TempDir()
+	meta, err := OpenMetaDB(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer meta.Close()
+	// Views synthesize large blobs without writing multi-megabyte test assets.
+	if _, err := meta.db.Exec("DROP TABLE thumbnails; CREATE VIEW thumbnails AS SELECT 'big' photo_id, 'm' size_type, zeroblob(2097153) data"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := meta.GetThumbnail("big"); !errors.Is(err, ErrImageCapacity) {
+		t.Fatalf("oversized thumbnail: %v", err)
+	}
+	db, err := storage.OpenSQLite(filepath.Join(dir, "originals_vol01.db"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE VIEW originals AS SELECT 'big' id, zeroblob(33554433) data"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadOriginalDirect(dir, "originals_vol01.db", "big"); !errors.Is(err, ErrImageCapacity) {
+		t.Fatalf("oversized original: %v", err)
 	}
 }
