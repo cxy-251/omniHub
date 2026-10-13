@@ -2,8 +2,11 @@ package text
 
 import (
 	"archive/zip"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -27,11 +30,53 @@ func TestReadTextChunk(t *testing.T) {
 	if res.Lines[0] != "Line 2" || res.Lines[2] != "Line 4" {
 		t.Errorf("unexpected chunk content: %v", res.Lines)
 	}
-	if res.TotalLines != 5 {
-		t.Errorf("expected 5 total lines, got %d", res.TotalLines)
+	if res.TotalLines != -1 {
+		t.Errorf("total should remain unknown before EOF, got %d", res.TotalLines)
 	}
 	if !res.HasMore {
 		t.Error("expected has_more to be true")
+	}
+	next, err := ReadTextChunkContext(context.Background(), txtPath, 5, 3, res.NextOffset)
+	if err != nil || len(next.Lines) != 1 || next.Lines[0] != "Line 5" || next.TotalLines != 5 || next.HasMore {
+		t.Fatalf("cursor did not resume at final line: %+v, %v", next, err)
+	}
+}
+
+func TestTextPageStopsBeforeOversizedTailAndBounds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bounded.txt")
+	if err := os.WriteFile(path, []byte("first\n"+strings.Repeat("x", maxLineBytes+1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := ReadTextChunkContext(context.Background(), path, 1, 1, 0)
+	if err != nil || first.NextOffset != 6 || !first.HasMore {
+		t.Fatalf("first page read past its boundary: %+v %v", first, err)
+	}
+	if _, err := ReadTextChunkContext(context.Background(), path, 2, 1, first.NextOffset); err == nil {
+		t.Fatal("oversized line accepted")
+	}
+	if _, err := ReadTextChunk(path, 1, 501); !errors.Is(err, ErrBounds) {
+		t.Fatal("unbounded page accepted")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ReadTextChunkContext(ctx, path, 1, 1, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation lost: %v", err)
+	}
+}
+
+func TestTextByteBudgetResumesWithoutLosingLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "long.txt")
+	line := strings.Repeat("x", 700000) + "\n"
+	if err := os.WriteFile(path, []byte(line+line+line+"last"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := ReadTextChunkContext(context.Background(), path, 1, 100, 0)
+	if err != nil || len(first.Lines) != 2 || first.NextOffset != int64(2*len(line)) {
+		t.Fatalf("byte budget not enforced: %+v %v", first, err)
+	}
+	next, err := ReadTextChunkContext(context.Background(), path, 3, 100, first.NextOffset)
+	if err != nil || len(next.Lines) != 2 || next.Lines[1] != "last" || next.HasMore || next.TotalLines != 4 {
+		t.Fatalf("page boundary lost text: count=%d err=%v", len(next.Lines), err)
 	}
 }
 

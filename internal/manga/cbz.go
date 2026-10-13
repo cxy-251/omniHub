@@ -2,16 +2,20 @@ package manga
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"omnihub/internal/archiveutil"
+	"omnihub/internal/ordering"
 )
 
+// ImageExtensions defines the image entries exposed by the CBZ page endpoint.
 var ImageExtensions = map[string]bool{
 	".webp": true,
 	".jpg":  true,
@@ -19,6 +23,9 @@ var ImageExtensions = map[string]bool{
 	".png":  true,
 	".gif":  true,
 }
+
+// ErrEntryNotFound distinguishes an absent optional metadata file from corruption.
+var ErrEntryNotFound = errors.New("file not found in cbz archive")
 
 // PackageMetadata 映射 metadata.json 结构。
 type PackageMetadata struct {
@@ -34,7 +41,7 @@ type PackageMetadata struct {
 
 // CBZReader 封装基于 ReaderAt 的 CBZ 零落盘随机寻址阅读器（第 7.1.3 节）。
 type CBZReader struct {
-	zr        *zip.ReadCloser
+	zr        *archiveutil.Reader
 	filePath  string
 	entryMap  map[string]*zip.File
 	allImages []string
@@ -43,7 +50,7 @@ type CBZReader struct {
 // OpenCBZ 打开指定路径的 CBZ 封箱包。
 func OpenCBZ(cbzPath string) (*CBZReader, error) {
 	cleanPath := filepath.Clean(cbzPath)
-	zr, err := zip.OpenReader(cleanPath)
+	zr, err := archiveutil.Open(cleanPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open cbz file: %w", err)
 	}
@@ -65,13 +72,13 @@ func OpenCBZ(cbzPath string) (*CBZReader, error) {
 		}
 	}
 
-	sort.Strings(reader.allImages)
+	sort.Slice(reader.allImages, func(i, j int) bool { return ordering.NaturalLess(reader.allImages[i], reader.allImages[j]) })
 	return reader, nil
 }
 
 // ListImageEntries 返回包内所有经过自然排序的图片条目名称列表。
 func (r *CBZReader) ListImageEntries() []string {
-	return r.allImages
+	return append([]string(nil), r.allImages...)
 }
 
 // Close 关闭 CBZ 文件句柄。
@@ -81,18 +88,22 @@ func (r *CBZReader) Close() error {
 
 // ReadEntry 随机寻址提取包内任意文件的二进制流，零落盘（第 7.1.3 节）。
 func (r *CBZReader) ReadEntry(entryName string) ([]byte, error) {
+	return r.ReadEntryContext(context.Background(), entryName)
+}
+
+// ReadEntryContext reads a single page within 32 MiB, respecting request cancellation.
+// Metadata is restricted to 1 MiB; unsupported entry sizes return no partial data.
+func (r *CBZReader) ReadEntryContext(ctx context.Context, entryName string) ([]byte, error) {
 	f, ok := r.entryMap[entryName]
 	if !ok {
-		return nil, errors.New("file not found in cbz archive")
+		return nil, ErrEntryNotFound
 	}
 
-	rc, err := f.Open()
-	if err != nil {
-		return nil, err
+	limit := int64(32 << 20)
+	if entryName == "metadata.json" {
+		limit = 1 << 20
 	}
-	defer rc.Close()
-
-	return io.ReadAll(rc)
+	return archiveutil.ReadEntry(ctx, f, limit)
 }
 
 // ParseMetadata 提取解析 metadata.json 元数据。
@@ -113,7 +124,7 @@ func (r *CBZReader) ParseMetadata() (*PackageMetadata, error) {
 func (r *CBZReader) GetCoverEntry(customCover string) string {
 	// 1. 手动指定封面优先
 	if customCover != "" {
-		if _, ok := r.entryMap[customCover]; ok {
+		if _, ok := r.entryMap[customCover]; ok && ImageExtensions[strings.ToLower(filepath.Ext(customCover))] {
 			return customCover
 		}
 	}
@@ -121,7 +132,7 @@ func (r *CBZReader) GetCoverEntry(customCover string) string {
 	// 2. 根目录 cover.* 优先
 	for _, img := range r.allImages {
 		base := strings.ToLower(filepath.Base(img))
-		if strings.HasPrefix(base, "cover.") {
+		if !strings.Contains(img, "/") && strings.HasPrefix(base, "cover.") {
 			return img
 		}
 	}
@@ -144,12 +155,12 @@ func (r *CBZReader) ReadCoverBytes(customCover string) ([]byte, error) {
 }
 
 // ScanMangaFromCBZ 扫描单个 CBZ 构建 Manga 元数据实体。
-func ScanMangaFromCBZ(cbzPath string) (*Manga, error) {
+func ScanMangaFromCBZ(cbzPath string) (_ *Manga, result error) {
 	r, err := OpenCBZ(cbzPath)
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
+	defer func() { result = errors.Join(result, r.Close()) }()
 
 	stem := strings.TrimSuffix(filepath.Base(cbzPath), filepath.Ext(cbzPath))
 	manga := &Manga{
@@ -160,7 +171,11 @@ func ScanMangaFromCBZ(cbzPath string) (*Manga, error) {
 		UpdatedAt:  time.Now().UTC(),
 	}
 
-	if meta, err := r.ParseMetadata(); err == nil && meta != nil {
+	meta, err := r.ParseMetadata()
+	if err != nil && !errors.Is(err, ErrEntryNotFound) {
+		return nil, fmt.Errorf("invalid manga metadata: %w", err)
+	}
+	if meta != nil {
 		if meta.ID != "" {
 			manga.ID = meta.ID
 		}

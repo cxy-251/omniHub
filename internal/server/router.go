@@ -735,8 +735,30 @@ func (r *Router) handleTextList(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleTextChunk(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
-	startLine, _ := strconv.Atoi(req.URL.Query().Get("start"))
-	limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
+	startLine, limit := 1, 100
+	byteOffset := int64(-1)
+	var err error
+	if value := req.URL.Query().Get("start"); value != "" {
+		startLine, err = strconv.Atoi(value)
+		if err != nil {
+			http.Error(w, "invalid start line", 400)
+			return
+		}
+	}
+	if value := req.URL.Query().Get("limit"); value != "" {
+		limit, err = strconv.Atoi(value)
+		if err != nil {
+			http.Error(w, "invalid chunk limit", 400)
+			return
+		}
+	}
+	if value := req.URL.Query().Get("offset"); value != "" {
+		byteOffset, err = strconv.ParseInt(value, 10, 64)
+		if err != nil || byteOffset < 0 {
+			http.Error(w, "invalid byte offset", 400)
+			return
+		}
+	}
 
 	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/docs", "media_library/novels")
 	if err != nil {
@@ -744,8 +766,12 @@ func (r *Router) handleTextChunk(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	res, err := text.ReadTextChunk(fullPath, startLine, limit)
+	res, err := text.ReadTextChunkContext(req.Context(), fullPath, startLine, limit, byteOffset)
 	if err != nil {
+		if errors.Is(err, text.ErrBounds) {
+			http.Error(w, "invalid chunk bounds", 400)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -761,7 +787,7 @@ func (r *Router) handleTextEpub(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	data, err := text.ReadEpubEntry(fullPath, entry)
+	data, err := text.ReadEpubEntryContext(req.Context(), fullPath, entry)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -936,12 +962,13 @@ func (r *Router) handleMangaCover(w http.ResponseWriter, req *http.Request) {
 	}
 	defer reader.Close()
 
-	coverBytes, err := reader.ReadCoverBytes("")
+	coverBytes, err := reader.ReadEntryContext(req.Context(), reader.GetCoverEntry(""))
 	if err != nil {
 		http.Error(w, "cover not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Type", http.DetectContentType(coverBytes))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(coverBytes)
 }
@@ -961,12 +988,17 @@ func (r *Router) handleMangaPage(w http.ResponseWriter, req *http.Request) {
 	}
 	defer reader.Close()
 
-	data, err := reader.ReadEntry(entry)
+	if !manga.ImageExtensions[strings.ToLower(filepath.Ext(entry))] {
+		http.Error(w, "unsupported page format", 400)
+		return
+	}
+	data, err := reader.ReadEntryContext(req.Context(), entry)
 	if err != nil {
 		http.Error(w, "page not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Type", http.DetectContentType(data))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }

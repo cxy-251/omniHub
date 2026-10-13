@@ -111,3 +111,46 @@ func TestMangaCBZAndProgress(t *testing.T) {
 		t.Errorf("unexpected progress: %+v", gotProg)
 	}
 }
+
+func TestNaturalImageOrderAndMetadataErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "natural.cbz")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := zip.NewWriter(f)
+	for _, name := range []string{"10.jpg", "2.jpg", "metadata.json"} {
+		entry, err := w.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte("invalid metadata")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenCBZ(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	images := r.ListImageEntries()
+	if len(images) != 2 || images[0] != "2.jpg" {
+		t.Fatalf("not naturally sorted: %v", images)
+	}
+	images[0] = "mutated"
+	if r.ListImageEntries()[0] != "2.jpg" {
+		t.Fatal("caller mutated cached order")
+	}
+	if r.GetCoverEntry("metadata.json") != "2.jpg" {
+		t.Fatal("metadata exposed as cover")
+	}
+	if _, err := ScanMangaFromCBZ(path); err == nil {
+		t.Fatal("malformed metadata silently discarded")
+	}
+}

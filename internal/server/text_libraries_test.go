@@ -63,4 +63,9 @@ func TestTextMultiLibraryPagingAndReadsWithoutPrimary(t *testing.T) {
 	if w := request("/api/media/text/list?limit=10000"); w.Code != 400 {
 		t.Fatal("unbounded page accepted")
 	}
+	for _, query := range []string{"limit=10000", "limit=no", "start=-1", "offset=-1", "offset=no"} {
+		if w := request("/api/media/text/chunk?path=" + url.QueryEscape(first[0].RelPath) + "&" + query); w.Code != 400 {
+			t.Fatalf("invalid chunk query accepted: %s => %d", query, w.Code)
+		}
+	}
 }

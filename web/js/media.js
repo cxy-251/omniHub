@@ -197,20 +197,20 @@ const MediaHub = {
     }
 
     // 文本分页
-    this.textState = { path: '', start: 0, limit: 100, hasMore: false };
+    this.textState = { path: '', start: 1, offset: 0, nextOffset: 0, nextStart: 1, history: [], limit: 100, hasMore: false, sequence: 0 };
     const btnTextLoad = document.getElementById('btn-text-load');
     if (btnTextLoad) {
       btnTextLoad.addEventListener('click', () => {
-        this.textState.path = document.getElementById('text-path-input').value.trim();
-        this.textState.start = 0;
-        this.loadTextChunk();
+        this.selectTextFile(document.getElementById('text-path-input').value.trim());
       });
     }
     const btnTextPrev = document.getElementById('btn-text-prev');
     if (btnTextPrev) {
       btnTextPrev.addEventListener('click', () => {
-        if (this.textState.start >= this.textState.limit) {
-          this.textState.start -= this.textState.limit;
+        if (this.textState.start > 1) {
+          const previous = this.textState.history.pop();
+          this.textState.start = previous?.start ?? Math.max(1, this.textState.start - this.textState.limit);
+          this.textState.offset = previous?.offset ?? -1;
           this.loadTextChunk();
         }
       });
@@ -219,7 +219,10 @@ const MediaHub = {
     if (btnTextNext) {
       btnTextNext.addEventListener('click', () => {
         if (this.textState.hasMore) {
-          this.textState.start += this.textState.limit;
+          this.textState.history.push({ start: this.textState.start, offset: this.textState.offset });
+          if (this.textState.history.length > 256) this.textState.history.shift();
+          this.textState.start = this.textState.nextStart;
+          this.textState.offset = this.textState.nextOffset;
           this.loadTextChunk();
         }
       });
@@ -486,24 +489,38 @@ const MediaHub = {
     const pageInfo = document.getElementById('text-page-info');
     if (!this.textState.path) return;
 
+    const state = this.textState;
+    const sequence = ++state.sequence;
+    const current = () => this.textState === state && state.sequence === sequence && !lifetime.signal.aborted;
+    const previousButton = document.getElementById('btn-text-prev');
+    const nextButton = document.getElementById('btn-text-next');
+    previousButton.disabled = true; nextButton.disabled = true;
+
     contentEl.textContent = '加载中…';
     try {
-      const res = await fetch(`/api/media/text/chunk?path=${encodeURIComponent(this.textState.path)}&start=${this.textState.start}&limit=${this.textState.limit}`);
+      const cursor = state.offset >= 0 ? `&offset=${state.offset}` : '';
+      const res = await fetch(`/api/media/text/chunk?path=${encodeURIComponent(state.path)}&start=${state.start}&limit=${state.limit}${cursor}`);
       const data = await res.json();
+      if (!current()) return;
 
-      this.textState.hasMore = data.has_more;
-      pageInfo.textContent = `行号: ${data.start_line + 1} - ${data.start_line + data.lines.length} (总共: ${data.total_lines})`;
+      state.hasMore = data.has_more;
+      state.nextOffset = data.next_offset;
+      state.nextStart = data.start_line + data.lines.length;
+      pageInfo.textContent = data.lines.length ? `行号: ${data.start_line} - ${state.nextStart - 1}${data.total_lines >= 0 ? ` (共 ${data.total_lines} 行)` : ''}` : '已到文件末尾';
 
       // 使用离线 marked.min.js 进行富文本与图表排版 (第 6.1 节)
       const rawText = data.lines.join('\n');
-      if (this.textState.path.toLowerCase().endsWith('.md')) {
-        contentEl.innerHTML = await renderMarkdown(rawText);
+      if (state.path.toLowerCase().endsWith('.md')) {
+        const html = await renderMarkdown(rawText);
+        if (current()) contentEl.innerHTML = html;
       } else {
         contentEl.innerHTML = data.lines.map(line => `<div>${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") || '&nbsp;'}</div>`).join('');
       }
     } catch (e) {
  if (e.name === 'AbortError') return;
-      contentEl.textContent = `加载错误: ${e.message}`;
+      if (current()) contentEl.textContent = `加载错误: ${e.message}`;
+    } finally {
+      if (current()) { previousButton.disabled = state.start <= 1; nextButton.disabled = !state.hasMore; }
     }
   },
 
@@ -538,8 +555,7 @@ const MediaHub = {
   selectTextFile(relPath) {
     const inp = document.getElementById('text-path-input');
     if (inp) inp.value = relPath;
-    this.textState.path = relPath;
-    this.textState.start = 0;
+    this.textState = { ...this.textState, path: relPath, start: 1, offset: 0, nextOffset: 0, nextStart: 1, history: [], hasMore: false, sequence: 0 };
     this.loadTextChunk();
   },
 
