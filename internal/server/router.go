@@ -184,6 +184,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/text/epub", r.handleTextEpub)
 
 	// 音频业务接口
+	r.mux.HandleFunc("/api/media/audio/albums", r.handleAudioAlbums)
 	r.mux.HandleFunc("/api/media/audio/album", r.handleAudioAlbum)
 	r.mux.HandleFunc("/api/media/audio/stream", r.handleAudioStream)
 	r.mux.HandleFunc("/api/media/audio/progress", r.handleAudioProgress)
@@ -211,6 +212,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/tools/clipboard", r.handleToolsClipboard)
 	r.mux.HandleFunc("/api/tools/metrics", r.handleToolsMetrics)
 	r.mux.HandleFunc("/api/tools/wol", r.handleToolsWOL)
+	r.mux.HandleFunc("/api/tools/lanscan", r.handleToolsLANScan)
 	r.mux.HandleFunc("/api/tools/shared/files", r.handleToolsSharedFiles)
 	r.mux.HandleFunc("/api/tools/shared/upload", r.handleToolsSharedUpload)
 	r.mux.HandleFunc("/api/tools/shared/zip", r.handleToolsSharedZip)
@@ -667,6 +669,24 @@ func (r *Router) handleTextEpub(w http.ResponseWriter, req *http.Request) {
 
 // --- 音频 ---
 
+func (r *Router) handleAudioAlbums(w http.ResponseWriter, req *http.Request) {
+	if !r.checkSectionAccess(w, req, "audio", auth.TargetAll) {
+		return
+	}
+	primary := r.libMgr.GetPrimary()
+	if primary == nil {
+		writeJSON(w, http.StatusOK, []*audio.Album{})
+		return
+	}
+	audioRootDir := filepath.Join(primary.RootPath, "media_library", "audio")
+	albums, err := audio.ScanAlbums(audioRootDir)
+	if err != nil {
+		writeJSON(w, http.StatusOK, []*audio.Album{})
+		return
+	}
+	writeJSON(w, http.StatusOK, albums)
+}
+
 func (r *Router) handleAudioAlbum(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
 	fullPath, err := r.libMgr.ResolvePath(relPath)
@@ -1052,6 +1072,8 @@ func (r *Router) handleAdminUsers(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// 5.3.2 节：变更等级即时吊销所有已有会话 Token，防权限残留
+		_ = r.authDB.RevokeUserSessions(p.UserID)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1103,6 +1125,15 @@ func (r *Router) handleToolsWOL(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (r *Router) handleToolsLANScan(w http.ResponseWriter, req *http.Request) {
+	devices, err := tools.ScanLAN()
+	if err != nil {
+		writeJSON(w, http.StatusOK, []tools.LANDevice{})
+		return
+	}
+	writeJSON(w, http.StatusOK, devices)
 }
 
 func (r *Router) handleToolsSharedFiles(w http.ResponseWriter, req *http.Request) {

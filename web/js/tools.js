@@ -73,15 +73,17 @@ const ToolsHub = {
 
         <!-- 网络诊断与 WOL -->
         <div class="tool-card">
-          <h3>🌐 网络测速与网络唤醒 (WOL)</h3>
+          <h3>🌐 网络测速、唤醒与局域网扫描 (第 11.3 节)</h3>
           <div style="display:flex; gap:6px; align-items:center;">
             <button id="btn-speed-test" class="btn-primary">🚀 开始测速</button>
             <span id="speed-result" style="font-size:13px; color:var(--text-muted);">-</span>
+            <button id="btn-lan-scan" class="btn-primary" style="margin-left:auto;">🔍 扫描局域网</button>
           </div>
           <div style="display:flex; gap:6px; align-items:center; margin-top:8px;">
             <input type="text" id="wol-mac-input" placeholder="目标 PC MAC 地址 (如 AA:BB:CC:DD:EE:FF)" style="flex-grow:1;">
             <button id="btn-wol-send" class="btn-primary">唤醒</button>
           </div>
+          <div id="lan-devices-list" class="clipboard-list" style="max-height:90px; margin-top:8px; display:none;"></div>
         </div>
 
         <!-- MEGA 客户端面板 (第 10.2 节) -->
@@ -142,13 +144,17 @@ const ToolsHub = {
     const btnSpeed = document.getElementById('btn-speed-test');
     if (btnSpeed) btnSpeed.addEventListener('click', () => this.runSpeedTest());
 
-    // WOL
+    // WOL 与 LAN 扫描
     const btnWOL = document.getElementById('btn-wol-send');
     if (btnWOL) {
       btnWOL.addEventListener('click', () => {
         const mac = document.getElementById('wol-mac-input').value.trim();
         if (mac) this.sendWOL(mac);
       });
+    }
+    const btnLANScan = document.getElementById('btn-lan-scan');
+    if (btnLANScan) {
+      btnLANScan.addEventListener('click', () => this.scanLAN());
     }
 
     // MEGA 下载添加
@@ -358,6 +364,31 @@ const ToolsHub = {
         this.term.writeln(`执行异常: ${e.message}`);
         this.term.write('$ ');
       }
+    }
+  },
+
+  // --- 局域网设备扫描 (第 11.3.1 节) ---
+  async scanLAN() {
+    const listEl = document.getElementById('lan-devices-list');
+    if (!listEl) return;
+    listEl.style.display = 'block';
+    listEl.innerHTML = '<div style="color:var(--text-muted)">正在扫描局域网活跃设备…</div>';
+
+    try {
+      const res = await fetch('/api/tools/lanscan');
+      const devices = await res.json();
+      if (!Array.isArray(devices) || devices.length === 0) {
+        listEl.innerHTML = '<div style="color:var(--text-muted)">未发现局域网活跃设备</div>';
+        return;
+      }
+      listEl.innerHTML = devices.map(d => `
+        <div class="clipboard-item" style="cursor:pointer;" onclick="document.getElementById('wol-mac-input').value = '${d.mac}'" title="点击填入 MAC 地址">
+          <span>🖥️ ${this.escapeHTML(d.hostname || d.ip)} (${d.ip})</span>
+          <span style="font-family:monospace; font-size:11px; color:var(--text-muted);">${d.mac} [${d.device}]</span>
+        </div>
+      `).join('');
+    } catch (e) {
+      listEl.innerHTML = `<div style="color:var(--danger)">扫描失败: ${e.message}</div>`;
     }
   },
 

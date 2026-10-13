@@ -87,6 +87,25 @@ func ScanAlbum(albumDir string) (*Album, error) {
 	return album, nil
 }
 
+// ScanAlbums 扫描音频根目录下所有专辑子目录（第 6.2.2 节）。
+func ScanAlbums(audioRootDir string) ([]*Album, error) {
+	entries, err := os.ReadDir(audioRootDir)
+	if err != nil {
+		return nil, err
+	}
+
+	var albums []*Album
+	for _, entry := range entries {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+			albumDir := filepath.Join(audioRootDir, entry.Name())
+			if album, err := ScanAlbum(albumDir); err == nil && len(album.Tracks) > 0 {
+				albums = append(albums, album)
+			}
+		}
+	}
+	return albums, nil
+}
+
 // ProgressDB 记录用户维度的音频断点（第 6.2.4 节）。
 type ProgressDB struct {
 	db *sql.DB

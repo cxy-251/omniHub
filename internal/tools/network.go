@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 )
 
@@ -46,4 +47,52 @@ func SendWakeOnLAN(macAddr string) error {
 		return fmt.Errorf("failed to send magic packet: %w", err)
 	}
 	return nil
+}
+
+// LANDevice 记录局域网活跃设备信息（第 11.3.1 节）。
+type LANDevice struct {
+	IP       string `json:"ip"`
+	MAC      string `json:"mac"`
+	Hostname string `json:"hostname"`
+	Device   string `json:"device"`
+}
+
+// ScanLAN 扫描读取局域网内活跃设备（第 11.3.1 节）。
+func ScanLAN() ([]LANDevice, error) {
+	data, err := os.ReadFile("/proc/net/arp")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read /proc/net/arp: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var devices []LANDevice
+	for i, line := range lines {
+		if i == 0 || strings.TrimSpace(line) == "" {
+			continue // 跳过表头和空行
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 6 {
+			ip := fields[0]
+			mac := fields[3]
+			dev := fields[5]
+
+			if mac == "00:00:00:00:00:00" || mac == "" {
+				continue
+			}
+
+			hostname := ""
+			names, _ := net.LookupAddr(ip)
+			if len(names) > 0 {
+				hostname = strings.TrimSuffix(names[0], ".")
+			}
+
+			devices = append(devices, LANDevice{
+				IP:       ip,
+				MAC:      mac,
+				Hostname: hostname,
+				Device:   dev,
+			})
+		}
+	}
+	return devices, nil
 }
