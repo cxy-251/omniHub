@@ -85,6 +85,8 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/shortvideo/albums", r.handleShortVideoAlbums)
 	r.mux.HandleFunc("/api/media/shortvideo/album/image", r.handleShortVideoAlbumImage)
 	r.mux.HandleFunc("/api/media/shortvideo/thumbnail", r.handleShortVideoThumbnail)
+	r.mux.HandleFunc("/api/media/shortvideo/channels", r.handleShortVideoChannels)
+	r.mux.HandleFunc("/api/media/shortvideo/random", r.handleShortVideoRandom)
 
 	// 文本业务接口
 	r.mux.HandleFunc("/api/media/text/chunk", r.handleTextChunk)
@@ -373,6 +375,56 @@ func (r *Router) handleShortVideoThumbnail(w http.ResponseWriter, req *http.Requ
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+func (r *Router) handleShortVideoChannels(w http.ResponseWriter, req *http.Request) {
+	primary := r.libMgr.GetPrimary()
+	if primary == nil {
+		writeJSON(w, http.StatusOK, []string{})
+		return
+	}
+	svDir := filepath.Join(primary.RootPath, "media_library", "shortvideo")
+	entries, err := os.ReadDir(svDir)
+	if err != nil {
+		writeJSON(w, http.StatusOK, []string{})
+		return
+	}
+	var channels []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			channels = append(channels, e.Name())
+		}
+	}
+	writeJSON(w, http.StatusOK, channels)
+}
+
+func (r *Router) handleShortVideoRandom(w http.ResponseWriter, req *http.Request) {
+	channel := req.URL.Query().Get("channel")
+	primary := r.libMgr.GetPrimary()
+	if primary == nil || channel == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	channelDir := filepath.Join(primary.RootPath, "media_library", "shortvideo", channel)
+
+	var mp4Files []string
+	_ = filepath.Walk(channelDir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".mp4") {
+			rel, _ := filepath.Rel(primary.RootPath, path)
+			mp4Files = append(mp4Files, rel)
+		}
+		return nil
+	})
+
+	if len(mp4Files) == 0 {
+		http.Error(w, "no videos in channel", http.StatusNotFound)
+		return
+	}
+
+	idx := time.Now().UnixNano() % int64(len(mp4Files))
+	writeJSON(w, http.StatusOK, map[string]string{
+		"path": fmt.Sprintf("%s:%s", primary.ID, mp4Files[idx]),
+	})
 }
 
 // --- 文本 ---

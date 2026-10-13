@@ -50,21 +50,23 @@ const MediaHub = {
         <div id="gallery-list" class="gallery-grid"></div>
       </div>
 
-      <!-- 短视频与图集 -->
+      <!-- 短视频多联放映矩阵 (第 11.1 节) -->
       <div id="subpane-shortvideo" class="media-subpane">
-        <div class="video-layout">
-          <div class="video-player-container">
-            <video id="h5-video-player" controls preload="metadata"></video>
-            <div style="margin-top: 8px; display:flex; gap:8px;">
-              <input type="text" id="video-path-input" placeholder="输入视频相对路径 (如 media_library/shortvideo/test.mp4)" style="flex-grow:1;">
-              <button id="btn-video-play" class="btn-primary">播放</button>
-            </div>
-          </div>
-          <div class="album-viewer">
-            <h4>图集查看</h4>
-            <div id="album-images-container">暂无加载图集</div>
-          </div>
+        <div class="matrix-toolbar">
+          <label style="display:flex; align-items:center; gap:6px; font-size:13px;">
+            <span>分屏布局:</span>
+            <select id="matrix-layout-select">
+              <option value="2">2 屏并排</option>
+              <option value="3" selected>3 屏并排 (Deck宽屏)</option>
+            </select>
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer;">
+            <input type="checkbox" id="matrix-focus-audio" checked>
+            <span>🎯 焦点出声 (点击视频独占出声)</span>
+          </label>
+          <button id="btn-matrix-random-all" class="btn-primary" style="padding:2px 10px;">🎲 全屏随机切片</button>
         </div>
+        <div id="matrix-slots-container" class="matrix-container matrix-grid-3"></div>
       </div>
 
       <!-- 文本阅读器 -->
@@ -128,16 +130,18 @@ const MediaHub = {
     const chkTrash = document.getElementById('gallery-include-trash');
     if (chkTrash) chkTrash.addEventListener('change', () => this.loadGallery());
 
-    // 视频播放
-    const btnVideo = document.getElementById('btn-video-play');
-    if (btnVideo) {
-      btnVideo.addEventListener('click', () => {
-        const path = document.getElementById('video-path-input').value.trim();
-        if (path) {
-          const v = document.getElementById('h5-video-player');
-          v.src = `/api/media/shortvideo/stream?path=${encodeURIComponent(path)}`;
-          v.play();
-        }
+    // 短视频多联放映矩阵事件 (第 11.1 节)
+    const selectLayout = document.getElementById('matrix-layout-select');
+    if (selectLayout) {
+      selectLayout.addEventListener('change', (e) => {
+        this.setMatrixLayout(parseInt(e.target.value, 10));
+      });
+    }
+
+    const btnRandomAll = document.getElementById('btn-matrix-random-all');
+    if (btnRandomAll) {
+      btnRandomAll.addEventListener('click', () => {
+        this.randomizeAllSlots();
       });
     }
 
@@ -204,6 +208,106 @@ const MediaHub = {
       p.classList.toggle('active', p.id === `subpane-${subId}`);
     });
     if (subId === 'gallery') this.loadGallery(true);
+    if (subId === 'shortvideo') this.initMatrix();
+  },
+
+  // --- 短视频多联放映矩阵实现 (第 11.1 节) ---
+  matrixState: {
+    slotCount: 3,
+    channels: []
+  },
+
+  async initMatrix() {
+    if (this.matrixState.channels.length === 0) {
+      try {
+        const res = await fetch('/api/media/shortvideo/channels');
+        this.matrixState.channels = await res.json();
+      } catch (_) {
+        this.matrixState.channels = ['快手', '抖音', 'TikTok'];
+      }
+    }
+    this.renderMatrixSlots();
+  },
+
+  setMatrixLayout(count) {
+    this.matrixState.slotCount = count;
+    const container = document.getElementById('matrix-slots-container');
+    if (container) {
+      container.className = `matrix-container matrix-grid-${count}`;
+    }
+    this.renderMatrixSlots();
+  },
+
+  renderMatrixSlots() {
+    const container = document.getElementById('matrix-slots-container');
+    if (!container) return;
+    const count = this.matrixState.slotCount;
+    const channels = this.matrixState.channels.length > 0 ? this.matrixState.channels : ['快手', '抖音', 'TikTok'];
+
+    container.innerHTML = Array.from({ length: count }).map((_, i) => {
+      const defaultChan = channels[i % channels.length] || channels[0];
+      return `
+        <div class="matrix-slot ${i === 0 ? 'focus-active' : ''}" id="matrix-slot-${i}" onclick="MediaHub.focusSlot(${i})">
+          <div class="matrix-slot-header">
+            <select id="slot-chan-${i}" onchange="MediaHub.changeSlotChannel(${i}, this.value)" onclick="event.stopPropagation()">
+              ${channels.map(c => `<option value="${c}" ${c === defaultChan ? 'selected' : ''}>${c}</option>`).join('')}
+            </select>
+            <button class="btn-primary" style="padding:2px 8px;" onclick="event.stopPropagation(); MediaHub.randomSlotVideo(${i})">🎲 换片</button>
+          </div>
+          <video id="slot-video-${i}" autoplay loop ${i === 0 ? '' : 'muted'} playsinline></video>
+        </div>
+      `;
+    }).join('');
+
+    for (let i = 0; i < count; i++) {
+      const defaultChan = channels[i % channels.length] || channels[0];
+      this.randomSlotVideo(i, defaultChan);
+    }
+  },
+
+  async randomSlotVideo(slotIndex, channel) {
+    const chan = channel || document.getElementById(`slot-chan-${slotIndex}`)?.value;
+    if (!chan) return;
+    const v = document.getElementById(`slot-video-${slotIndex}`);
+    if (!v) return;
+
+    try {
+      const res = await fetch(`/api/media/shortvideo/random?channel=${encodeURIComponent(chan)}`);
+      if (res.ok) {
+        const data = await res.json();
+        v.src = `/api/media/shortvideo/stream?path=${encodeURIComponent(data.path)}`;
+        v.play().catch(() => {});
+      }
+    } catch (_) {}
+  },
+
+  changeSlotChannel(slotIndex, channel) {
+    this.randomSlotVideo(slotIndex, channel);
+  },
+
+  randomizeAllSlots() {
+    for (let i = 0; i < this.matrixState.slotCount; i++) {
+      this.randomSlotVideo(i);
+    }
+  },
+
+  focusSlot(slotIndex) {
+    const focusAudio = document.getElementById('matrix-focus-audio')?.checked;
+    const count = this.matrixState.slotCount;
+
+    for (let i = 0; i < count; i++) {
+      const slotEl = document.getElementById(`matrix-slot-${i}`);
+      const videoEl = document.getElementById(`slot-video-${i}`);
+      if (!slotEl || !videoEl) continue;
+
+      if (i === slotIndex) {
+        slotEl.classList.add('focus-active');
+        if (focusAudio) videoEl.muted = false;
+      } else {
+        slotEl.classList.remove('focus-active');
+        if (focusAudio) videoEl.muted = true;
+      }
+    }
   },
 
   // --- 画廊实现 (严格 48 张分页与追加加载) ---
