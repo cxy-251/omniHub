@@ -3,6 +3,7 @@ package storage
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -21,6 +22,20 @@ func OpenSQLite(path string, readOnly bool) (*sql.DB, error) {
 	if !readOnly {
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			return nil, err
+		}
+	}
+	// SQLite opens its own sidecars after sql.Open. Reject links and special files
+	// before connecting, including global state files which lack a media resolver.
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		info, err := os.Lstat(path + suffix)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect database file: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, errors.New("database and sidecars must be regular files")
 		}
 	}
 	uriPath := filepath.ToSlash(path)

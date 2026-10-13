@@ -1,6 +1,7 @@
 package manga
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -160,6 +161,26 @@ func (d *DB) GetProgress(userID int64, mangaID string) (*MangaProgress, error) {
 	}
 	p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
 	return &p, nil
+}
+
+// LegacyProgressForPath reads historical module progress by its old key or indexed
+// resource path. It never modifies or migrates the module database.
+func (d *DB) LegacyProgressForPath(ctx context.Context, userID int64, logical, provided, relative string) (*MangaProgress, error) {
+	var p MangaProgress
+	var updated string
+	err := d.db.QueryRowContext(ctx, `SELECT p.user_id,p.manga_id,p.chapter_index,p.page_index,p.scroll_offset_ratio,p.updated_at
+		FROM manga_progress p LEFT JOIN mangas m ON p.manga_id=m.id
+		WHERE p.user_id=? AND (p.manga_id IN(?,?,?) OR m.rel_path IN(?,?,?))
+		ORDER BY p.updated_at DESC,p.manga_id ASC LIMIT 1`, userID, logical, provided, "media_library/manga/"+relative, relative, logical, "media_library/manga/"+relative).
+		Scan(&p.UserID, &p.MangaID, &p.ChapterIndex, &p.PageIndex, &p.ScrollOffsetRatio, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	p.UpdatedAt, err = time.Parse(time.RFC3339, updated)
+	return &p, err
 }
 
 // ListMangas 列出所有漫画。

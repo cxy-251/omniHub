@@ -43,3 +43,23 @@ func TestReadOnlyMissingDatabaseCreatesNothing(t *testing.T) {
 		t.Fatalf("read-only open created parent directory: %v", err)
 	}
 }
+
+func TestDatabaseAndSidecarLinksCannotCreateExternalFiles(t *testing.T) {
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		t.Run(suffix, func(t *testing.T) {
+			root, outside := t.TempDir(), t.TempDir()
+			path := filepath.Join(root, "user_state.db")
+			if err := os.Symlink(filepath.Join(outside, "external.db"), path+suffix); err != nil {
+				t.Skipf("symlink unsupported: %v", err)
+			}
+			if db, err := OpenSQLite(path, false); err == nil {
+				db.Close()
+				t.Fatal("database followed link")
+			}
+			files, err := os.ReadDir(outside)
+			if err != nil || len(files) != 0 {
+				t.Fatal("SQLite wrote an external file")
+			}
+		})
+	}
+}

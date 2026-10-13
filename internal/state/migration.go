@@ -226,11 +226,11 @@ func inspect(plan Plan) ([]fileDigest, error) {
 		if rel == "." {
 			return nil
 		}
-		if plan.Bootstrap && rel != "users.db" && rel != "audio_progress.db" {
+		if plan.Bootstrap && rel != "users.db" && rel != "audio_progress.db" && rel != "user_state.db" {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
-			if rel == "users.db-wal" || rel == "audio_progress.db-wal" {
+			if rel == "users.db-wal" || rel == "audio_progress.db-wal" || rel == "user_state.db-wal" {
 				info, err := entry.Info()
 				if err != nil {
 					return err

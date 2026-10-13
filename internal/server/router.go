@@ -29,6 +29,7 @@ import (
 	"omnihub/internal/tasks"
 	"omnihub/internal/text"
 	"omnihub/internal/tools"
+	"omnihub/internal/userstate"
 	"omnihub/web"
 )
 
@@ -41,6 +42,7 @@ type Router struct {
 	clipboard    *tools.ClipboardManager
 	taskMgr      *tasks.Manager
 	progressDB   *audio.ProgressDB
+	userState    *userstate.DB
 	megaClient   *mega.Client
 	videoCatalog *shortvideo.VideoCatalog
 	textCatalog  *catalog.Catalog
@@ -66,6 +68,10 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 	if err != nil {
 		return nil, fmt.Errorf("open audio progress: %w", err)
 	}
+	readingDB, err := userstate.Open(filepath.Join(stateDir, "user_state.db"))
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("open user state: %w", err), progDB.Close())
+	}
 
 	r := &Router{
 		mux:          http.NewServeMux(),
@@ -79,6 +85,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		clipboard:    tools.NewClipboardManager(50),
 		taskMgr:      tasks.NewManager(),
 		progressDB:   progDB,
+		userState:    readingDB,
 		megaClient:   mega.NewClient("", 5*time.Minute),
 		videoCatalog: shortvideo.NewVideoCatalog(),
 		textCatalog:  catalog.New(".txt", ".epub", ".md", ".rst"),
@@ -145,12 +152,16 @@ func (r *Router) getSVStorage(root string) (*shortvideo.Storage, error) {
 }
 
 func (r *Router) getMangaDB(root string) (*manga.DB, error) {
+	return r.getMangaDBMode(root, r.libMgr.IsReadOnly(root))
+}
+
+func (r *Router) getMangaDBMode(root string, readOnly bool) (*manga.DB, error) {
 	r.dbMu.Lock()
 	defer r.dbMu.Unlock()
 	if r.closed {
 		return nil, errors.New("router is closed")
 	}
-	readOnly := r.libMgr.IsReadOnly(root)
+	readOnly = readOnly || r.libMgr.IsReadOnly(root)
 	key := fmt.Sprintf("%s:%t", root, readOnly)
 	if db := r.mangaDB[key]; db != nil {
 		return db, nil
@@ -221,7 +232,7 @@ func (r *Router) Close() error {
 	for _, db := range r.gamesDB {
 		errs = append(errs, db.Close())
 	}
-	errs = append(errs, r.progressDB.Close(), r.taskMgr.Close())
+	errs = append(errs, r.progressDB.Close(), r.userState.Close(), r.taskMgr.Close())
 	return errors.Join(errs...)
 }
 
@@ -983,78 +994,6 @@ func (r *Router) handleMangaPage(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
-}
-
-func (r *Router) handleMangaProgress(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodGet && req.Method != http.MethodPost {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-	var progress manga.MangaProgress
-	progress.MangaID = req.URL.Query().Get("manga_id")
-	if req.Method == http.MethodPost {
-		if err := json.NewDecoder(req.Body).Decode(&progress); err != nil || progress.ChapterIndex < 0 || progress.PageIndex < 0 || progress.ScrollOffsetRatio < 0 || progress.ScrollOffsetRatio > 1 {
-			http.Error(w, "invalid progress", 400)
-			return
-		}
-	}
-	if progress.MangaID == "" || len(progress.MangaID) > 4096 {
-		http.Error(w, "invalid manga identity", 400)
-		return
-	}
-	if _, err := r.libMgr.ResolveCategoryPath(progress.MangaID, "media_library/manga"); err != nil {
-		http.Error(w, "manga library unavailable", 404)
-		return
-	}
-	selected := r.libMgr.GetPrimary()
-	if parts := strings.SplitN(progress.MangaID, ":", 2); len(parts) == 2 {
-		selected = nil
-		for _, lib := range r.libMgr.ListLibraries() {
-			if lib.ID == parts[0] {
-				selected = lib
-				break
-			}
-		}
-	}
-	if selected == nil {
-		http.Error(w, "library unavailable", 404)
-		return
-	}
-	user := auth.UserFromContext(req.Context())
-	if req.Method == http.MethodPost && (selected.ReadOnly || user.ID <= 0) {
-		http.Error(w, "writable library and logged-in user required", 403)
-		return
-	}
-	mangaDB, err := r.getMangaDB(selected.RootPath)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	switch req.Method {
-	case http.MethodGet:
-		p, err := mangaDB.GetProgress(user.ID, progress.MangaID)
-		if err == nil && p == nil {
-			if parts := strings.SplitN(progress.MangaID, ":", 2); len(parts) == 2 {
-				p, err = mangaDB.GetProgress(user.ID, parts[1])
-			}
-		}
-		if err != nil {
-			http.Error(w, "progress unavailable", 503)
-			return
-		}
-		if p != nil {
-			p.MangaID = progress.MangaID
-		}
-		writeJSON(w, http.StatusOK, p)
-	case http.MethodPost:
-		progress.UserID = user.ID
-		if err := mangaDB.SaveProgress(&progress); err != nil {
-			http.Error(w, "save progress failed", 503)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	}
 }
 
 // --- 游戏专区 ---

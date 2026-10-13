@@ -6,8 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"context"
+	"omnihub/internal/manga"
 	"omnihub/internal/platform"
 	"omnihub/internal/storage"
+	"omnihub/internal/userstate"
 )
 
 func makeState(t *testing.T, dir string) {
@@ -80,6 +83,17 @@ func TestBootstrapMigrationCopiesOnlyGlobalState(t *testing.T) {
 	root := t.TempDir()
 	source, destination := filepath.Join(root, "config"), filepath.Join(root, "primary")
 	makeState(t, source)
+	positions, err := userstate.Open(filepath.Join(source, "user_state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "library:media_library/manga/book.cbz"
+	if err := positions.SaveManga(context.Background(), &manga.MangaProgress{UserID: 1, MangaID: key, PageIndex: 5, ScrollOffsetRatio: 0.8}); err != nil {
+		t.Fatal(err)
+	}
+	if err := positions.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(source, "config.json"), []byte("retain configuration"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +102,15 @@ func TestBootstrapMigrationCopiesOnlyGlobalState(t *testing.T) {
 	}
 	readProof(t, source)
 	readProof(t, destination)
+	copied, err := userstate.Open(filepath.Join(destination, "user_state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer copied.Close()
+	p, err := copied.Manga(context.Background(), 1, key)
+	if err != nil || p == nil || p.ScrollOffsetRatio != 0.8 {
+		t.Fatal("user reading state not migrated")
+	}
 	if _, err := os.Stat(filepath.Join(destination, "config.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("copied application configuration into global state")
 	}
