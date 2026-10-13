@@ -44,6 +44,7 @@ type Router struct {
 	megaClient   *mega.Client
 	videoCatalog *shortvideo.VideoCatalog
 	textCatalog  *catalog.Catalog
+	audioCatalog *catalog.Catalog
 
 	// 专区数据库连接复用缓存（第 12.2 节避免高频请求重复 Open 与 Migrate）
 	dbMu      sync.RWMutex
@@ -81,6 +82,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		megaClient:   mega.NewClient("", 5*time.Minute),
 		videoCatalog: shortvideo.NewVideoCatalog(),
 		textCatalog:  catalog.New(".txt", ".epub", ".md", ".rst"),
+		audioCatalog: catalog.New(audio.FileExtensions()...),
 	}
 	r.registerRoutes()
 	return r, nil
@@ -265,6 +267,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/audio/albums", r.handleAudioAlbums)
 	r.mux.HandleFunc("/api/media/audio/album", r.handleAudioAlbum)
 	r.mux.HandleFunc("/api/media/audio/stream", r.handleAudioStream)
+	r.mux.HandleFunc("/api/media/audio/cover", r.handleAudioCover)
 	r.mux.HandleFunc("/api/media/audio/progress", r.handleAudioProgress)
 
 	// 漫画业务接口
@@ -776,18 +779,7 @@ func (r *Router) handleAudioAlbums(w http.ResponseWriter, req *http.Request) {
 	if !r.checkSectionAccess(w, req, "audio", auth.TargetAll) {
 		return
 	}
-	primary := r.libMgr.GetPrimary()
-	if primary == nil {
-		writeJSON(w, http.StatusOK, []*audio.Album{})
-		return
-	}
-	audioRootDir := filepath.Join(primary.RootPath, "media_library", "audio")
-	albums, err := audio.ScanAlbums(audioRootDir)
-	if err != nil {
-		writeJSON(w, http.StatusOK, []*audio.Album{})
-		return
-	}
-	writeJSON(w, http.StatusOK, albums)
+	r.listAudioLibraries(w, req)
 }
 
 func (r *Router) handleAudioAlbum(w http.ResponseWriter, req *http.Request) {
@@ -803,6 +795,23 @@ func (r *Router) handleAudioAlbum(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	limit, offset, err := pageBounds(req)
+	if err != nil {
+		http.Error(w, "invalid page bounds", 400)
+		return
+	}
+	if offset >= len(album.Tracks) {
+		album.Tracks = []*audio.Track{}
+	} else {
+		album.Tracks = album.Tracks[offset : offset+min(limit, len(album.Tracks)-offset)]
+	}
+	album.ID = relPath
+	if album.CoverPath != "" {
+		album.CoverPath = strings.TrimSuffix(relPath, "/") + "/" + album.CoverPath
+	}
+	for _, track := range album.Tracks {
+		track.RelPath = strings.TrimSuffix(relPath, "/") + "/" + track.Filename
+	}
 	writeJSON(w, http.StatusOK, album)
 }
 
@@ -817,6 +826,11 @@ func (r *Router) handleAudioStream(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unsupported media format", http.StatusBadRequest)
 		return
 	}
+	info, err := os.Lstat(fullPath)
+	if err != nil || !info.Mode().IsRegular() {
+		http.Error(w, "audio file unavailable", 404)
+		return
+	}
 
 	http.ServeFile(w, req, fullPath)
 }
@@ -824,29 +838,60 @@ func (r *Router) handleAudioStream(w http.ResponseWriter, req *http.Request) {
 func (r *Router) handleAudioProgress(w http.ResponseWriter, req *http.Request) {
 	user := auth.UserFromContext(req.Context())
 	if r.progressDB == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"offset": 0})
+		http.Error(w, "progress store unavailable", 503)
 		return
 	}
-
-	switch req.Method {
-	case http.MethodGet:
-		audioID := req.URL.Query().Get("audio_id")
-		offset, _ := r.progressDB.GetProgress(user.ID, audioID)
-		writeJSON(w, http.StatusOK, map[string]interface{}{"offset": offset})
-	case http.MethodPost:
-		var p struct {
-			AudioID string  `json:"audio_id"`
-			Offset  float64 `json:"offset"`
-		}
-		if err := json.NewDecoder(req.Body).Decode(&p); err == nil {
-			_ = r.progressDB.SaveProgress(user.ID, p.AudioID, p.Offset)
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	if req.Method != http.MethodGet && req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var p struct {
+		AudioID string  `json:"audio_id"`
+		Offset  float64 `json:"offset"`
+	}
+	p.AudioID = req.URL.Query().Get("audio_id")
+	if req.Method == http.MethodPost {
+		if err := json.NewDecoder(req.Body).Decode(&p); err != nil {
+			http.Error(w, "bad request", 400)
 			return
 		}
-		http.Error(w, "bad request", http.StatusBadRequest)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+	physical, err := r.libMgr.ResolveCategoryPath(p.AudioID, "media_library/audio")
+	if err != nil || len(p.AudioID) > 4096 || !audio.SupportedExtensions[strings.ToLower(filepath.Ext(physical))] {
+		http.Error(w, "invalid audio identity", 400)
+		return
+	}
+	info, err := os.Lstat(physical)
+	if err != nil || !info.Mode().IsRegular() {
+		http.Error(w, "audio file unavailable", 404)
+		return
+	}
+	if req.Method == http.MethodGet {
+		if user.ID <= 0 {
+			writeJSON(w, 200, map[string]float64{"offset": 0})
+			return
+		}
+		offset, err := r.progressDB.GetProgress(user.ID, p.AudioID)
+		if err != nil {
+			http.Error(w, "read progress failed", 503)
+			return
+		}
+		writeJSON(w, 200, map[string]float64{"offset": offset})
+		return
+	}
+	if user.ID <= 0 {
+		http.Error(w, "login required to save progress", 403)
+		return
+	}
+	if err := r.progressDB.SaveProgress(user.ID, p.AudioID, p.Offset); err != nil {
+		if errors.Is(err, audio.ErrInvalidProgress) {
+			http.Error(w, "invalid progress", 400)
+		} else {
+			http.Error(w, "progress storage unavailable", 503)
+		}
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
 // --- 漫画 ---

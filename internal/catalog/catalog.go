@@ -37,6 +37,13 @@ type rootSnapshot struct {
 	checked     time.Time
 	used        uint64
 	bytes       int
+	folders     []Directory
+}
+
+// Directory 表示含有匹配文件的相对目录及其直接文件数量。
+type Directory struct {
+	Path  string
+	Count int
 }
 
 // Catalog 按需缓存目录快照；不写磁盘、不启动后台扫描。
@@ -108,6 +115,24 @@ func (c *Catalog) Page(ctx context.Context, root string, limit, offset int) ([]s
 	}
 	end := offset + min(limit, total-offset)
 	return append([]string{}, snapshot.files[offset:end]...), total, nil
+}
+
+// DirectoryPage 分页返回含匹配文件的目录，用于嵌套音频专辑等视图。
+func (c *Catalog) DirectoryPage(ctx context.Context, root string, limit, offset int) ([]Directory, int, error) {
+	if limit < 1 || limit > 200 || offset < 0 {
+		return nil, 0, errors.New("invalid directory page bounds")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	snapshot, err := c.snapshotLocked(ctx, root)
+	if err != nil {
+		return nil, 0, err
+	}
+	total := len(snapshot.folders)
+	if offset >= total {
+		return []Directory{}, total, nil
+	}
+	return append([]Directory{}, snapshot.folders[offset:offset+min(limit, total-offset)]...), total, nil
 }
 
 func (c *Catalog) snapshotLocked(ctx context.Context, root string) (*rootSnapshot, error) {
@@ -240,5 +265,17 @@ func (c *Catalog) refresh(ctx context.Context, root string, old *rootSnapshot) (
 		}
 	}
 	sort.Strings(next.files)
+	counts := make(map[string]int)
+	for _, file := range next.files {
+		counts[filepath.ToSlash(filepath.Dir(file))]++
+	}
+	for dir, count := range counts {
+		next.folders = append(next.folders, Directory{Path: dir, Count: count})
+		next.bytes += len(dir) + 64
+	}
+	sort.Slice(next.folders, func(i, j int) bool { return next.folders[i].Path < next.folders[j].Path })
+	if next.bytes > rootBudget {
+		return nil, errors.New("directory groups exceed bounded catalog capacity")
+	}
 	return next, nil
 }

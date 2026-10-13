@@ -4,13 +4,18 @@ package audio
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
-	"omnihub/internal/storage"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"omnihub/internal/ordering"
+	"omnihub/internal/storage"
 
 	_ "modernc.org/sqlite"
 )
@@ -24,6 +29,19 @@ var SupportedExtensions = map[string]bool{
 	".ogg":  true,
 }
 
+// ErrInvalidProgress 表示账号、音轨标识或断点数值不符合存储边界。
+var ErrInvalidProgress = errors.New("invalid audio progress")
+
+// FileExtensions 返回支持的后缀副本，供目录索引与流播放共享同一格式清单。
+func FileExtensions() []string {
+	result := make([]string, 0, len(SupportedExtensions))
+	for ext := range SupportedExtensions {
+		result = append(result, ext)
+	}
+	sort.Strings(result)
+	return result
+}
+
 // Track 记录专辑内的单集音轨信息。
 type Track struct {
 	Index    int    `json:"index"`    // 自然排序序号 (1, 2, 3...)
@@ -35,21 +53,40 @@ type Track struct {
 
 // Album 记录目录映射出的专辑。
 type Album struct {
-	ID        string   `json:"id"`         // 专辑唯一 ID
-	Title     string   `json:"title"`      // 专辑名称（父目录名）
-	CoverPath string   `json:"cover_path"` // 封面相对或绝对路径
-	Tracks    []*Track `json:"tracks"`     // 分集列表
+	ID          string   `json:"id"`         // 专辑唯一 ID
+	Title       string   `json:"title"`      // 专辑名称（父目录名）
+	CoverPath   string   `json:"cover_path"` // 目录内相对路径；服务接口转换为库 UUID 逻辑路径
+	Tracks      []*Track `json:"tracks"`     // 分集列表
+	TrackCount  int      `json:"track_count"`
+	LibraryID   string   `json:"library_id,omitempty"`
+	LibraryName string   `json:"library_name,omitempty"`
 }
 
 // ScanAlbum 从指定物理目录扫描生成专辑对象及分集播放列表（第 6.2.2 节）。
-func ScanAlbum(albumDir string) (*Album, error) {
-	entries, err := os.ReadDir(albumDir)
+func ScanAlbum(albumDir string) (album *Album, result error) {
+	root, err := os.OpenRoot(albumDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { result = errors.Join(result, root.Close()) }()
+	f, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	entries, err := f.ReadDir(20001)
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+	err = errors.Join(err, f.Close())
 	if err != nil {
 		return nil, fmt.Errorf("failed to read album dir: %w", err)
 	}
+	if len(entries) > 20000 {
+		return nil, errors.New("album exceeds track capacity")
+	}
 
 	title := filepath.Base(albumDir)
-	album := &Album{
+	album = &Album{
 		ID:     title,
 		Title:  title,
 		Tracks: make([]*Track, 0),
@@ -59,7 +96,7 @@ func ScanAlbum(albumDir string) (*Album, error) {
 	coverCandidate := ""
 
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if !entry.Type().IsRegular() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		name := entry.Name()
@@ -67,12 +104,12 @@ func ScanAlbum(albumDir string) (*Album, error) {
 
 		if SupportedExtensions[ext] {
 			trackFiles = append(trackFiles, name)
-		} else if strings.HasPrefix(strings.ToLower(name), "cover.") || strings.HasPrefix(strings.ToLower(name), "folder.") {
-			coverCandidate = filepath.Join(albumDir, name)
+		} else if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp") && (strings.HasPrefix(strings.ToLower(name), "cover.") || strings.HasPrefix(strings.ToLower(name), "folder.")) {
+			coverCandidate = name
 		}
 	}
 
-	sort.Strings(trackFiles)
+	sort.Slice(trackFiles, func(i, j int) bool { return ordering.NaturalLess(trackFiles[i], trackFiles[j]) })
 	for i, f := range trackFiles {
 		stem := strings.TrimSuffix(f, filepath.Ext(f))
 		album.Tracks = append(album.Tracks, &Track{
@@ -85,26 +122,8 @@ func ScanAlbum(albumDir string) (*Album, error) {
 	}
 
 	album.CoverPath = coverCandidate
+	album.TrackCount = len(album.Tracks)
 	return album, nil
-}
-
-// ScanAlbums 扫描音频根目录下所有专辑子目录（第 6.2.2 节）。
-func ScanAlbums(audioRootDir string) ([]*Album, error) {
-	entries, err := os.ReadDir(audioRootDir)
-	if err != nil {
-		return nil, err
-	}
-
-	var albums []*Album
-	for _, entry := range entries {
-		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
-			albumDir := filepath.Join(audioRootDir, entry.Name())
-			if album, err := ScanAlbum(albumDir); err == nil && len(album.Tracks) > 0 {
-				albums = append(albums, album)
-			}
-		}
-	}
-	return albums, nil
 }
 
 // ProgressDB 记录用户维度的音频断点（第 6.2.4 节）。
@@ -141,13 +160,16 @@ func (p *ProgressDB) Close() error {
 
 // SaveProgress 记录指定用户的音轨断点时间戳。
 func (p *ProgressDB) SaveProgress(userID int64, audioID string, offsetSec float64) error {
+	if userID <= 0 || audioID == "" || len(audioID) > 4096 || offsetSec < 0 || offsetSec > 31536000 || math.IsNaN(offsetSec) || math.IsInf(offsetSec, 0) {
+		return ErrInvalidProgress
+	}
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	_, err := p.db.Exec(`
 		INSERT INTO audio_progress (user_id, audio_id, offset_sec, updated_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(user_id, audio_id) DO UPDATE SET
 			offset_sec = excluded.offset_sec,
-			updated_at = excluded.updated_at`,
+			updated_at = excluded.updated_at WHERE audio_progress.offset_sec != excluded.offset_sec`,
 		userID, audioID, offsetSec, nowStr,
 	)
 	return err

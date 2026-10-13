@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,5 +47,37 @@ func TestAudioAlbumScanAndProgress(t *testing.T) {
 	offset, err := pdb.GetProgress(1, "测试广播剧:01_第1集.m4a")
 	if err != nil || offset != 125.5 {
 		t.Errorf("expected offset 125.5, got %f, err: %v", offset, err)
+	}
+}
+
+func TestProgressSkipsUnchangedOffsetAndRejectsInvalidValues(t *testing.T) {
+	db, err := OpenProgressDB(filepath.Join(t.TempDir(), "progress.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SaveProgress(1, "library:media_library/audio/track.mp3", 10); err != nil {
+		t.Fatal(err)
+	}
+	var before, after int
+	if err := db.db.QueryRow("SELECT total_changes()").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveProgress(1, "library:media_library/audio/track.mp3", 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow("SELECT total_changes()").Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatal("identical progress rewrote database row")
+	}
+	for _, value := range []float64{-1, math.NaN(), math.Inf(1)} {
+		if err := db.SaveProgress(1, "track", value); err == nil {
+			t.Fatal("invalid progress accepted")
+		}
+	}
+	if err := db.SaveProgress(0, "track", 10); err == nil {
+		t.Fatal("anonymous shared progress accepted")
 	}
 }
