@@ -42,6 +42,7 @@ type Router struct {
 	authMid       *auth.Middleware
 	clipboard     *tools.ClipboardManager
 	taskMgr       *tasks.Manager
+	taskRegistry  *tasks.Registry
 	gameRuns      *games.Manager
 	gameDiscovery *scanner.GameDiscovery
 	webGames      *webGameGrants
@@ -67,10 +68,17 @@ type Router struct {
 }
 
 // NewRouter 创建路由分发器实例。
-func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken string) (*Router, error) {
+func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken string, registries ...*tasks.Registry) (*Router, error) {
 	// 初始化音频断点数据库
 	if stateDir == "" {
 		return nil, errors.New("router state directory is required")
+	}
+	registry, err := tasks.NewRegistry(nil, "")
+	if err != nil {
+		return nil, err
+	}
+	if len(registries) > 0 && registries[0] != nil {
+		registry = registries[0]
 	}
 	audioDBPath := filepath.Join(stateDir, "audio_progress.db")
 	progDB, err := audio.OpenProgressDB(audioDBPath)
@@ -92,6 +100,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		authMid:       auth.NewMiddleware(authDB, localToken),
 		clipboard:     tools.NewClipboardManager(50),
 		taskMgr:       tasks.NewManager(),
+		taskRegistry:  registry,
 		gameRuns:      games.NewManagerWithRecorder(gamePlayRecorder(readingDB)),
 		gameDiscovery: scanner.NewGameDiscovery(),
 		webGames:      newWebGameGrants(),
@@ -305,6 +314,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/native/progress", r.handleNativeProgress)
 
 	// 任务调试台接口
+	r.mux.HandleFunc("/api/tasks/catalog", r.handleTasksCatalog)
 	r.mux.HandleFunc("/api/tasks/run", r.handleTasksRun)
 	r.mux.HandleFunc("/api/tasks/stop", r.handleTasksStop)
 	r.mux.HandleFunc("/api/tasks/logs", r.handleTasksLogs)
@@ -1040,29 +1050,7 @@ func (r *Router) handleTasksRun(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var p struct {
-		ID     string   `json:"id"`
-		Script string   `json:"script"`
-		Args   []string `json:"args"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&p); err != nil || p.Script == "" {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
-	if strings.Contains(p.Script, "..") {
-		http.Error(w, "invalid script path", http.StatusBadRequest)
-		return
-	}
-	if p.ID == "" {
-		p.ID = fmt.Sprintf("task_%d", time.Now().UnixNano())
-	}
-
-	task, err := r.taskMgr.RunScript(p.ID, p.Script, p.Args)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, task)
+	r.runRegisteredTask(w, req)
 }
 
 func (r *Router) handleTasksStop(w http.ResponseWriter, req *http.Request) {
@@ -1091,7 +1079,7 @@ func (r *Router) handleTasksStop(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stop_requested"})
 }
 
 func (r *Router) handleTasksLogs(w http.ResponseWriter, req *http.Request) {
@@ -1102,38 +1090,7 @@ func (r *Router) handleTasksLogs(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	ch, history := task.SubscribeLogs(req.Context())
-	for _, entry := range history {
-		data, _ := json.Marshal(entry)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-	}
-	flusher.Flush()
-
-	for {
-		select {
-		case <-req.Context().Done():
-			return
-		case entry, open := <-ch:
-			if !open {
-				fmt.Fprintf(w, "event: end\ndata: {}\n\n")
-				flusher.Flush()
-				return
-			}
-			data, _ := json.Marshal(entry)
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
-		}
-	}
+	r.streamTaskLogs(w, req, task)
 }
 
 // --- 权限管理 ---

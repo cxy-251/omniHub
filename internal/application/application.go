@@ -17,6 +17,7 @@ import (
 	"omnihub/internal/library"
 	"omnihub/internal/server"
 	"omnihub/internal/state"
+	"omnihub/internal/tasks"
 	"omnihub/web"
 )
 
@@ -146,7 +147,12 @@ func (a *Application) build() *generation {
 		g.stateError = err.Error()
 		return g
 	}
-	router, err := server.NewRouter(g.libraries, db, stateDir, a.localToken)
+	registry, err := tasks.LoadRegistry(a.configDir)
+	if err != nil {
+		log.Printf("Task registry disabled: %v", err)
+		registry = tasks.DisabledRegistry(err)
+	}
+	router, err := server.NewRouter(g.libraries, db, stateDir, a.localToken, registry)
 	if err != nil {
 		g.stateError = errors.Join(err, db.Close()).Error()
 		return g

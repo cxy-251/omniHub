@@ -45,7 +45,7 @@ func TestTaskCompletesWhenDescendantKeepsOutputOpen(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	task, err := manager.RunScript("descendant", executable, []string{"-test.run=^TestTaskOutputDescendantHelper$"})
+	task, err := manager.RunCommand("descendant", Command{Name: "descendant", Executable: executable, Args: []string{"-test.run=^TestTaskOutputDescendantHelper$"}})
 	if err != nil {
 		t.Fatal(err)
 	}

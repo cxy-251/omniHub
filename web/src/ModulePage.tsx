@@ -14,7 +14,6 @@ type ExistingModule = {
 const loaders = {
   media: async () => { await import('../css/media.css'); return import('../js/media.js'); },
   tools: async () => { await import('../css/tools.css'); return import('../js/tools.js'); },
-  tasks: async () => { await import('../css/tasks.css'); return import('../js/tasks.js'); },
   admin: async () => { await import('../css/admin.css'); return import('../js/admin.js'); },
 };
 
@@ -23,6 +22,7 @@ const GalleryLibrary = lazy(() => import('./GalleryLibrary'));
 const VideoMatrix = lazy(() => import('./VideoMatrix'));
 const TextLibrary = lazy(() => import('./TextLibrary'));
 const MangaLibrary = lazy(() => import('./MangaLibrary'));
+const TaskConsole = lazy(() => import('./TaskConsole'));
 const GameLibrary = lazy(() => import('./GameLibrary'));
 
 // Transitional lifecycle adapter: existing modules remain runnable while each is moved to typed components.
@@ -32,7 +32,7 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
   const [visited, setVisited] = useState<string[]>([]);
   const moduleRef = useRef<ExistingModule | undefined>(undefined);
   useEffect(() => {
-    if (id === 'games') return;
+    if (id === 'games' || id === 'tasks') return;
     let disposed = false;
     let module: ExistingModule | undefined;
     const tabChanged = (event: Event) => {
@@ -64,6 +64,7 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
   return <section className="tab-pane active" id={`pane-${id}`}>
     {error ? <p role="alert" className="mb-4 whitespace-pre-wrap text-danger">{error}</p> : null}
     <div id={`${id}-container`} />
+    {id === 'tasks' ? <Suspense fallback={<p role="status">正在加载任务台…</p>}><TaskConsole /></Suspense> : null}
     {id === 'games' ? <Suspense fallback={<p role="status">正在加载游戏大厅…</p>}><GameLibrary /></Suspense> : null}
     {id === 'media' && sections.includes('manga') && visited.includes('manga') ? <div hidden={mediaTab !== 'manga'} className="mt-4">
       <Suspense fallback={<p role="status">正在加载漫画阅读器…</p>}><MangaLibrary active={mediaTab === 'manga'} /></Suspense>

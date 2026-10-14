@@ -25,9 +25,9 @@ echo "INFO: Job finished"
 	}
 
 	mgr := NewManager()
-	task, err := mgr.RunScript("task-1", scriptFile, nil)
+	task, err := mgr.RunCommand("task-1", Command{Name: scriptFile, Executable: scriptFile})
 	if err != nil {
-		t.Fatalf("RunScript failed: %v", err)
+		t.Fatalf("RunCommand failed: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -84,7 +84,7 @@ func TestCancelSubscriptionAndShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	mgr := NewManager()
-	task, err := mgr.RunScript("wait", script, nil)
+	task, err := mgr.RunCommand("wait", Command{Name: script, Executable: script})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ closed:
 	if task.isRunning() {
 		t.Fatal("task still running after close")
 	}
-	if _, err := mgr.RunScript("again", script, nil); err == nil {
+	if _, err := mgr.RunCommand("again", Command{Name: script, Executable: script}); err == nil {
 		t.Fatal("closed manager accepted task")
 	}
 }

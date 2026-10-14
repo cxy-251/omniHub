@@ -7,8 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"omnihub/internal/platform"
-	"os/exec"
+	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -37,18 +41,18 @@ type LogEntry struct {
 type Task struct {
 	ID        string                 `json:"id"`
 	Name      string                 `json:"name"`
-	Args      []string               `json:"args"`
 	Running   bool                   `json:"running"`
 	StartedAt time.Time              `json:"started_at"`
 	EndedAt   *time.Time             `json:"ended_at,omitempty"`
 	ExitCode  int                    `json:"exit_code"`
-	cmd       *exec.Cmd              `json:"-"`
 	group     *platform.ProcessGroup `json:"-"`
 	logsMu    sync.RWMutex
 	logs      []LogEntry
 	nextLogID int64
 	lastTime  time.Time
 	listeners map[chan LogEntry]struct{}
+	resource  string
+	write     bool
 	done      chan struct{}
 	logNext   int
 }
@@ -82,19 +86,55 @@ func (m *Manager) HasRunningTasks() bool {
 	return false
 }
 
-// RunScript 运行已通过调用方注册和校验的脚本，相同 ID 同时仅有一个实例。
-func (m *Manager) RunScript(id, scriptPath string, args []string) (*Task, error) {
+// Command describes a trusted executable, literal arguments and declared access.
+// HTTP callers must resolve the registration before constructing it.
+type Command struct {
+	Name, Executable, Directory, Resource string
+	Args, Environment                     []string
+	Write                                 bool
+}
+
+// ErrResourceBusy means an overlapping reader/writer still owns its directory.
+var ErrResourceBusy = errors.New("task resource is busy")
+
+func overlaps(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		a = strings.ToLower(a)
+		b = strings.ToLower(b)
+	}
+	for _, pair := range [][2]string{{a, b}, {b, a}} {
+		rel, err := filepath.Rel(pair[0], pair[1])
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// RunCommand atomically reserves overlapping resources through actual process
+// and output cleanup; different task IDs cannot bypass a writer reservation.
+func (m *Manager) RunCommand(id string, spec Command) (*Task, error) {
+	scriptPath, args := spec.Executable, spec.Args
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.closed {
 		return nil, errors.New("task manager is closed")
 	}
-	if id == "" || scriptPath == "" {
+	if !identifier.MatchString(id) || scriptPath == "" || len(args) > 128 || len(spec.Environment) > 32 {
 		return nil, errors.New("task ID and script are required")
 	}
 	if t, exists := m.tasks[id]; exists && t.isRunning() {
 		return nil, fmt.Errorf("task %s already running", id)
+	}
+
+	for _, active := range m.tasks {
+		if active.isRunning() && (spec.Write || active.write) && overlaps(active.resource, spec.Resource) {
+			return nil, ErrResourceBusy
+		}
 	}
 
 	if len(m.tasks) >= MaxTasks {
@@ -110,6 +150,8 @@ func (m *Manager) RunScript(id, scriptPath string, args []string) (*Task, error)
 		delete(m.tasks, oldest.ID)
 	}
 	cmd := platform.BackgroundCommand(context.Background(), scriptPath, args...)
+	cmd.Dir = spec.Directory
+	cmd.Env = append(os.Environ(), spec.Environment...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -118,12 +160,11 @@ func (m *Manager) RunScript(id, scriptPath string, args []string) (*Task, error)
 	cmd.Stderr = cmd.Stdout
 
 	t := &Task{
-		ID:        id,
-		Name:      scriptPath,
-		Args:      append([]string(nil), args...),
+		ID:       id,
+		Name:     spec.Name,
+		resource: spec.Resource, write: spec.Write,
 		Running:   true,
 		StartedAt: time.Now(),
-		cmd:       cmd,
 		logs:      make([]LogEntry, 0, MaxLogEntries),
 		done:      make(chan struct{}),
 		listeners: make(map[chan LogEntry]struct{}),
@@ -264,12 +305,11 @@ func (t *Task) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		ID        string     `json:"id"`
 		Name      string     `json:"name"`
-		Args      []string   `json:"args"`
 		Running   bool       `json:"running"`
 		StartedAt time.Time  `json:"started_at"`
 		EndedAt   *time.Time `json:"ended_at,omitempty"`
 		ExitCode  int        `json:"exit_code"`
-	}{t.ID, t.Name, t.Args, t.Running, t.StartedAt, t.EndedAt, t.ExitCode})
+	}{t.ID, t.Name, t.Running, t.StartedAt, t.EndedAt, t.ExitCode})
 }
 
 // StopTask 请求任务进程组退出，五秒未完成才强杀；已完成的任务不再发送信号。
@@ -277,8 +317,11 @@ func (m *Manager) StopTask(id string) error {
 	m.mu.RLock()
 	t, ok := m.tasks[id]
 	m.mu.RUnlock()
-	if !ok || !t.isRunning() {
-		return fmt.Errorf("task %s not running", id)
+	if !ok {
+		return fmt.Errorf("task %s not found", id)
+	}
+	if !t.isRunning() {
+		return nil
 	}
 
 	if err := t.group.Stop(false); err != nil {
@@ -357,4 +400,16 @@ func (t *Task) SubscribeLogs(ctx context.Context) (chan LogEntry, []LogEntry) {
 		t.logsMu.Unlock()
 	}()
 	return ch, history
+}
+
+// List returns the bounded task history; state serialization takes each task lock.
+func (m *Manager) List() []*Task {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]*Task, 0, len(m.tasks))
+	for _, t := range m.tasks {
+		result = append(result, t)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].StartedAt.After(result[j].StartedAt) })
+	return result
 }

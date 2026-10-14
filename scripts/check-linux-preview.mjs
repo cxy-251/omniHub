@@ -10,7 +10,9 @@ if (!process.argv[2] || !bundle.startsWith(root + path.sep)) throw Error('Pass t
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const test = fs.mkdtempSync(path.join(root, '.test-tmp', 'release-check-'));
 const config = path.join(test, 'config'); fs.mkdirSync(config);
-fs.writeFileSync(path.join(config, 'config.json'), JSON.stringify({server: {host: '127.0.0.1', port: 19133}, libraries: [], category_directories: []}), {mode: 0o600});
+fs.writeFileSync(path.join(config, 'config.json'), JSON.stringify({server: {host: '127.0.0.1', port: 19133}, libraries: [], category_directories: ["media_library/docs"]}), {mode: 0o600});
+const probe = {id:'delivery.verify',name:'Delivery task',category:'media_library/docs',write:false,executable:process.execPath,args:['-e',"if(process.cwd()!==process.env.OMNIHUB_TASK_DIR||process.env.DELIVERY_PROBE!=='private-probe')process.exit(2);console.log('INFO packaged task reached actual worker')"],parameters:[],env:{DELIVERY_PROBE:'private-probe'}};
+fs.writeFileSync(path.join(config,'tasks.json'),JSON.stringify([probe]),{mode:0o600});
 const alias = path.join(test, 'preview with spaces'); fs.symlinkSync(bundle, alias);
 const log = fs.openSync(path.join(test, 'startup.log'), 'w');
 const child = spawn(path.join(alias, 'omniHub'), [], {detached: true, cwd: test, stdio: ['ignore', log, log], env: {...process.env, LD_LIBRARY_PATH: '', QT_PLUGIN_PATH: '', QML_IMPORT_PATH: '', QML2_IMPORT_PATH: '', OMNIHUB_CONFIG_DIR: config, QT_QPA_PLATFORM: 'offscreen', QT_QUICK_BACKEND: 'rhi', QSG_RHI_BACKEND: 'opengl', XDG_CACHE_HOME: path.join(test, 'cache'), MESA_SHADER_CACHE_DIR: path.join(test, 'cache', 'mesa'), DBUS_SESSION_BUS_ADDRESS: `unix:path=${test}/no-session-bus`}});
@@ -47,9 +49,26 @@ try {
  if (!(await after.json()).has_admin) throw Error('Initial account did not persist.');
  const libraries = await fetch(connection.url + '/api/library/list', {headers: {'X-Omni-Local-Token': connection.token}});
  if (!libraries.ok || (await libraries.json()).libraries.length !== 0) throw Error('Zero-library state is not usable.');
+ const storage=path.join(test,'library');fs.mkdirSync(storage);
+ const mounted=await fetch(connection.url+'/api/library/add',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({path:storage,read_only:false})});
+ if(!mounted.ok)throw Error('Isolated task library could not be mounted.');
+ const snapshot=await (await fetch(connection.url+'/api/library/list',{headers})).json();
+ const started=await fetch(connection.url+'/api/tasks/run',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({definition:'delivery.verify',library_id:snapshot.libraries[0].id,directory:'',parameters:{}})});
+ if(!started.ok)throw Error('Registered task did not start: '+await started.text());
+ const job=await started.json();let finished=false;
+ for(let i=0;i<50;i++){
+  const response=await fetch(connection.url+'/api/tasks/catalog',{headers});const raw=await response.text();
+  if(!response.ok||raw.includes('private-probe')||raw.includes(process.execPath))throw Error('Task catalog failed or exposed private configuration.');
+  const task=JSON.parse(raw).tasks.find(task=>task.id===job.id);
+  if(task&&!task.running){if(task.exit_code!==0)throw Error('Actual task failed.');finished=true;break;}
+  await delay(50);
+ }
+ if(!finished)throw Error('Actual registered task did not finish.');
+ const events=await (await fetch(connection.url+'/api/tasks/logs?id='+encodeURIComponent(job.id),{headers})).text();
+ if(!events.includes('packaged task reached actual worker')||!events.includes('event: end'))throw Error('Actual task SSE history/end missing.');
  const version = execFileSync(path.join(bundle, 'server'), ['--version'], {encoding: 'utf8'}).trim();
  if (!version.startsWith('omniHub ')) throw Error('Build identity unavailable.');
- fs.writeFileSync(path.join(test, 'result.json'), JSON.stringify({version, url: connection.url, native_ui: 'Qt Main.qml alive', sdk_fallback: false, isolated_configuration: true, initialized_account: true, zero_libraries: true}, null, 2));
+ fs.writeFileSync(path.join(test, 'result.json'), JSON.stringify({version, url: connection.url, native_ui: 'Qt Main.qml alive', sdk_fallback: false, isolated_configuration: true, initialized_account: true, zero_libraries: true, registered_task: 'actual worker and SSE passed'}, null, 2));
  passed = true;
 } finally {
  // Signal only this live, unreaped child-owned test group. No saved PID is used
