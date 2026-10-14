@@ -52,6 +52,9 @@ func TestReadOnlyLegacyGameIndexDoesNotMigrateAndWritableUpgradePreservesStats(t
 	if _, err := db.db.Exec("ALTER TABLE games DROP COLUMN rel_dir"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.db.Exec("ALTER TABLE games DROP COLUMN available"); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +68,7 @@ func TestReadOnlyLegacyGameIndexDoesNotMigrateAndWritableUpgradePreservesStats(t
 		t.Fatal(err)
 	}
 	value, err := readonly.GetGame(context.Background(), "001")
-	if err != nil || value.RelDir != "" || value.PlayTimeSec != 99 {
+	if err != nil || value.RelDir != "" || value.PlayTimeSec != 99 || !value.Available {
 		t.Fatalf("legacy read: %+v %v", value, err)
 	}
 	if err := readonly.Close(); err != nil {

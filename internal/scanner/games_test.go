@@ -81,3 +81,74 @@ func TestInvalidGameMetadataLeavesIndexBytesUntouched(t *testing.T) {
 		})
 	}
 }
+
+func TestGameScanMissingRestoredAndCancelledSnapshotsPreserveHistory(t *testing.T) {
+	root := t.TempDir()
+	folder := filepath.Join(root, "unity_games", "001 - Original")
+	if err := os.MkdirAll(folder, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ScanGames(root); err != nil {
+		t.Fatal(err)
+	}
+	db, err := games.OpenDB(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateHardwareProfile("001", 55, 2, 99); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(root, "games.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ScanGames(root); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(filepath.Join(root, "games.db"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("unchanged scan rewrote main database")
+	}
+	parked := filepath.Join(t.TempDir(), "parked")
+	if err := os.Rename(folder, parked); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := ScanGames(root); err != nil || count != 0 {
+		t.Fatalf("missing scan: %d %v", count, err)
+	}
+	check := func(available bool, name string) {
+		t.Helper()
+		db, err := games.OpenDBReadOnly(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, readErr := db.GetGame(context.Background(), "001")
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if readErr != nil || value.Available != available || value.Name != name || value.PlayTimeSec != 99 || value.PeakRSSMB != 55 {
+			t.Fatalf("snapshot lost history: %+v %v", value, readErr)
+		}
+	}
+	check(false, "Original")
+	restored := filepath.Join(root, "unity_games", "001 - Restored")
+	if err := os.Rename(parked, restored); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ScanGames(root); err != nil {
+		t.Fatal(err)
+	}
+	check(true, "Restored")
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	empty := t.TempDir()
+	if _, err := ScanGamesContext(cancelled, empty); err == nil {
+		t.Fatal("cancelled scan published")
+	}
+	if _, err := os.Stat(filepath.Join(empty, "games.db")); !os.IsNotExist(err) {
+		t.Fatal("pre-cancelled scan created index")
+	}
+}

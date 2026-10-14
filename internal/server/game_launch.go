@@ -15,6 +15,11 @@ import (
 // Indexed native launches accept identities only; executable paths, argv,
 // environment and save ownership always come from host metadata and auth.
 func (r *Router) handleGameLaunch(w http.ResponseWriter, req *http.Request) {
+	if !r.runtimeMu.TryRLock() {
+		http.Error(w, "game indexing is busy", 409)
+		return
+	}
+	defer r.runtimeMu.RUnlock()
 	if req.Method != http.MethodPost {
 		http.Error(w, "method not allowed", 405)
 		return
@@ -82,6 +87,10 @@ func (r *Router) handleGameLaunch(w http.ResponseWriter, req *http.Request) {
 	}
 	if err := errors.Join(queryErr, closeErr); err != nil {
 		http.Error(w, "game lookup failed", 503)
+		return
+	}
+	if !game.Available {
+		http.Error(w, "game is missing from its library", 404)
 		return
 	}
 	if game.Target != "gui_only" {

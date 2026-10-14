@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,24 +35,54 @@ func gameEntries(root *os.Root, name string) ([]os.DirEntry, error) {
 // ScanGames indexes direct numbered game folders with bounded metadata reads.
 // Paths come from enumeration, not display names. Invalid/duplicate metadata
 // returns an error before any records are changed; publication is one transaction.
-func ScanGames(standaloneGamesDir string) (count int, resultErr error) {
+func ScanGames(standaloneGamesDir string) (int, error) {
+	return ScanGamesContext(context.Background(), standaloneGamesDir)
+}
+
+// ScanGamesContext cancels enumeration/publication and publishes one complete snapshot.
+func ScanGamesContext(ctx context.Context, standaloneGamesDir string) (int, error) {
+	return ScanGameCategories(ctx, standaloneGamesDir, nil)
+}
+
+// ScanGameCategories scans only explicit active categories; nil scans all.
+// Disabled categories are neither read nor marked missing.
+func ScanGameCategories(ctx context.Context, standaloneGamesDir string, categories []string) (count int, resultErr error) {
+	if len(categories) > 128 {
+		return 0, errors.New("scan categories exceed capacity")
+	}
+	allowed := make(map[string]bool, len(categories))
+	for _, category := range categories {
+		if !games.ValidCategory(category) {
+			return 0, errors.New("invalid scan category")
+		}
+		allowed[category] = true
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	root, err := os.OpenRoot(standaloneGamesDir)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
-	categories, err := gameEntries(root, ".")
+	directories, err := gameEntries(root, ".")
 	if err != nil {
 		return 0, err
 	}
 	indexed := make([]*games.Game, 0)
 	retainedBytes := 0
 	ids := make(map[string]bool)
-	for _, category := range categories {
+	for _, category := range directories {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if !category.IsDir() || category.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(category.Name(), "_games") {
 			continue
 		}
 		name := strings.TrimSuffix(category.Name(), "_games")
+		if categories != nil && !allowed[name] {
+			continue
+		}
 		target := "gui_only"
 		if name == "rpg" || name == "slg" || name == "retro" || name == "flash" {
 			target = "web_only"
@@ -61,6 +92,9 @@ func ScanGames(standaloneGamesDir string) (count int, resultErr error) {
 			return 0, err
 		}
 		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
 			if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || strings.HasPrefix(entry.Name(), ".") {
 				continue
 			}
@@ -131,12 +165,21 @@ func ScanGames(standaloneGamesDir string) (count int, resultErr error) {
 			}
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	db, err := games.OpenDB(standaloneGamesDir)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, db.Close()) }()
-	if err := db.UpsertGames(indexed); err != nil {
+	publish := db.PublishScan
+	if categories != nil {
+		publish = func(ctx context.Context, list []*games.Game) error {
+			return db.PublishCategories(ctx, list, categories)
+		}
+	}
+	if err := publish(ctx, indexed); err != nil {
 		return 0, err
 	}
 	return len(indexed), nil

@@ -42,11 +42,11 @@ int main(int argc, char **argv) {
     });
     QObject::connect(&launcher, &GameLauncher::sessionChanged, &app, [&]() {
         if (phase == 4 && !launcher.gameRunning() && launcher.session().value("state").toString() == "exited") {
-            std::puts("GAME_CHECK_OK: real pages, indexed launch, child readiness, session stop and exit");
+            std::puts("GAME_CHECK_OK: real scan, pages, indexed launch, child readiness, session stop and exit");
             app.exit(0);
         }
     });
     QTimer::singleShot(30000, &app, [&]() { fail("game integration timeout"); });
-    QTimer::singleShot(0, &launcher, [&]() { launcher.fetchGames(); });
+    QTimer::singleShot(0, &launcher, [&]() { launcher.indexLibrary(libraryId); });
     return app.exec();
 }

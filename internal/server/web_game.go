@@ -93,6 +93,10 @@ func (r *Router) handleWebGameOpen(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "game index read failed", 503)
 		return
 	}
+	if !game.Available {
+		http.Error(w, "game is missing from its library", 404)
+		return
+	}
 	if game.Target != "web_only" {
 		http.Error(w, "native game unavailable to web client", 403)
 		return

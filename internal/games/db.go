@@ -16,8 +16,9 @@ import (
 
 // DB 封装游戏专区 games.db 的持久化操作（第 4.1 节）。
 type DB struct {
-	db        *sql.DB
-	hasRelDir bool
+	db           *sql.DB
+	hasRelDir    bool
+	hasAvailable bool
 }
 
 // OpenDB 打开或创建 standalone_games/games.db。
@@ -58,6 +59,9 @@ func openDB(gamesDir string, readOnly bool) (*DB, error) {
 		if name == "rel_dir" {
 			gDB.hasRelDir = true
 		}
+		if name == "available" {
+			gDB.hasAvailable = true
+		}
 	}
 	if err := errors.Join(columns.Err(), columns.Close()); err != nil {
 		return nil, errors.Join(err, sqliteDB.Close())
@@ -83,6 +87,7 @@ func (d *DB) migrate() error {
 		env TEXT NOT NULL DEFAULT '',
 		proton_appid TEXT NOT NULL DEFAULT '',
 		rel_dir TEXT NOT NULL DEFAULT '',
+		available INTEGER NOT NULL DEFAULT 1,
 		peak_rss_mb INTEGER NOT NULL DEFAULT 0,
 		peak_io_mbps INTEGER NOT NULL DEFAULT 0,
 		play_time_sec INTEGER NOT NULL DEFAULT 0
@@ -100,18 +105,18 @@ func (d *DB) migrate() error {
 	if _, err := d.db.Exec(schema); err != nil {
 		return err
 	}
-	rows, err := d.db.Query("SELECT name FROM pragma_table_info('games') WHERE name='rel_dir'")
-	if err != nil {
-		return err
+	for _, column := range []struct{ name, definition string }{{"rel_dir", "TEXT NOT NULL DEFAULT ''"}, {"available", "INTEGER NOT NULL DEFAULT 1"}} {
+		var count int
+		if err := d.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('games') WHERE name=?", column.name).Scan(&count); err != nil {
+			return err
+		}
+		if count == 0 {
+			if _, err := d.db.Exec("ALTER TABLE games ADD COLUMN " + column.name + " " + column.definition); err != nil {
+				return err
+			}
+		}
 	}
-	found := rows.Next()
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err
-	}
-	if !found {
-		_, err = d.db.Exec("ALTER TABLE games ADD COLUMN rel_dir TEXT NOT NULL DEFAULT ''")
-	}
-	return err
+	return nil
 }
 
 // UpsertGame 插入或更新游戏条目。
@@ -122,31 +127,125 @@ func (d *DB) UpsertGame(g *Game) error {
 // UpsertGames validates and publishes a scan atomically, preserving unrelated
 // records and existing play/hardware statistics; it does not delete user assets.
 func (d *DB) UpsertGames(list []*Game) error {
+	return d.writeGames(context.Background(), list, false, nil)
+}
+
+// PublishScan atomically upserts present metadata and marks absent records unavailable,
+// preserving play/hardware history and never deleting any game assets.
+func (d *DB) PublishScan(ctx context.Context, list []*Game) error {
+	return d.writeGames(ctx, list, true, nil)
+}
+
+// PublishCategories reconciles only explicitly scanned categories, retaining
+// untouched records in disabled categories without reading their assets.
+func (d *DB) PublishCategories(ctx context.Context, list []*Game, categories []string) error {
+	if categories == nil || len(categories) > 128 {
+		return errors.New("explicit scan categories required")
+	}
+	allowed := make(map[string]bool, len(categories))
+	for _, category := range categories {
+		if !ValidCategory(category) {
+			return errors.New("invalid scan category")
+		}
+		allowed[category] = true
+	}
+	for _, game := range list {
+		if game == nil || !allowed[game.Category] {
+			return errors.New("game outside scanned categories")
+		}
+	}
+	return d.writeGames(ctx, list, true, categories)
+}
+
+func (d *DB) writeGames(ctx context.Context, list []*Game, snapshot bool, categories []string) (resultErr error) {
 	if len(list) > 20000 {
 		return errors.New("game index exceeds capacity")
 	}
+	seen := make(map[string]bool, len(list))
 	for _, g := range list {
 		if err := ValidateIndexGame(g); err != nil {
 			return err
 		}
+		if snapshot && seen[g.ID] {
+			return errors.New("duplicate scan identity")
+		}
+		seen[g.ID] = true
 	}
-	tx, err := d.db.Begin()
+	connection, err := d.db.Conn(ctx)
 	if err != nil {
 		return err
 	}
-	statement, err := tx.Prepare(gameUpsertSQL)
-	if err != nil {
-		return errors.Join(err, tx.Rollback())
-	}
-	for _, g := range list {
-		if err := upsertGame(statement, g); err != nil {
-			return errors.Join(err, statement.Close(), tx.Rollback())
+	defer func() { resultErr = errors.Join(resultErr, connection.Close()) }()
+	if snapshot {
+		if _, err := connection.ExecContext(ctx, "PRAGMA temp_store=MEMORY"); err != nil {
+			return err
 		}
 	}
-	if err := statement.Close(); err != nil {
-		return errors.Join(err, tx.Rollback())
+	tx, err := connection.BeginTx(ctx, nil)
+	if err != nil {
+		return err
 	}
-	return tx.Commit()
+	committed := false
+	defer func() {
+		if !committed {
+			if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+				resultErr = errors.Join(resultErr, err)
+			}
+		}
+	}()
+	if snapshot {
+		if _, err := tx.ExecContext(ctx, "CREATE TEMP TABLE scan_game_ids(id TEXT PRIMARY KEY) WITHOUT ROWID"); err != nil {
+			return err
+		}
+	}
+	statement, err := tx.PrepareContext(ctx, gameUpsertSQL)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, statement.Close()) }()
+	var ids *sql.Stmt
+	if snapshot {
+		ids, err = tx.PrepareContext(ctx, "INSERT INTO temp.scan_game_ids(id) VALUES(?)")
+		if err != nil {
+			return err
+		}
+		defer func() { resultErr = errors.Join(resultErr, ids.Close()) }()
+	}
+	for _, g := range list {
+		if _, err := statement.ExecContext(ctx, g.ID, g.Name, g.Category, g.Target, g.Icon, g.Exe, g.Args, g.Env, g.ProtonAppID, g.PeakRSSMB, g.PeakIOMBps, g.PlayTimeSec, g.RelDir); err != nil {
+			return err
+		}
+		if snapshot {
+			if _, err := ids.ExecContext(ctx, g.ID); err != nil {
+				return err
+			}
+		}
+	}
+	if snapshot {
+		query := "UPDATE games SET available=0 WHERE available<>0 AND NOT EXISTS(SELECT 1 FROM temp.scan_game_ids s WHERE s.id=games.id)"
+		var args []any
+		if categories != nil {
+			if len(categories) == 0 {
+				query += " AND 0"
+			} else {
+				query += " AND category IN (" + strings.TrimSuffix(strings.Repeat("?,", len(categories)), ",") + ")"
+				for _, category := range categories {
+					args = append(args, category)
+				}
+			}
+		}
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DROP TABLE temp.scan_game_ids"); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 // ValidateIndexGame bounds persisted metadata and checks category, target and
@@ -195,20 +294,13 @@ const gameUpsertSQL = `
 			args = excluded.args,
 			env = excluded.env,
 			proton_appid = excluded.proton_appid,
-			rel_dir = CASE WHEN excluded.rel_dir='' THEN games.rel_dir ELSE excluded.rel_dir END
-		WHERE games.name IS NOT excluded.name OR games.category IS NOT excluded.category
+			rel_dir = CASE WHEN excluded.rel_dir='' THEN games.rel_dir ELSE excluded.rel_dir END,
+			available = 1
+		WHERE games.available IS NOT 1 OR games.name IS NOT excluded.name OR games.category IS NOT excluded.category
 		   OR games.target IS NOT excluded.target OR games.icon IS NOT excluded.icon
 		   OR games.exe IS NOT excluded.exe OR games.args IS NOT excluded.args
 		   OR games.env IS NOT excluded.env OR games.proton_appid IS NOT excluded.proton_appid
 		   OR (excluded.rel_dir!='' AND games.rel_dir IS NOT excluded.rel_dir)`
-
-func upsertGame(statement *sql.Stmt, g *Game) error {
-	_, err := statement.Exec(
-		g.ID, g.Name, g.Category, g.Target, g.Icon, g.Exe, g.Args, g.Env, g.ProtonAppID,
-		g.PeakRSSMB, g.PeakIOMBps, g.PlayTimeSec, g.RelDir,
-	)
-	return err
-}
 
 // UpdateHardwareProfile 游戏退出时回填硬件画像与游玩时长（第 4.3.2 节）。
 func (d *DB) UpdateHardwareProfile(gameID string, peakRSS, peakIO, durationSec int64) error {
@@ -248,10 +340,17 @@ func (d *DB) GetGame(ctx context.Context, id string) (*Game, error) {
 		relDir = boundedCatalogColumn("rel_dir", 4096)
 	}
 	var g Game
-	columns := []string{boundedCatalogColumn("id", 512), boundedCatalogColumn("name", 4096), boundedCatalogColumn("category", 32), boundedCatalogColumn("target", 16), boundedCatalogColumn("icon", 4096), boundedCatalogColumn("exe", 4096), boundedCatalogColumn("args", 32<<10), boundedCatalogColumn("env", 32<<10), boundedCatalogColumn("proton_appid", 128), "peak_rss_mb", "peak_io_mbps", "play_time_sec", relDir}
-	err := d.db.QueryRowContext(ctx, "SELECT "+strings.Join(columns, ",")+" FROM games WHERE id=?", id).Scan(&g.ID, &g.Name, &g.Category, &g.Target, &g.Icon, &g.Exe, &g.Args, &g.Env, &g.ProtonAppID, &g.PeakRSSMB, &g.PeakIOMBps, &g.PlayTimeSec, &g.RelDir)
+	columns := []string{boundedCatalogColumn("id", 512), boundedCatalogColumn("name", 4096), boundedCatalogColumn("category", 32), boundedCatalogColumn("target", 16), boundedCatalogColumn("icon", 4096), boundedCatalogColumn("exe", 4096), boundedCatalogColumn("args", 32<<10), boundedCatalogColumn("env", 32<<10), boundedCatalogColumn("proton_appid", 128), "peak_rss_mb", "peak_io_mbps", "play_time_sec", relDir, d.availabilityColumn()}
+	err := d.db.QueryRowContext(ctx, "SELECT "+strings.Join(columns, ",")+" FROM games WHERE id=?", id).Scan(&g.ID, &g.Name, &g.Category, &g.Target, &g.Icon, &g.Exe, &g.Args, &g.Env, &g.ProtonAppID, &g.PeakRSSMB, &g.PeakIOMBps, &g.PlayTimeSec, &g.RelDir, &g.Available)
 	if err != nil {
 		return nil, err
 	}
 	return &g, nil
+}
+
+func (d *DB) availabilityColumn() string {
+	if d.hasAvailable {
+		return "available"
+	}
+	return "1"
 }

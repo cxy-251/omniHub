@@ -15,6 +15,7 @@ type Game struct {
 	Args        string `json:"args"`         // JSON argv 数组；兼容旧引用/转义字符串
 	Env         string `json:"env"`          // 额外环境变量 (JSON 键值对)
 	ProtonAppID string `json:"proton_appid"` // Proton 容器 appid
+	Available   bool   `json:"available"`    // 最近完整扫描是否仍存在；历史记录保留
 	RelDir      string `json:"rel_dir"`      // 正斜线目录，相对 standalone_games；旧索引为空
 
 	// 硬件画像监控指标（第 4.1.3 节）

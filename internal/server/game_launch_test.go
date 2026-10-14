@@ -136,6 +136,9 @@ func TestIndexedLaunchUsesOwningLibraryAndHostMetadata(t *testing.T) {
 	if w := request("/api/games/launch", payload, "native-token"); w.Code != 409 {
 		t.Fatalf("parallel launch: %d %s", w.Code, w.Body.String())
 	}
+	if w := request("/api/games/index", `{"library_id":"`+lib.ID+`"}`, "native-token"); w.Code != 409 {
+		t.Fatal("indexing entered while a real game was active")
+	}
 	observedPath := filepath.Join(folder, "observed.json")
 	deadline := time.Now().Add(5 * time.Second)
 	for {

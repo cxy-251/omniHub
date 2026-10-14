@@ -31,6 +31,8 @@ public:
     bool hasMore() const { return m_hasMore; }
     // Load one 24-record page; reject invalid offsets and concurrent fetches.
     Q_INVOKABLE void fetchGames(int offset = 0);
+    // Publish one explicit host scan of a selected writable library, then reload.
+    Q_INVOKABLE void indexLibrary(const QString &libraryId);
     // Start by library/game identity; host metadata supplies executable and argv.
     Q_INVOKABLE void launchGame(const QString &libraryId, const QString &gameId);
     // Observe a retained session, or discover the service's active game.

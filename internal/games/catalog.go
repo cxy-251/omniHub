@@ -17,7 +17,10 @@ func (d *DB) ListCatalogPage(ctx context.Context, target, category, after string
 	if d.hasRelDir {
 		relDir = boundedCatalogColumn("rel_dir", 4096)
 	}
-	query := "SELECT " + boundedCatalogColumn("id", 512) + "," + boundedCatalogColumn("name", 4096) + "," + boundedCatalogColumn("category", 32) + ",target," + boundedCatalogColumn("icon", 4096) + ",peak_rss_mb,peak_io_mbps,play_time_sec," + relDir + " FROM games WHERE " + boundedCatalogColumn("target", 16) + "=? AND id>?"
+	query := "SELECT " + boundedCatalogColumn("id", 512) + "," + boundedCatalogColumn("name", 4096) + "," + boundedCatalogColumn("category", 32) + ",target," + boundedCatalogColumn("icon", 4096) + ",peak_rss_mb,peak_io_mbps,play_time_sec," + relDir + "," + d.availabilityColumn() + " FROM games WHERE " + boundedCatalogColumn("target", 16) + "=? AND id>?"
+	if d.hasAvailable {
+		query += " AND available=1"
+	}
 	arguments := []any{target, after}
 	if category != "" {
 		query += " AND category=?"
@@ -33,7 +36,7 @@ func (d *DB) ListCatalogPage(ctx context.Context, target, category, after string
 	result = make([]*Game, 0, limit)
 	for rows.Next() {
 		var game Game
-		if err := rows.Scan(&game.ID, &game.Name, &game.Category, &game.Target, &game.Icon, &game.PeakRSSMB, &game.PeakIOMBps, &game.PlayTimeSec, &game.RelDir); err != nil {
+		if err := rows.Scan(&game.ID, &game.Name, &game.Category, &game.Target, &game.Icon, &game.PeakRSSMB, &game.PeakIOMBps, &game.PlayTimeSec, &game.RelDir, &game.Available); err != nil {
 			return nil, err
 		}
 		if err := ValidateIndexGame(&game); err != nil {

@@ -57,6 +57,7 @@ type Router struct {
 
 	// 专区数据库连接复用缓存（第 12.2 节避免高频请求重复 Open 与 Migrate）
 	dbMu      sync.RWMutex
+	runtimeMu sync.RWMutex
 	closed    bool
 	metaDB    map[string]*gallery.MetaDB
 	svStorage map[string]*shortvideo.Storage
@@ -197,11 +198,17 @@ func (r *Router) getMangaDBMode(root string, readOnly bool) (*manga.DB, error) {
 
 // CanReconfigure requires all owned task and game processes to have exited.
 func (r *Router) CanReconfigure() bool {
+	if !r.runtimeMu.TryRLock() {
+		return false
+	}
+	defer r.runtimeMu.RUnlock()
 	return !r.taskMgr.HasRunningTasks() && !r.gameRuns.HasRunning()
 }
 
 // Close 在 HTTP 服务完成退出后关闭所有模块连接，允许重复调用。
 func (r *Router) Close() error {
+	r.runtimeMu.Lock()
+	defer r.runtimeMu.Unlock()
 	r.dbMu.Lock()
 	defer r.dbMu.Unlock()
 	if r.closed {
@@ -284,6 +291,7 @@ func (r *Router) registerRoutes() {
 
 	// 游戏中心接口（双端过滤）
 	r.mux.HandleFunc("/api/games/list", r.handleGamesList)
+	r.mux.HandleFunc("/api/games/index", r.handleGameIndex)
 	r.mux.HandleFunc("/api/games/web/open", r.handleWebGameOpen)
 	r.mux.HandleFunc("/game-content/", r.handleWebGameAsset)
 	r.mux.HandleFunc("/api/games/launch", r.handleGameLaunch)
@@ -1007,6 +1015,11 @@ func (r *Router) handleGamesList(w http.ResponseWriter, req *http.Request) {
 // --- 任务调试台 ---
 
 func (r *Router) handleTasksRun(w http.ResponseWriter, req *http.Request) {
+	if !r.runtimeMu.TryRLock() {
+		http.Error(w, "game indexing is busy", 409)
+		return
+	}
+	defer r.runtimeMu.RUnlock()
 	if auth.IsWANFromContext(req.Context()) {
 		http.Error(w, "forbidden: host-level operation blocked from WAN", http.StatusForbidden)
 		return
@@ -1407,6 +1420,11 @@ func (r *Router) handleSC2Launch(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if opt.Launch && primary != nil {
+		if !r.runtimeMu.TryRLock() {
+			http.Error(w, "game indexing is busy", 409)
+			return
+		}
+		defer r.runtimeMu.RUnlock()
 		if primary.ReadOnly {
 			http.Error(w, "game library is read-only", 403)
 			return

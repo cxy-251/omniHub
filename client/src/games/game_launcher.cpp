@@ -142,3 +142,27 @@ void GameLauncher::stopGame() {
         reply->deleteLater();
     });
 }
+
+void GameLauncher::indexLibrary(const QString &libraryId) {
+    if (m_controlBusy || gameRunning()) return;
+    if (libraryId.isEmpty() || libraryId.size() > 128) { setError("资源库标识无效"); return; }
+    m_controlBusy = true;
+    emit sessionChanged();
+    auto req = request("/api/games/index");
+    req.setTransferTimeout(60000);
+    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    auto *reply = m_net.post(req, QJsonDocument(QJsonObject{{"library_id", libraryId}}).toJson(QJsonDocument::Compact));
+    boundReply(reply, 16384);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const auto data = reply->readAll();
+        QJsonParseError parse;
+        const auto document = QJsonDocument::fromJson(data, &parse);
+        m_controlBusy = false;
+        if (reply->error() == QNetworkReply::NoError && parse.error == QJsonParseError::NoError && document.isObject() && document.object().value("indexed").isDouble()) {
+            setError({});
+            fetchGames();
+        } else setError(reply->error() == QNetworkReply::NoError ? "扫描响应无效" : replyError(reply, data));
+        emit sessionChanged();
+        reply->deleteLater();
+    });
+}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
-	"omnihub/internal/games"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,17 +21,11 @@ func checkQtGameController(t *testing.T, router *Router, libraryID, root, observ
 	if checker == "" {
 		return
 	}
-	db, err := games.OpenDB(filepath.Join(root, "standalone_games"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	for id := 42; id <= 66; id++ {
-		if err := db.UpsertGame(&games.Game{ID: fmt.Sprintf("%03d", id), Name: "Other game", Category: "godot", Target: "gui_only"}); err != nil {
+		folder := filepath.Join(root, "standalone_games", "godot_games", fmt.Sprintf("%03d - Other game", id))
+		if err := os.Mkdir(folder, 0755); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
 	}
 	if err := os.Remove(observed); err != nil {
 		t.Fatal(err)

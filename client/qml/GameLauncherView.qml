@@ -39,6 +39,21 @@ Item {
             Button { text: "停止游戏"; visible: launcher.gameRunning; enabled: !launcher.busy; onClicked: launcher.stopGame() }
             Button { text: "刷新"; enabled: !launcher.loading; onClicked: { launcher.fetchGames(launcher.offset); launcher.refreshSession() } }
         }
+        RowLayout {
+            Layout.fillWidth: true
+            ComboBox {
+                id: indexLibrary
+                Layout.fillWidth: true
+                model: backendApi.libraries
+                textRole: "name"
+                valueRole: "id"
+            }
+            Button {
+                text: launcher.busy ? "处理中…" : "扫描所选库"
+                enabled: backendApi.hasAdmin && !launcher.busy && !launcher.gameRunning && indexLibrary.currentIndex >= 0 && !backendApi.libraries[indexLibrary.currentIndex].read_only && backendApi.libraries[indexLibrary.currentIndex].is_online
+                onClicked: launcher.indexLibrary(indexLibrary.currentValue)
+            }
+        }
         Label {
             Layout.fillWidth: true
             visible: !!launcher.session.warning || !!launcher.session.exit_error
