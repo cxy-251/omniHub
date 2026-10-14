@@ -92,7 +92,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		authMid:       auth.NewMiddleware(authDB, localToken),
 		clipboard:     tools.NewClipboardManager(50),
 		taskMgr:       tasks.NewManager(),
-		gameRuns:      games.NewManager(),
+		gameRuns:      games.NewManagerWithRecorder(gamePlayRecorder(readingDB)),
 		gameDiscovery: scanner.NewGameDiscovery(),
 		webGames:      newWebGameGrants(),
 		webGameReads:  make(chan struct{}, 16),
@@ -231,7 +231,8 @@ func (r *Router) Close() error {
 	for _, db := range r.mangaDB {
 		errs = append(errs, db.Close())
 	}
-	errs = append(errs, r.progressDB.Close(), r.userState.Close(), r.taskMgr.Close(), r.gameRuns.Close(), r.mangaReaders.Close())
+	// Drain game statistics before closing the captured global state database.
+	errs = append(errs, r.gameRuns.Close(), r.progressDB.Close(), r.userState.Close(), r.taskMgr.Close(), r.mangaReaders.Close())
 	return errors.Join(errs...)
 }
 

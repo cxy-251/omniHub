@@ -19,7 +19,7 @@ var ErrInvalidProgress = errors.New("invalid reading progress")
 // DB owns the fixed global user_state.db connection pool; it never opens media files.
 type DB struct{ db *sql.DB }
 
-// Open opens the global state database and initializes its bounded progress schema.
+// Open opens the global state database and initializes account progress/statistics.
 func Open(path string) (*DB, error) {
 	db, err := storage.OpenSQLite(path, false)
 	if err != nil {
@@ -39,6 +39,11 @@ func Open(path string) (*DB, error) {
 		start_line INTEGER NOT NULL, byte_offset INTEGER NOT NULL,
 		chapter_index INTEGER NOT NULL, file_version TEXT NOT NULL,
 		updated_at TEXT NOT NULL, PRIMARY KEY(user_id,document_id)
+	);
+	CREATE TABLE IF NOT EXISTS user_game_stats (
+		user_id INTEGER NOT NULL, game_id TEXT NOT NULL,
+		play_time_ms INTEGER NOT NULL DEFAULT 0,
+		last_played_at TEXT NOT NULL, PRIMARY KEY(user_id,game_id)
 	)`)
 	if err != nil {
 		return nil, errors.Join(err, db.Close())

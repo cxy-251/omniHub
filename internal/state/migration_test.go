@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"context"
 	"omnihub/internal/manga"
@@ -95,6 +96,10 @@ func TestBootstrapMigrationCopiesOnlyGlobalState(t *testing.T) {
 	if err := positions.SaveText(context.Background(), &userstate.TextPosition{UserID: 1, DocumentID: textKey, StartLine: 1, ChapterIndex: 5, FileVersion: "original"}); err != nil {
 		t.Fatal(err)
 	}
+	started := time.Now().UTC()
+	if err := positions.RecordGamePlay(context.Background(), 1, "001", started, started.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	if err := positions.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +123,10 @@ func TestBootstrapMigrationCopiesOnlyGlobalState(t *testing.T) {
 	textPosition, err := copied.Text(context.Background(), 1, textKey)
 	if err != nil || textPosition == nil || textPosition.ChapterIndex != 5 {
 		t.Fatal("text reading state not migrated")
+	}
+	gameStats, err := copied.GameStats(context.Background(), 1, []string{"001"})
+	if err != nil || gameStats["001"].PlayTimeSec != 3 || !gameStats["001"].LastPlayedAt.Equal(started) {
+		t.Fatalf("account game statistics not migrated: %+v %v", gameStats, err)
 	}
 	if _, err := os.Stat(filepath.Join(destination, "config.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("copied application configuration into global state")

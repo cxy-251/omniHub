@@ -134,3 +134,50 @@ func TestManagerBoundsCompletedSessionHistory(t *testing.T) {
 		t.Fatal("latest history missing")
 	}
 }
+
+func TestManagerRecordsOnceBeforePublishingCompletion(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls int
+	recorderError := errors.New("state unavailable")
+	manager := NewManagerWithRecorder(func(status RunStatus) error {
+		calls++
+		if status.State != "exited" || status.EndedAt.IsZero() {
+			return errors.New("incomplete observation")
+		}
+		close(entered)
+		<-release
+		return recorderError
+	})
+	manager.launch = func(context.Context, LaunchOptions) (*LaunchedGame, error) {
+		done := make(chan struct{})
+		close(done)
+		return &LaunchedGame{StartTime: time.Now(), done: done}, nil
+	}
+	run, err := manager.Start(context.Background(), "library:001", LaunchOptions{UserID: 41})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	active := manager.HasRunning()
+	snapshot, err := manager.Snapshot(run.ID)
+	close(release)
+	if !active || err != nil || snapshot.State != "running" {
+		t.Fatal("migration allowed before persistence completed", snapshot, err)
+	}
+	completed, err := manager.Wait(context.Background(), run.ID)
+	if err != nil || completed.PersistenceError != recorderError.Error() || completed.ExitError != "" {
+		t.Fatalf("persistence failure misreported: %+v %v", completed, err)
+	}
+	if _, err := manager.Wait(context.Background(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Stop(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal("duplicate recording", calls)
+	}
+}

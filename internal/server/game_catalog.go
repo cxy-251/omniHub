@@ -8,13 +8,16 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"time"
 )
 
 type gameItem struct {
 	*games.Game
-	LibraryID   string `json:"library_id"`
-	LibraryName string `json:"library_name"`
-	ReadOnly    bool   `json:"read_only"`
+	LibraryID       string    `json:"library_id"`
+	LibraryName     string    `json:"library_name"`
+	ReadOnly        bool      `json:"read_only"`
+	UserPlayTimeSec int64     `json:"user_play_time_sec"`
+	LastPlayedAt    time.Time `json:"last_played_at,omitzero"`
 }
 
 func (r *Router) listGameLibraries(w http.ResponseWriter, req *http.Request) {
@@ -111,6 +114,24 @@ func (r *Router) listGameLibraries(w http.ResponseWriter, req *http.Request) {
 	more := len(items) > limit
 	if more {
 		items = items[:limit]
+	}
+	ids := make([]string, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+	}
+	userID := int64(0)
+	if user := auth.UserFromContext(req.Context()); user != nil {
+		userID = user.ID
+	}
+	stats, err := r.userState.GameStats(req.Context(), userID, ids)
+	if err != nil {
+		http.Error(w, "game play statistics unavailable", 503)
+		return
+	}
+	for i := range items {
+		stat := stats[items[i].ID]
+		items[i].UserPlayTimeSec = stat.PlayTimeSec
+		items[i].LastPlayedAt = stat.LastPlayedAt
 	}
 	w.Header().Set("X-Has-More", strconv.FormatBool(more))
 	writeJSON(w, 200, items)

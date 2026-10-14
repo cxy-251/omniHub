@@ -20,16 +20,17 @@ var ErrRunUnknown = errors.New("game session not found")
 // RunStatus is an immutable snapshot. A created process is running until its
 // actual completion is observed; ExitError includes process/log cleanup failures.
 type RunStatus struct {
-	ID        string    `json:"id"`
-	Key       string    `json:"key"`
-	UserID    int64     `json:"user_id"`
-	PID       int       `json:"pid"`
-	State     string    `json:"state"`
-	StartedAt time.Time `json:"started_at"`
-	EndedAt   time.Time `json:"ended_at,omitzero"`
-	LogPath   string    `json:"log_path"`
-	ExitError string    `json:"exit_error,omitempty"`
-	Warning   string    `json:"warning,omitempty"`
+	ID               string    `json:"id"`
+	Key              string    `json:"key"`
+	UserID           int64     `json:"user_id"`
+	PID              int       `json:"pid"`
+	State            string    `json:"state"`
+	StartedAt        time.Time `json:"started_at"`
+	EndedAt          time.Time `json:"ended_at,omitzero"`
+	LogPath          string    `json:"log_path"`
+	ExitError        string    `json:"exit_error,omitempty"`
+	Warning          string    `json:"warning,omitempty"`
+	PersistenceError string    `json:"persistence_error,omitempty"`
 }
 
 type runSession struct {
@@ -42,18 +43,28 @@ type runSession struct {
 }
 
 // Manager owns one active native game and at most 32 session snapshots. It has
-// no idle timers or database writes; active watchdogs stop with their session.
+// no idle timers or polling writes; the recorder runs only on completion.
 type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*runSession
 	active   *runSession
 	closed   bool
 	launch   func(context.Context, LaunchOptions) (*LaunchedGame, error)
+	record   func(RunStatus) error
 }
 
 // NewManager creates an empty service-generation runtime manager.
 func NewManager() *Manager {
 	return &Manager{sessions: make(map[string]*runSession), launch: LaunchGame}
+}
+
+// NewManagerWithRecorder runs record once after actual process/output cleanup,
+// before publishing completion. The recorder must bound its own I/O duration;
+// failures remain visible separately from the process exit error.
+func NewManagerWithRecorder(record func(RunStatus) error) *Manager {
+	m := NewManager()
+	m.record = record
+	return m
 }
 
 // Start creates a session for a caller-resolved library/game key. Request
@@ -111,12 +122,23 @@ func (m *Manager) complete(session *runSession) {
 	err := session.game.Wait(context.Background())
 	session.cancel()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	session.status.State = "exited"
-	session.status.EndedAt = time.Now()
+	completed := session.status
+	m.mu.Unlock()
+	completed.State = "exited"
+	completed.EndedAt = time.Now()
 	if err != nil {
-		session.status.ExitError = err.Error()
+		completed.ExitError = err.Error()
 	}
+	// Keep admission occupied until persistence completes, so state migration and
+	// service shutdown cannot close the destination beneath the recorder.
+	if m.record != nil {
+		if err := m.record(completed); err != nil {
+			completed.PersistenceError = err.Error()
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session.status = completed
 	if m.active == session {
 		m.active = nil
 	}

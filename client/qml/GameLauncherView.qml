@@ -61,8 +61,8 @@ Item {
         }
         Label {
             Layout.fillWidth: true
-            visible: !!launcher.session.warning || !!launcher.session.exit_error
-            text: launcher.session.warning || launcher.session.exit_error || ""
+            visible: !!launcher.session.warning || !!launcher.session.exit_error || !!launcher.session.persistence_error
+            text: launcher.session.persistence_error || launcher.session.warning || launcher.session.exit_error || ""
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
             color: "#d29922"
@@ -95,7 +95,7 @@ Item {
                         }
                         Label {
                             Layout.fillWidth: true
-                            text: (modelData.library_name || "") + " · " + modelData.category + " · " + Math.round((modelData.play_time_sec || 0) / 60) + " 分钟"
+                            text: (modelData.library_name || "") + " · " + modelData.category + " · 本账号 " + Math.round((modelData.user_play_time_sec || 0) / 60) + " 分钟"
                             textFormat: Text.PlainText
                             elide: Text.ElideRight
                             color: "#8b949e"

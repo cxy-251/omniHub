@@ -11,6 +11,7 @@ import (
 	"omnihub/internal/games"
 	"omnihub/internal/library"
 	"omnihub/internal/scanner"
+	"omnihub/internal/userstate"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -161,6 +162,10 @@ func TestIndexedLaunchUsesOwningLibraryAndHostMetadata(t *testing.T) {
 	if !reflect.DeepEqual(observed.Args[1:], expected) || observed.Env != "$HOME; literal 中文" || observed.Save != filepath.Join(folder, "save") {
 		t.Fatalf("host argv/save boundary changed: %+v", observed)
 	}
+	beforeExit, err := router.userState.GameStats(context.Background(), run.UserID, []string{"041"})
+	if err != nil || len(beforeExit) != 0 {
+		t.Fatalf("running game wrote statistics: %+v %v", beforeExit, err)
+	}
 	checkQtGameYield(t, router, run.ID)
 	if w := request("/api/games/stop", `{"id":"`+run.ID+`"}`, "native-token"); w.Code != 202 {
 		t.Fatalf("stop: %d %s", w.Code, w.Body.String())
@@ -171,9 +176,47 @@ func TestIndexedLaunchUsesOwningLibraryAndHostMetadata(t *testing.T) {
 	if err != nil || finished.State != "exited" {
 		t.Fatalf("managed cleanup failed: %+v %v", finished, err)
 	}
+	if finished.PersistenceError != "" {
+		t.Fatal(finished.PersistenceError)
+	}
+	stats, err := router.userState.GameStats(ctx, run.UserID, []string{"041"})
+	if err != nil || !stats["041"].LastPlayedAt.Equal(run.StartedAt.UTC()) || stats["041"].PlayTimeSec != int64(finished.EndedAt.Sub(run.StartedAt)/time.Second) {
+		t.Fatalf("real exit did not record owning account: %+v %v", stats, err)
+	}
+	page := httptest.NewRecorder()
+	listRequest := httptest.NewRequest("GET", "/api/games/list", nil)
+	listRequest.RemoteAddr = "127.0.0.1:1234"
+	listRequest.Header.Set("X-Omni-Local-Token", "native-token")
+	router.ServeHTTP(page, listRequest)
+	var listed []gameItem
+	if page.Code != 200 || json.Unmarshal(page.Body.Bytes(), &listed) != nil || len(listed) != 1 || listed[0].UserPlayTimeSec != stats["041"].PlayTimeSec || !listed[0].LastPlayedAt.Equal(run.StartedAt.UTC()) {
+		t.Fatalf("account statistics missing from catalog: %d %s", page.Code, page.Body.String())
+	}
 	checkQtGameController(t, router, lib.ID, root, observedPath)
 	manager.SetCategoryDisabled("standalone_games/godot_games", true)
 	if w := request("/api/games/launch", payload, "native-token"); w.Code != 403 {
 		t.Fatalf("disabled category launched: %d %s", w.Code, w.Body.String())
+	}
+	manager.SetCategoryDisabled("standalone_games/godot_games", false)
+	restarted := request("/api/games/launch", payload, "native-token")
+	var shutdownRun games.RunStatus
+	if restarted.Code != 201 || json.Unmarshal(restarted.Body.Bytes(), &shutdownRun) != nil {
+		t.Fatalf("shutdown fixture launch: %d %s", restarted.Code, restarted.Body.String())
+	}
+	if err := router.Close(); err != nil {
+		t.Fatal(err)
+	}
+	shutdownEnd, err := router.gameRuns.Wait(context.Background(), shutdownRun.ID)
+	if err != nil || shutdownEnd.PersistenceError != "" {
+		t.Fatalf("shutdown lost recording: %+v %v", shutdownEnd, err)
+	}
+	reopened, err := userstate.Open(filepath.Join(state, "user_state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	stats, err = reopened.GameStats(context.Background(), shutdownRun.UserID, []string{"041"})
+	if err != nil || !stats["041"].LastPlayedAt.Equal(shutdownRun.StartedAt.UTC()) {
+		t.Fatalf("shutdown closed state too early: %+v %v", stats, err)
 	}
 }

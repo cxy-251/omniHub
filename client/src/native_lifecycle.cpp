@@ -26,6 +26,7 @@ bool validSession(const QString &id) {
 NativeLifecycle::NativeLifecycle(bool restore, QObject *parent) : QObject(parent) {
     if (!restore) return;
     if (QCoreApplication::arguments().contains("--session-uncertain")) m_error = "游戏会话服务不可用，无法确认进程状态，请重新连接服务";
+    if (QCoreApplication::arguments().contains("--statistics-failed")) m_error = "游戏已退出，但游玩时长保存失败，请检查服务与用户状态存储";
     QFile file(statePath());
     if (!file.exists()) return;
     if (file.size() > 16384 || !file.open(QIODevice::ReadOnly)) { m_error = "无法读取原生界面恢复状态"; return; }
@@ -79,7 +80,7 @@ int NativeLifecycle::watchGame(int argc, char **argv) {
     QNetworkAccessManager network;
     QTimer timer;
     timer.setInterval(1000);
-    bool pending = false, finished = false, uncertain = false;
+    bool pending = false, finished = false, uncertain = false, statisticsFailed = false;
     int failures = 0;
     QNetworkRequest endpoint = BackendApi::localRequest("/api/games/session?id=" + id);
     auto restore = [&]() {
@@ -89,6 +90,7 @@ int NativeLifecycle::watchGame(int argc, char **argv) {
         barrier.unlock();
         QStringList arguments{"--resume-ui"};
         if (uncertain) arguments << "--session-uncertain";
+        if (statisticsFailed) arguments << "--statistics-failed";
         const bool started = QProcess::startDetached(QCoreApplication::applicationFilePath(), arguments);
         application.exit(started ? 0 : 3);
     };
@@ -107,6 +109,7 @@ int NativeLifecycle::watchGame(int argc, char **argv) {
             if (reply->error() == QNetworkReply::NoError && parse.error == QJsonParseError::NoError && document.isObject() && document.object().value("id").toString() == id && (state == "running" || state == "stopping" || state == "exited")) {
                 failures = 0;
                 finished = document.object().value("state").toString() == "exited";
+                statisticsFailed = finished && !document.object().value("persistence_error").toString().isEmpty();
             } else {
                 // A missing service/session is not proof of process exit. Retry
                 // discovery, then return control to the user with explicit uncertainty.
