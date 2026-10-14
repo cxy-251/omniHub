@@ -1,6 +1,7 @@
 package games
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -73,6 +74,9 @@ func TestGamesDBAndFiltering(t *testing.T) {
 func TestPrepareSaveDirIsolation(t *testing.T) {
 	tempDir := t.TempDir()
 	gameDir := filepath.Join(tempDir, "001 - Game")
+	if err := os.Mkdir(gameDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	// Admin 用户应直通 gameDir/save
 	adminSave, err := PrepareSaveDir(gameDir, 1, true)

@@ -1459,7 +1459,12 @@ func (r *Router) handleSC2Launch(w http.ResponseWriter, req *http.Request) {
 	primary := r.libMgr.GetPrimary()
 	sc2Dir := ""
 	if primary != nil {
-		sc2Dir = filepath.Join(primary.RootPath, "standalone_games", "wine_games", "StarCraft II")
+		var err error
+		sc2Dir, err = r.libMgr.ResolveCategoryPath(primary.ID+":standalone_games/wine_games/StarCraft II", "standalone_games/wine_games")
+		if err != nil {
+			http.Error(w, "SC2 storage boundary unavailable", 503)
+			return
+		}
 	}
 
 	args, err := sc2.BuildMatchArgs(opt, sc2Dir)
@@ -1469,7 +1474,15 @@ func (r *Router) handleSC2Launch(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if opt.Launch && primary != nil {
-		logsDir := filepath.Join(os.TempDir(), "omnihub_logs")
+		if primary.ReadOnly {
+			http.Error(w, "game library is read-only", 403)
+			return
+		}
+		logsDir, err := r.libMgr.ResolveCategoryPath(primary.ID+":standalone_games/logs", "standalone_games")
+		if err != nil {
+			http.Error(w, "game log boundary unavailable", 503)
+			return
+		}
 		launched, err := games.LaunchGame(req.Context(), games.LaunchOptions{
 			GameDir: sc2Dir,
 			ExePath: filepath.Join("Support64", "SC2Switcher_x64.exe"),
