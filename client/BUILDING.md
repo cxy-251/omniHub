@@ -83,3 +83,15 @@ OMNIHUB_QT_YIELD_CHECK="$PWD/.build/client/omnihub_yield_check" \
 ```
 
 使用相同 offscreen/SDK 环境。检查实际加载 PlayerView.qml、两项相同路径逐项播放、真实 EOF 自动接续、末项停留、显式重播，以及超出 256 项/1MiB 的列表不改变原值；必须输出 `PLAYLIST_BOUNDS_DUPLICATE_EOF_FINAL_PAUSE_AND_REPLAY_OK` 才通过，退出码零本身不够。清单模型没有计时器或磁盘操作，解码器仍由当前页销毁。
+
+## 独立 D-Bus 媒体控制检查
+
+Linux 使用已有 dbus-run-session 和 gdbus，在独立会话运行真实完整客户端，不接用户桌面总线，不使用浏览器/插件。fixture 需约八秒，带 title=Fixture title、artist=Fixture artist 元数据，同目录提供不超过 8MiB 的 cover.png：
+
+```sh
+dbus-run-session -- node scripts/check-mpris.mjs "$PROJECT_FIXTURE"
+```
+
+提供 Qt 插件/QML/动态运行库环境，测试路径须在项目中。验证 org.mpris.MediaPlayer2 根接口与 Player 属性、类型化 trackid、真实标题/作者/本地封面、Pause/PlayPause、音量/倍速、SetPosition、过期编号拒绝、停止后从零播放、PropertiesChanged 与实际 Seeked 通知，以及内部分配/bind 方法不暴露。输出 MPRIS_ACTUAL_PLAYER_OK 才通过。相同 source 的列表条目使用不同轨道代际，Position 不逐帧发布。
+
+协议参考 [Player](https://specifications.freedesktop.org/mpris/latest/Player_Interface.html) 和 [根接口](https://specifications.freedesktop.org/mpris/latest/Media_Player.html)。无实际会话总线/名称已占用时本地播放仍可使用；销毁仅注销自身注册成功的服务。无 TrackList 扩展、循环/随机或 OpenUri 能力时不宣称支持这些可选能力。当前封面支持本地 sidecar，嵌入封面提取与实体锁屏/息屏后台仍待验收。

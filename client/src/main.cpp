@@ -60,6 +60,9 @@ int main(int argc, char *argv[])
         }, Qt::QueuedConnection);
 
         engine.load(url);
+#ifdef Q_OS_LINUX
+        if (!engine.rootObjects().isEmpty()) mprisService.setWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().first()));
+#endif
 
         result = app.exec();
     }

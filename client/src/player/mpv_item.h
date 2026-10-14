@@ -23,6 +23,7 @@ class MpvItem : public QQuickFramebufferObject
     Q_PROPERTY(QVariantList tracks READ tracks NOTIFY tracksChanged)
     Q_PROPERTY(double subtitleDelay READ subtitleDelay WRITE setSubtitleDelay NOTIFY subtitleDelayChanged)
     Q_PROPERTY(double videoBrightness READ videoBrightness WRITE setVideoBrightness NOTIFY videoBrightnessChanged)
+    Q_PROPERTY(bool mediaLoaded READ mediaLoaded NOTIFY mediaLoadedChanged)
 
 public:
     // Creates GUI state; media loading waits for a render-thread GL context.
@@ -63,6 +64,9 @@ public:
     bool pauseRequested() const { return m_loadPaused; }
     // Bounded audio/subtitle descriptors from the loaded media, not file guesses.
     QVariantList tracks() const { return m_tracks; }
+    // Bounded observed title/artist/album tags; empty until the file has loaded.
+    QVariantMap mediaMetadata() const { return m_mediaMetadata; }
+    bool mediaLoaded() const { return m_loaded; }
     // Subtitle timing adjustment in seconds; finite values within +/-60 accepted.
     double subtitleDelay() const { return m_subtitleDelay; }
     void setSubtitleDelay(double seconds);
@@ -100,6 +104,10 @@ signals:
     void videoBrightnessChanged();
     // One end notification per EOF transition; explicit stop/errors do not advance.
     void playbackEnded();
+    void mediaMetadataChanged();
+    void mediaLoadedChanged();
+    // Actual position after an asynchronous seek has resumed rendering.
+    void seekCompleted(double position);
 
 private:
     void initMpv();
@@ -113,6 +121,7 @@ private:
     void selectTrack(const char *type, int id);
     void readTracks();
     void updateTracks(const mpv_node &node);
+    void updateMetadata(const mpv_node &node);
 
     std::shared_ptr<MpvCore> m_core;
     QString m_source;
@@ -134,6 +143,9 @@ private:
     quint64 m_trackRevision = 0;
     int m_trackCount = 0;
     bool m_eof = false;
+    QVariantMap m_mediaMetadata;
+    bool m_loading = false;
+    bool m_seekPending = false;
 
     friend class MpvRenderer;
     friend class MpvCore;

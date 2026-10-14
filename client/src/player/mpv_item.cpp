@@ -188,6 +188,8 @@ void MpvItem::initMpv()
     }
     status = mpv_observe_property(core->handle, 0, "track-list", MPV_FORMAT_NODE);
     if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); m_core.reset(); return; }
+    status = mpv_observe_property(core->handle, 0, "metadata", MPV_FORMAT_NODE);
+    if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); m_core.reset(); return; }
     mpv_set_wakeup_callback(core->handle, [](void *data) { static_cast<MpvCore *>(data)->post(false); }, core);
 }
 
@@ -220,6 +222,8 @@ void MpvItem::onMpvEvents()
             if (!property->data) continue;
             if (std::strcmp(property->name, "track-list") == 0 && m_loaded) {
                 updateTracks(*static_cast<mpv_node *>(property->data));
+            } else if (std::strcmp(property->name, "metadata") == 0 && m_loaded && property->format == MPV_FORMAT_NODE) {
+                updateMetadata(*static_cast<mpv_node *>(property->data));
             } else if (property->format == MPV_FORMAT_DOUBLE) {
                 const double value = *static_cast<double *>(property->data);
                 if (!std::isfinite(value) || value < 0) continue;
@@ -238,13 +242,25 @@ void MpvItem::onMpvEvents()
             }
         } else if (event->event_id == MPV_EVENT_FILE_LOADED) {
             m_loaded = true;
+            m_loading = false;
+            emit mediaLoadedChanged();
             readTracks();
             if (m_restorePosition >= 0) { setPosition(m_restorePosition); m_restorePosition = -1; }
             setPaused(m_loadPaused);
         } else if (event->event_id == MPV_EVENT_GET_PROPERTY_REPLY && event->reply_userdata == m_trackRevision && m_loaded) {
             auto *property = static_cast<mpv_event_property *>(event->data);
             if (event->error < 0) setError(QString::fromUtf8(mpv_error_string(event->error)));
-            else if (property && property->data && property->format == MPV_FORMAT_NODE) updateTracks(*static_cast<mpv_node *>(property->data));
+            else if (property && property->data && property->format == MPV_FORMAT_DOUBLE && std::strcmp(property->name, "time-pos") == 0) {
+                const double value = *static_cast<double *>(property->data);
+                if (std::isfinite(value) && value >= 0 && value <= 31536000) emit seekCompleted(value);
+            } else if (property && property->data && property->format == MPV_FORMAT_NODE) {
+                if (std::strcmp(property->name, "track-list") == 0) updateTracks(*static_cast<mpv_node *>(property->data));
+                else if (std::strcmp(property->name, "metadata") == 0) updateMetadata(*static_cast<mpv_node *>(property->data));
+            }
+        } else if (event->event_id == MPV_EVENT_PLAYBACK_RESTART && m_seekPending && m_loaded) {
+            m_seekPending = false;
+            const int status = mpv_get_property_async(m_core->handle, m_trackRevision, "time-pos", MPV_FORMAT_DOUBLE);
+            if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
         } else if ((event->event_id == MPV_EVENT_COMMAND_REPLY || event->event_id == MPV_EVENT_SET_PROPERTY_REPLY) && event->error < 0) {
             setError(QString::fromUtf8(mpv_error_string(event->error)));
         } else if (event->event_id == MPV_EVENT_END_FILE && event->data) {
@@ -253,7 +269,7 @@ void MpvItem::onMpvEvents()
             // next renderer reloads the saved position instead of surfacing
             // that expected teardown as a corrupt-media error.
             if (end->reason == MPV_END_FILE_REASON_ERROR && m_core->renderAvailable.load())
-                setError(QString::fromUtf8(mpv_error_string(end->error)));
+                { m_loading = false; m_loaded = false; emit mediaLoadedChanged(); setError(QString::fromUtf8(mpv_error_string(end->error))); }
         }
     }
     m_core->post(false);
@@ -263,12 +279,15 @@ void MpvItem::loadSource()
 {
     if (!m_rendererReady || !m_core || m_source.isEmpty()) return;
     m_loaded = false;
+    m_loading = true;
+    m_seekPending = false;
+    emit mediaLoadedChanged();
     m_eof = false;
     ++m_trackRevision;
     const QByteArray source = m_source.toUtf8();
     const char *command[] = {"loadfile", source.constData(), nullptr};
     const int status = mpv_command_async(m_core->handle, 0, command);
-    if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
+    if (status < 0) { m_loading = false; setError(QString::fromUtf8(mpv_error_string(status))); }
 }
 
 void MpvItem::setSource(const QString &source)
@@ -278,6 +297,7 @@ void MpvItem::setSource(const QString &source)
     const QString address = *parsed;
     if (address == m_source) return;
     stop();
+    if (!m_mediaMetadata.isEmpty()) { m_mediaMetadata.clear(); emit mediaMetadataChanged(); }
     m_source = address;
     if (m_loadPaused) { m_loadPaused = false; emit pauseRequestedChanged(); }
     m_restorePosition = -1;
@@ -309,6 +329,7 @@ void MpvItem::seek(double seconds, const char *mode)
     const char *command[] = {"seek", value.constData(), mode, nullptr};
     const int status = mpv_command_async(m_core->handle, 0, command);
     if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
+    else m_seekPending = true;
 }
 
 void MpvItem::setVolume(double volume)
@@ -336,11 +357,14 @@ void MpvItem::setPaused(bool paused)
     if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
 }
 
-void MpvItem::play() { if (m_idle && !m_source.isEmpty()) loadSource(); else if (m_eof) setPosition(0); setPaused(false); }
+void MpvItem::play() { if (!m_loaded && !m_loading && !m_source.isEmpty()) loadSource(); else if (m_eof) setPosition(0); setPaused(false); }
 void MpvItem::restart() { if (m_source.isEmpty()) return; stop(); m_restorePosition = 0; setPaused(false); loadSource(); }
 void MpvItem::pause() { setPaused(true); }
 void MpvItem::stop() {
     m_loaded = false;
+    m_loading = false;
+    m_seekPending = false;
+    emit mediaLoadedChanged();
     m_eof = false;
     ++m_trackRevision;
     if (!m_tracks.isEmpty()) { m_tracks.clear(); emit tracksChanged(); }
@@ -372,6 +396,20 @@ void MpvItem::readTracks() {
     if (!m_core || !m_loaded) return;
     const int status = mpv_get_property_async(m_core->handle, m_trackRevision, "track-list", MPV_FORMAT_NODE);
     if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
+    const int metadataStatus = mpv_get_property_async(m_core->handle, m_trackRevision, "metadata", MPV_FORMAT_NODE);
+    if (metadataStatus < 0) setError(QString::fromUtf8(mpv_error_string(metadataStatus)));
+}
+
+void MpvItem::updateMetadata(const mpv_node &node) {
+    if (node.format != MPV_FORMAT_NODE_MAP || !node.u.list || node.u.list->num < 0 || node.u.list->num > 128) return;
+    QVariantMap metadata;
+    for (int i = 0; i < node.u.list->num; ++i) {
+        const auto &value = node.u.list->values[i];
+        mpv_node key{}; key.format = MPV_FORMAT_STRING; key.u.string = node.u.list->keys[i];
+        const QString name = trackText(&key).toLower();
+        if (name == "title" || name == "artist" || name == "album") metadata.insert(name, trackText(&value));
+    }
+    if (metadata != m_mediaMetadata) { m_mediaMetadata = metadata; emit mediaMetadataChanged(); }
 }
 
 void MpvItem::updateTracks(const mpv_node &node) {

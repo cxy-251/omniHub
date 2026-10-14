@@ -53,7 +53,9 @@ Window {
         }
         function onLibrariesChanged() {
             if (backendApi.stateReady && backendApi.connected && !backendApi.hasAdmin) setupDialog.open()
-            if (!backendApi.stateReady) mainWindow.selectPage(2)
+            // A standalone local file must keep playing when the service is
+            // absent/offline; recovery navigation cannot destroy its decoder.
+            if (!backendApi.stateReady && !(playerLoader.item && playerLoader.item.source.length > 0)) mainWindow.selectPage(2)
         }
     }
     Dialog {
@@ -122,7 +124,10 @@ Window {
                 id: playerLoader
                 active: stack.currentIndex === 0
                 sourceComponent: Component { PlayerView { } }
-                onLoaded: item.restorePlayback(mainWindow.savedMediaSource, mainWindow.savedMediaPosition, mainWindow.savedMediaPaused, mainWindow.savedPlaylistEntries, mainWindow.savedPlaylistIndex)
+                onLoaded: {
+                    item.restorePlayback(mainWindow.savedMediaSource, mainWindow.savedMediaPosition, mainWindow.savedMediaPaused, mainWindow.savedPlaylistEntries, mainWindow.savedPlaylistIndex)
+                    if (typeof mprisService !== "undefined") mprisService.bind(item)
+                }
             }
 
             Loader {

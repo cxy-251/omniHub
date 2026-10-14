@@ -52,3 +52,5 @@ node scripts/package-linux.mjs
 ```
 
 脚本只在项目 .build/releases 中写入，不安装工具，不写外部参考项目。输出一个展开目录和 tar.gz；环境变量可指定 CMAKE、PNPM、OMNIHUB_CLIENT_BUILD_DIR。构建产物没有账号、连接凭证或用户资源；使用现有配置目录运行时才创建运行状态。
+
+Linux 桌面会话中，MPRIS 可控制当前已打开的播放器（播放/暂停/停止、音量、倍速、跳转和列表导航），提供媒体 title/artist/album 标签，标签缺失时标题回退文件名。本地同目录 cover.jpg/cover.png/folder.jpg 可作为封面；暂不提取媒体内嵌封面。离开播放器页会清除媒体控制对象和能力，独立文件在服务不可用时仍继续播放。实体锁屏/息屏音频行为还需验收，不能把 D-Bus 接口可调用当作后台播放全部完成。
