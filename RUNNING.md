@@ -81,4 +81,4 @@ cp omnihub.desktop "${XDG_DATA_HOME:-$HOME/.local/share}/applications/omnihub.de
 
 ## 任务调试台
 
-Web 任务页已使用注册任务选择与参数表单，拒绝任意命令路径。注册文件放在服务配置目录 tasks.json，读取规则、可直接试运行的 uv 版本检查、Python/凭证及目录锁说明见源码 docs/TASKS.md（预览包内 TASKS.md）。默认没有注册任务，业务爬虫/封箱仍需分别交付；不把调试台框架当作这些业务功能完成。离开页面不会停止服务端任务，重开可从任务记录继续查看和停止。
+Web 任务页已使用注册任务选择与参数表单，拒绝任意命令路径。注册文件放在服务配置目录 tasks.json，读取规则、可直接试运行的 uv 版本检查、Python/凭证及目录锁说明见源码 docs/TASKS.md（预览包内 TASKS.md）。服务自带漫画图片目录封箱与 CBZ 索引更新，使用方法见源码 features/manga/README.md（预览包 MANGA_TASKS.md）。封箱需要已有 uv/Python，索引由 Go 运行；不会自动安装。业务爬虫/文本构建仍待交付。离开页面不会停止服务端任务，重开可从任务记录继续查看和停止。

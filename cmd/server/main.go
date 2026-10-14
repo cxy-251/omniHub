@@ -24,6 +24,13 @@ import (
 )
 
 func main() {
+	if handled, err := runMangaCommand(os.Args[1:]); handled {
+		if err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		return
+	}
 	options, err := parseLaunchOptions(os.Args[1:])
 	if err != nil {
 		log.Print(err)

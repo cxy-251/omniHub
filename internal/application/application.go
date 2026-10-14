@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	mangajob "omnihub/features/manga"
 	"omnihub/internal/auth"
 	"omnihub/internal/config"
 	"omnihub/internal/library"
@@ -147,7 +148,11 @@ func (a *Application) build() *generation {
 		g.stateError = err.Error()
 		return g
 	}
-	registry, err := tasks.LoadRegistry(a.configDir)
+	builtins, err := mangajob.Definitions(a.configDir)
+	var registry *tasks.Registry
+	if err == nil {
+		registry, err = tasks.LoadRegistry(a.configDir, builtins...)
+	}
 	if err != nil {
 		log.Printf("Task registry disabled: %v", err)
 		registry = tasks.DisabledRegistry(err)

@@ -205,6 +205,14 @@ func (r *CBZReader) ParseMetadata() (*PackageMetadata, error) {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return nil, err
 	}
+	if len(meta.ID) > 256 || len(meta.Title) > 4096 || len(meta.Author) > 4096 || len(meta.Description) > 64<<10 || len(meta.Tags) > 512 || meta.LocalChapters < 0 || meta.LocalChapters > 20000 || meta.OnlineChapters < 0 || meta.OnlineChapters > 20000 {
+		return nil, errors.New("manga metadata exceeds field capacity")
+	}
+	for _, tag := range meta.Tags {
+		if len(tag) > 256 {
+			return nil, errors.New("manga tag exceeds field capacity")
+		}
+	}
 	return &meta, nil
 }
 

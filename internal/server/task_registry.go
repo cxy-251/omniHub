@@ -94,7 +94,12 @@ func (r *Router) runRegisteredTask(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "task directory unavailable", 404)
 		return
 	}
-	command, err := r.taskRegistry.Prepare(input.Definition, directory, input.Parameters)
+	categoryRoot, err := r.libMgr.ResolveCategoryPath(selected.ID+":"+category, category)
+	if err != nil {
+		http.Error(w, "task category unavailable", 503)
+		return
+	}
+	command, err := r.taskRegistry.Prepare(input.Definition, directory, input.Parameters, categoryRoot)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return

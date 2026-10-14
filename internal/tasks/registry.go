@@ -25,14 +25,15 @@ type Parameter struct {
 // selected directory; Write requires a writable library and exclusive access.
 // Executable/Args/Env are accepted only from the private startup file, not HTTP.
 type Definition struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	Category   string            `json:"category"`
-	Write      bool              `json:"write"`
-	Parameters []Parameter       `json:"parameters"`
-	Executable string            `json:"executable"`
-	Args       []string          `json:"args"`
-	Env        map[string]string `json:"env,omitempty"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Category     string            `json:"category"`
+	Write        bool              `json:"write"`
+	Parameters   []Parameter       `json:"parameters"`
+	Executable   string            `json:"executable"`
+	Args         []string          `json:"args"`
+	Env          map[string]string `json:"env,omitempty"`
+	LockCategory bool              `json:"-"`
 }
 
 // RegisteredTask is the browser-safe projection; credentials and commands stay local.
@@ -56,11 +57,11 @@ var environmentName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
 
 // LoadRegistry reads optional configDir/tasks.json (64KiB, at most 32 jobs).
 // Relative executables are anchored to configDir. Missing means no registered jobs.
-func LoadRegistry(configDir string) (registry *Registry, resultErr error) {
+func LoadRegistry(configDir string, defaults ...Definition) (registry *Registry, resultErr error) {
 	path := filepath.Join(configDir, "tasks.json")
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return NewRegistry(nil, configDir)
+		return NewRegistry(defaults, configDir)
 	}
 	if err != nil {
 		return nil, err
@@ -70,7 +71,7 @@ func LoadRegistry(configDir string) (registry *Registry, resultErr error) {
 	}
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return NewRegistry(nil, configDir)
+		return NewRegistry(defaults, configDir)
 	}
 	if err != nil {
 		return nil, err
@@ -104,7 +105,7 @@ func LoadRegistry(configDir string) (registry *Registry, resultErr error) {
 			return nil, errors.New("task registry containing credentials must have private permissions")
 		}
 	}
-	return NewRegistry(definitions, configDir)
+	return NewRegistry(append(defaults, definitions...), configDir)
 }
 
 // NewRegistry validates trusted definitions and resolves executables once.
@@ -143,7 +144,7 @@ func NewRegistry(definitions []Definition, base string) (*Registry, error) {
 		}
 		env := make(map[string]string, len(d.Env))
 		for k, v := range d.Env {
-			if k == "OMNIHUB_TASK_DIR" || !environmentName.MatchString(k) || len(v) > 4096 || strings.ContainsRune(v, 0) {
+			if (k == "OMNIHUB_TASK_DIR" || k == "OMNIHUB_TASK_CATEGORY_DIR") || !environmentName.MatchString(k) || len(v) > 4096 || strings.ContainsRune(v, 0) {
 				return nil, errors.New("invalid task environment")
 			}
 			total += len(k) + len(v)
@@ -184,10 +185,13 @@ func (r *Registry) List() []RegisteredTask {
 
 // Prepare accepts only a known ID and its named form fields. Directory is a
 // canonical library path resolved by the caller; cwd and OMNIHUB_TASK_DIR agree.
-func (r *Registry) Prepare(id, directory string, values map[string]string) (Command, error) {
+func (r *Registry) Prepare(id, directory string, values map[string]string, categoryRoot ...string) (Command, error) {
 	d, ok := r.definitions[id]
 	if !ok {
 		return Command{}, errors.New("unregistered task")
+	}
+	if len(categoryRoot) > 1 || (d.LockCategory && (len(categoryRoot) != 1 || !filepath.IsAbs(categoryRoot[0]))) {
+		return Command{}, errors.New("task requires a resolved category reservation")
 	}
 	if len(values) > len(d.Parameters) {
 		return Command{}, errors.New("unknown task parameter")
@@ -207,14 +211,21 @@ func (r *Registry) Prepare(id, directory string, values map[string]string) (Comm
 			return Command{}, errors.New("unknown task parameter")
 		}
 	}
+	resource := directory
 	env := []string{"OMNIHUB_TASK_DIR=" + directory}
+	if len(categoryRoot) > 0 {
+		env = append(env, "OMNIHUB_TASK_CATEGORY_DIR="+categoryRoot[0])
+		if d.LockCategory {
+			resource = categoryRoot[0]
+		}
+	}
 	for k, v := range d.Env {
 		if k == "OMNIHUB_TASK_DIR" {
 			return Command{}, errors.New("reserved task environment")
 		}
 		env = append(env, k+"="+v)
 	}
-	return Command{Name: d.Name, Executable: d.Executable, Args: args, Directory: directory, Environment: env, Resource: directory, Write: d.Write}, nil
+	return Command{Name: d.Name, Executable: d.Executable, Args: args, Directory: directory, Environment: env, Resource: resource, Write: d.Write}, nil
 }
 
 // Lookup returns safe task metadata for authorization before preparing a command.

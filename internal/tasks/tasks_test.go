@@ -33,12 +33,12 @@ echo "INFO: Job finished"
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	logCh, _ := task.SubscribeLogs(ctx)
+	logCh, history := task.SubscribeLogs(ctx)
 	received := 0
 	hasError := false
 	hasStack := false
 
-	for entry := range logCh {
+	observe := func(entry LogEntry) {
 		received++
 		if entry.Level == LevelError {
 			hasError = true
@@ -48,6 +48,12 @@ echo "INFO: Job finished"
 		}
 	}
 
+	for _, entry := range history {
+		observe(entry)
+	}
+	for entry := range logCh {
+		observe(entry)
+	}
 	if received < 4 {
 		t.Errorf("expected at least 4 log entries, got %d", received)
 	}

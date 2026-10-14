@@ -10,7 +10,7 @@ if (!process.argv[2] || !bundle.startsWith(root + path.sep)) throw Error('Pass t
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const test = fs.mkdtempSync(path.join(root, '.test-tmp', 'release-check-'));
 const config = path.join(test, 'config'); fs.mkdirSync(config);
-fs.writeFileSync(path.join(config, 'config.json'), JSON.stringify({server: {host: '127.0.0.1', port: 19133}, libraries: [], category_directories: ["media_library/docs"]}), {mode: 0o600});
+fs.writeFileSync(path.join(config, 'config.json'), JSON.stringify({server: {host: '127.0.0.1', port: 19133}, libraries: [], category_directories: ["media_library/docs","media_library/manga"]}), {mode: 0o600});
 const probe = {id:'delivery.verify',name:'Delivery task',category:'media_library/docs',write:false,executable:process.execPath,args:['-e',"if(process.cwd()!==process.env.OMNIHUB_TASK_DIR||process.env.DELIVERY_PROBE!=='private-probe')process.exit(2);console.log('INFO packaged task reached actual worker')"],parameters:[],env:{DELIVERY_PROBE:'private-probe'}};
 fs.writeFileSync(path.join(config,'tasks.json'),JSON.stringify([probe]),{mode:0o600});
 const alias = path.join(test, 'preview with spaces'); fs.symlinkSync(bundle, alias);
@@ -66,6 +66,26 @@ try {
  if(!finished)throw Error('Actual registered task did not finish.');
  const events=await (await fetch(connection.url+'/api/tasks/logs?id='+encodeURIComponent(job.id),{headers})).text();
  if(!events.includes('packaged task reached actual worker')||!events.includes('event: end'))throw Error('Actual task SSE history/end missing.');
+ if(process.env.OMNIHUB_PACK_PREVIEW_FIXTURE){
+  const fixture=path.resolve(process.env.OMNIHUB_PACK_PREVIEW_FIXTURE);if(!fixture.startsWith(root+path.sep))throw Error('Pack fixture must be inside checkout.');
+  const bookDir=path.join(storage,'media_library/manga/Pack fixture');fs.mkdirSync(bookDir,{recursive:true});
+  const jpeg=fs.readFileSync(fixture);fs.writeFileSync(path.join(bookDir,'cover.jpg'),jpeg);fs.writeFileSync(path.join(bookDir,'2.jpg'),jpeg);fs.writeFileSync(path.join(bookDir,'10.jpg'),jpeg);
+  const packed=await fetch(connection.url+'/api/tasks/run',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({definition:'manga.pack',library_id:snapshot.libraries[0].id,directory:'Pack fixture',parameters:{output:'bundle.cbz'}})});
+  if(!packed.ok)throw Error('Builtin pack task unavailable: '+await packed.text());
+  const packJob=await packed.json();let complete=false;
+  for(let i=0;i<200;i++){
+   const state=await (await fetch(connection.url+'/api/tasks/catalog',{headers})).json();const job=state.tasks.find(job=>job.id===packJob.id);
+   if(job&&!job.running){if(job.exit_code!==0){const errorLog=await(await fetch(connection.url+'/api/tasks/logs?id='+encodeURIComponent(job.id),{headers})).text();throw Error('Builtin pack failed: '+errorLog);}complete=true;break;}
+   await delay(50);
+  }
+  if(!complete)throw Error('Builtin pack did not finish.');
+  const books=await(await fetch(connection.url+'/api/media/manga/list?library_id='+encodeURIComponent(snapshot.libraries[0].id),{headers})).json();
+  const book=books.find(book=>book.logical_path.endsWith('/Pack fixture/bundle.cbz'));if(!book)throw Error('Packed book not visible in actual API.');
+  const pages=await(await fetch(connection.url+'/api/media/manga/page-list?path='+encodeURIComponent(book.logical_path),{headers})).json();
+  if(pages.total!==2||pages.pages[0].entry!=='2.jpg'||pages.pages[1].entry!=='10.jpg')throw Error('Packed book reading order failed: '+JSON.stringify(pages));
+  const cover=await fetch(connection.url+'/api/media/manga/cover?path='+encodeURIComponent(book.logical_path),{headers});if(!cover.ok||!Buffer.from(await cover.arrayBuffer()).equals(jpeg))throw Error('Packed cover unavailable.');
+  console.log('PACK_TASK_PUBLISH_INDEX_BOOK_API_AND_COVER_OK');
+ }
  const version = execFileSync(path.join(bundle, 'server'), ['--version'], {encoding: 'utf8'}).trim();
  if (!version.startsWith('omniHub ')) throw Error('Build identity unavailable.');
  fs.writeFileSync(path.join(test, 'result.json'), JSON.stringify({version, url: connection.url, native_ui: 'Qt Main.qml alive', sdk_fallback: false, isolated_configuration: true, initialized_account: true, zero_libraries: true, registered_task: 'actual worker and SSE passed'}, null, 2));

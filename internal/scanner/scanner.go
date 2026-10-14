@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
 	"omnihub/internal/ordering"
 	"omnihub/internal/platform"
@@ -11,48 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"omnihub/internal/manga"
 	"omnihub/internal/shortvideo"
 )
 
 // ScanManga 扫描 media_library/manga 目录下的 CBZ 文件并建立索引。
 func ScanManga(mangaDir string) (int, error) {
-	db, err := manga.OpenDB(mangaDir)
-	if err != nil {
-		return 0, err
-	}
-	defer db.Close()
-
-	existing, _ := db.GetExistingIDs()
-
-	entries, err := os.ReadDir(mangaDir)
-	if err != nil {
-		return 0, err
-	}
-
-	count := 0
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".cbz") {
-			continue
-		}
-
-		stem := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-		if existing != nil && existing[stem] {
-			continue
-		}
-
-		cbzPath := filepath.Join(mangaDir, entry.Name())
-		m, err := manga.ScanMangaFromCBZ(cbzPath)
-		if err != nil {
-			continue
-		}
-
-		if err := db.UpsertManga(m); err == nil {
-			count++
-		}
-	}
-
-	return count, nil
+	return ScanMangaContext(context.Background(), mangaDir, mangaDir)
 }
 
 // ScanShortVideos 扫描 media_library/shortvideo 目录下的博主与作品（视频/图集），提取缩略图并写入自治数据库。

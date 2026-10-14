@@ -88,18 +88,27 @@ func (d *DB) migrate() error {
 
 // UpsertManga 插入或更新漫画信息。
 func (d *DB) UpsertManga(m *Manga) error {
-	if m.ID == "" || m.Title == "" {
+	return d.UpsertMangaContext(context.Background(), m)
+}
+
+// UpsertMangaContext applies cancellable metadata changes, preserving custom
+// covers and skipping identical rows to avoid repeated scan writes.
+func (d *DB) UpsertMangaContext(ctx context.Context, m *Manga) error {
+	if m == nil || m.ID == "" || m.Title == "" {
 		return errors.New("manga id and title cannot be empty")
 	}
 
-	tagsRaw, _ := json.Marshal(m.Tags)
+	tagsRaw, err := json.Marshal(m.Tags)
+	if err != nil {
+		return err
+	}
 	compInt := 0
 	if m.IsComplete {
 		compInt = 1
 	}
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
-	_, err := d.db.Exec(`
+	_, err = d.db.ExecContext(ctx, `
 		INSERT INTO mangas (
 			id, title, author, description, tags_json, chapter_count,
 			total_pages, is_complete, rel_path, custom_cover, updated_at
@@ -113,7 +122,8 @@ func (d *DB) UpsertManga(m *Manga) error {
 			total_pages = excluded.total_pages,
 			is_complete = excluded.is_complete,
 			rel_path = excluded.rel_path,
-			updated_at = excluded.updated_at`,
+			updated_at = excluded.updated_at
+ WHERE (mangas.rel_path!=excluded.rel_path OR mangas.title!=excluded.title OR mangas.author!=excluded.author OR mangas.description!=excluded.description OR mangas.tags_json!=excluded.tags_json OR mangas.chapter_count!=excluded.chapter_count OR mangas.total_pages!=excluded.total_pages OR mangas.is_complete!=excluded.is_complete)`,
 		m.ID, m.Title, m.Author, m.Description, string(tagsRaw),
 		m.ChapterCount, m.TotalPages, compInt, m.RelPath, m.CustomCover, nowStr,
 	)

@@ -279,3 +279,16 @@ func (c *Catalog) refresh(ctx context.Context, root string, old *rootSnapshot) (
 	}
 	return next, nil
 }
+
+// SnapshotPaths returns an owned copy of the bounded offline scan inventory
+// (at most 20,000 files and the existing root metadata budget). HTTP callers
+// should use Page; offline jobs need one stable inventory across slow reads.
+func (c *Catalog) SnapshotPaths(ctx context.Context, root string) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	snapshot, err := c.snapshotLocked(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	return append([]string{}, snapshot.files...), nil
+}
