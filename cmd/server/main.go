@@ -17,19 +17,29 @@ import (
 
 	"omnihub/internal/application"
 	"omnihub/internal/auth"
+	"omnihub/internal/buildinfo"
 	"omnihub/internal/config"
 	"omnihub/internal/network"
 	"omnihub/internal/server"
 )
 
 func main() {
-	if err := run(); err != nil {
+	options, err := parseLaunchOptions(os.Args[1:])
+	if err != nil {
+		log.Print(err)
+		os.Exit(2)
+	}
+	if options.version {
+		fmt.Println(buildinfo.Description())
+		return
+	}
+	if err := run(options); err != nil {
 		log.Printf("omniHub server stopped: %v", err)
 		os.Exit(1)
 	}
 }
 
-func run() (result error) {
+func run(options launchOptions) (result error) {
 	log.Println("Starting omniHub server...")
 
 	// 1. 先确定配置目录并获取单实例锁，再允许加载流程创建默认配置。
@@ -121,6 +131,13 @@ func run() (result error) {
 		log.Printf("omniHub server listening on http://%s:%d", cfg.Server.Host, port)
 		serveError <- httpServer.Serve(listener)
 	}()
+	// Connection discovery is written and HTTP is serving before opening Qt.
+	// Closing/yielding the GUI must not terminate LAN access or an owned game.
+	if options.desktop {
+		if err := startDesktop(options.clientPath); err != nil {
+			return fmt.Errorf("start native client: %w", err)
+		}
+	}
 
 	select {
 	case <-stopChan:

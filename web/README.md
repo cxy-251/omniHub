@@ -16,7 +16,7 @@ OMNIHUB_CHROME="$CHROME_EXECUTABLE" \
 
 需要支持内置 WebSocket 的 Node（当前验证使用 Node 24）。检查实际登录账号、游戏卡片、iframe 脚本、所属库相对资源、父界面/API 隔离以及退出撤销，成功输出 WEB_GAME_CHECK_OK。截图和 JSON 位于 `.test-tmp/web-game`，测试只清理其自建 Chrome 配置目录。
 
-当前仍需接通正式游戏扫描/索引入口，接入离线 EmulatorJS/Ruffle 包，并实际验证 ROM、SWF、RPG/SLG、引擎存档及性能；旧猜测编号目录的 JS 入口和吞异常的未用 polyfill 已移除。
+正式本机索引入口和无索引只读发现已接通，离线 EmulatorJS/Ruffle 及 NES/SWF 验证见下文。其余核心、RPG/SLG、引擎存档及性能仍须完成；旧猜测编号目录的 JS 入口和吞异常的未用 polyfill 已移除。
 
 ## 离线引擎
 
