@@ -80,7 +80,7 @@ export default function GameLibrary() {
     {pending ? <p role="status">正在打开游戏… <button className={button} onClick={close}>取消</button></p> : null}
     {playing ? <div ref={player} className="space-y-3 rounded-lg border border-line bg-background p-3">
       <div className="flex items-center gap-3"><h2 className="min-w-0 flex-1 truncate">{playing.game.name}</h2><button className={button} onClick={() => { void player.current?.requestFullscreen().catch((failure: Error) => setError(failure.message)); }}>全屏</button><button className={button} onClick={close}>退出游戏</button></div>
-      <iframe key={playing.grant.token} title={playing.game.name} src={source} sandbox="allow-scripts allow-pointer-lock allow-modals allow-forms allow-downloads" allow="autoplay; fullscreen" referrerPolicy="no-referrer" className="h-[70vh] w-full border-0 bg-black" />
+      <iframe key={playing.grant.token} title={playing.game.name} src={source} sandbox="allow-scripts allow-pointer-lock allow-modals allow-forms allow-downloads" allow="autoplay; fullscreen; screen-wake-lock *; gamepad *" referrerPolicy="no-referrer" className="h-[70vh] w-full border-0 bg-black" />
     </div> : null}
     {loading ? <p role="status">正在加载游戏…</p> : <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {games.map(game => <article key={game.id} className="flex flex-col gap-3 rounded-lg border border-line bg-panel p-4"><h3 className="truncate font-semibold" title={game.name}>{game.name}</h3><p className="truncate text-sm text-muted">{game.library_name} · {game.category} · {game.id}</p><button className={`${button} text-primary`} disabled={pending} onClick={() => { void open(game); }}>启动</button></article>)}

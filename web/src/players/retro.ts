@@ -10,6 +10,7 @@ void (async () => {
       EJS_player: '#game', EJS_core: cores[extension], EJS_gameUrl: source.href,
       EJS_pathtodata: '/vendor/players/emulatorjs/data/', EJS_startOnLoaded: true,
       EJS_disableDatabases: true, EJS_forceLegacyCores: true, EJS_threads: false,
+      EJS_disableLocalStorage: true, EJS_DEBUG_XX: true,
       EJS_language: 'zh-CN', EJS_gameName: decodeURIComponent(source.pathname.split('/').pop() ?? ''),
     });
     window.addEventListener('error', event => showError(event.message || '模拟器运行失败'));

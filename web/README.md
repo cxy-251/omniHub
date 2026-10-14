@@ -17,3 +17,18 @@ OMNIHUB_CHROME="$CHROME_EXECUTABLE" \
 需要支持内置 WebSocket 的 Node（当前验证使用 Node 24）。检查实际登录账号、游戏卡片、iframe 脚本、所属库相对资源、父界面/API 隔离以及退出撤销，成功输出 WEB_GAME_CHECK_OK。截图和 JSON 位于 `.test-tmp/web-game`，测试只清理其自建 Chrome 配置目录。
 
 当前仍需接通正式游戏扫描/索引入口，接入离线 EmulatorJS/Ruffle 包，并实际验证 ROM、SWF、RPG/SLG、引擎存档及性能；旧猜测编号目录的 JS 入口和吞异常的未用 polyfill 已移除。
+
+## 离线引擎
+
+已嵌入 Ruffle 0.5.0、EmulatorJS 4.2.3 和运行器使用的十个非线程 legacy 核心，约 49MB，按用户选择加载；服务端没有启动时下载。版本/原始哈希、许可证及本地差异在 vendor/players。不含 BIOS 或游戏镜像。EmulatorJS 使用源码模块，禁用在线更新/CDN 兜底；沙箱中禁用浏览器持久存储，账号存档尚需接入服务端，不能据此称为存档已保存。
+
+可选真实运行时检查通过自编写的 NES 指令/PPU 色块与 SWF 色块，使用已有 Chrome 和项目隔离配置：
+
+```sh
+OMNIHUB_CHROME="$CHROME_EXECUTABLE" \
+  OMNIHUB_WEB_RUNTIME_BROWSER_CHECK="$PWD/web/tests/runtime.check.js" \
+  TMPDIR="$PWD/.test-tmp" \
+  go test ./internal/server -run '^TestOfflineWebRuntimesInChrome$' -count=1 -v
+```
+
+检查分别断言正确的运行器身份、实际像素/元数据、无外部网络、退出和资源授权撤销；结果及截图在 .test-tmp/web-runtime。此处证明 NES 与基础 SWF 主流程，其他核心、实体输入/音频、复杂游戏及峰值资源仍需实测。
