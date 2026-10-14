@@ -16,11 +16,12 @@ import (
 // Metadata contains optional labels and one embedded picture. Missing tags are
 // empty; malformed or over-budget metadata returns an error, never partial data.
 type Metadata struct {
-	Title    string `json:"title"`
-	Artist   string `json:"artist"`
-	Album    string `json:"album"`
-	HasCover bool   `json:"has_cover"`
-	Picture  []byte `json:"-"`
+	Title        string `json:"title"`
+	Artist       string `json:"artist"`
+	Album        string `json:"album"`
+	HasCover     bool   `json:"has_cover"`
+	Picture      []byte `json:"-"`
+	pictureFront bool
 }
 
 const metadataBudget = 8 << 20
@@ -52,7 +53,7 @@ func (r *tagInput) read(offset, size int64) ([]byte, error) {
 	return data, err
 }
 
-// ReadMetadata reads ID3v2/v1 or MP4 labels and a bounded embedded picture from
+// ReadMetadata reads ID3/MP4/FLAC/WAVE labels and a bounded embedded picture from
 // an already opened regular file. MP4 media payload is skipped by offset, so a
 // trailing moov does not require scanning the audio. Total tag reads cap at 8MiB.
 func ReadMetadata(ctx context.Context, file *os.File) (Metadata, error) {
@@ -76,6 +77,10 @@ func ReadMetadata(ctx context.Context, file *os.File) (Metadata, error) {
 		err = r.id3(prefix, &result)
 	} else if string(prefix[4:8]) == "ftyp" {
 		err = r.mp4(0, r.size, 0, "", &result)
+	} else if string(prefix[:4]) == "fLaC" {
+		err = r.flac(&result)
+	} else if string(prefix[:4]) == "RIFF" {
+		err = r.wav(&result)
 	}
 	if err != nil {
 		return Metadata{}, err
@@ -337,6 +342,10 @@ func id3Picture(data []byte, version byte) ([]byte, error) {
 	if !found {
 		return nil, io.ErrUnexpectedEOF
 	}
+	return embeddedPicture(data)
+}
+
+func embeddedPicture(data []byte) ([]byte, error) {
 	mime := http.DetectContentType(data)
 	if mime != "image/jpeg" && mime != "image/png" && mime != "image/gif" && mime != "image/webp" {
 		return nil, errors.New("unsupported embedded cover")
