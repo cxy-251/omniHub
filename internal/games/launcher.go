@@ -37,6 +37,15 @@ type LaunchedGame struct {
 	StartTime time.Time
 	done      chan struct{}
 	result    error
+	group     *platform.ProcessGroup
+}
+
+// Stop requests exit using the retained process identity, never a raw saved PID.
+func (g *LaunchedGame) Stop(force bool) error {
+	if g == nil || g.group == nil {
+		return errors.New("game has no managed process")
+	}
+	return g.group.Stop(force)
 }
 
 // Wait waits for process/output cleanup; cancelling the wait does not kill it.
@@ -272,14 +281,13 @@ func LaunchGame(ctx context.Context, opt LaunchOptions) (*LaunchedGame, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, errors.Join(err, logFile.Close())
 	}
-	if err := platform.Start(cmd, true); err != nil {
+	group, err := platform.StartGroup(cmd, true)
+	if err != nil {
 		return nil, errors.Join(err, logFile.Close())
 	}
-	game := &LaunchedGame{PID: cmd.Process.Pid, PGID: cmd.Process.Pid, LogPath: logFile.Name(), StartTime: time.Now(), done: make(chan struct{})}
+	game := &LaunchedGame{PID: group.PID(), PGID: group.PID(), LogPath: logFile.Name(), StartTime: time.Now(), done: make(chan struct{}), group: group}
 	go func() {
-		// Never kill a Unix process group after Wait reaps its leader: its numeric
-		// ID can have been reused. Windows Release acts on the retained Job handle.
-		game.result = errors.Join(cmd.Wait(), output.flush(), logFile.Close(), platform.Release(game.PID))
+		game.result = errors.Join(group.Wait(nil), output.flush(), logFile.Close())
 		close(game.done)
 	}()
 	return game, nil

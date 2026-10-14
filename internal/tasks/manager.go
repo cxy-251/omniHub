@@ -35,15 +35,15 @@ type LogEntry struct {
 
 // Task 管理单个脚本进程；可变状态通过内部锁与 JSON 快照读取。
 type Task struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Args      []string   `json:"args"`
-	Running   bool       `json:"running"`
-	StartedAt time.Time  `json:"started_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
-	ExitCode  int        `json:"exit_code"`
-	cmd       *exec.Cmd  `json:"-"`
-	pgid      int        `json:"-"`
+	ID        string                 `json:"id"`
+	Name      string                 `json:"name"`
+	Args      []string               `json:"args"`
+	Running   bool                   `json:"running"`
+	StartedAt time.Time              `json:"started_at"`
+	EndedAt   *time.Time             `json:"ended_at,omitempty"`
+	ExitCode  int                    `json:"exit_code"`
+	cmd       *exec.Cmd              `json:"-"`
+	group     *platform.ProcessGroup `json:"-"`
 	logsMu    sync.RWMutex
 	logs      []LogEntry
 	nextLogID int64
@@ -130,14 +130,17 @@ func (m *Manager) RunScript(id, scriptPath string, args []string) (*Task, error)
 		lastTime:  time.Now(),
 	}
 
-	if err := platform.Start(cmd, false); err != nil {
+	group, err := platform.StartGroup(cmd, false)
+	if err != nil {
 		_ = stdout.Close()
 		return nil, err
 	}
-	t.pgid = cmd.Process.Pid
+	t.group = group
 	m.tasks[id] = t
 
+	outputDone := make(chan struct{})
 	go func() {
+		defer close(outputDone)
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 4096), MaxLogLineBytes)
 		for scanner.Scan() {
@@ -148,15 +151,23 @@ func (m *Manager) RunScript(id, scriptPath string, args []string) (*Task, error)
 		if err := scanner.Err(); err != nil {
 			t.appendLog("ERROR: task output failed: " + err.Error())
 			// 输出管道失效时阻止子进程无限写入未消费的管道。
-			if killErr := platform.Stop(t.pgid, true); killErr != nil {
+			if killErr := t.group.Stop(true); killErr != nil {
 				t.appendLog("ERROR: stop task: " + killErr.Error())
 			}
 		}
-		if err := cmd.Wait(); err != nil {
+	}()
+	go func() {
+		if err := group.Wait(func() error {
+			select {
+			case <-outputDone:
+				return nil
+			case <-time.After(2 * time.Second):
+				closeErr := stdout.Close()
+				<-outputDone
+				return errors.Join(errors.New("task output did not close after group cleanup"), closeErr)
+			}
+		}); err != nil {
 			t.appendLog("ERROR: task exited: " + err.Error())
-		}
-		if err := platform.Release(t.pgid); err != nil {
-			t.appendLog("ERROR: release task: " + err.Error())
 		}
 		t.logsMu.Lock()
 		t.Running = false
@@ -270,7 +281,7 @@ func (m *Manager) StopTask(id string) error {
 		return fmt.Errorf("task %s not running", id)
 	}
 
-	if err := platform.Stop(t.pgid, false); err != nil {
+	if err := t.group.Stop(false); err != nil {
 		return fmt.Errorf("stop task: %w", err)
 	}
 	go func() {
@@ -281,7 +292,7 @@ func (m *Manager) StopTask(id string) error {
 			return
 		case <-timer.C:
 			if t.isRunning() {
-				if err := platform.Stop(t.pgid, true); err != nil {
+				if err := t.group.Stop(true); err != nil {
 					t.appendLog("ERROR: kill task: " + err.Error())
 				}
 			}
