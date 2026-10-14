@@ -1,11 +1,14 @@
 package games
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"omnihub/internal/storage"
+	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -13,7 +16,8 @@ import (
 
 // DB 封装游戏专区 games.db 的持久化操作（第 4.1 节）。
 type DB struct {
-	db *sql.DB
+	db        *sql.DB
+	hasRelDir bool
 }
 
 // OpenDB 打开或创建 standalone_games/games.db。
@@ -36,12 +40,28 @@ func openDB(gamesDir string, readOnly bool) (*DB, error) {
 	gDB := &DB{db: sqliteDB}
 	if !readOnly {
 		if err := gDB.migrate(); err != nil {
-			_ = sqliteDB.Close()
-			return nil, fmt.Errorf("games.db migration failed: %w", err)
+			return nil, errors.Join(fmt.Errorf("games.db migration failed: %w", err), sqliteDB.Close())
 		}
 
 	}
-
+	columns, err := sqliteDB.Query("PRAGMA table_info(games)")
+	if err != nil {
+		return nil, errors.Join(err, sqliteDB.Close())
+	}
+	for columns.Next() {
+		var cid, notnull, pk int
+		var name, kind string
+		var defaultValue any
+		if err := columns.Scan(&cid, &name, &kind, &notnull, &defaultValue, &pk); err != nil {
+			return nil, errors.Join(err, columns.Close(), sqliteDB.Close())
+		}
+		if name == "rel_dir" {
+			gDB.hasRelDir = true
+		}
+	}
+	if err := errors.Join(columns.Err(), columns.Close()); err != nil {
+		return nil, errors.Join(err, sqliteDB.Close())
+	}
 	return gDB, nil
 }
 
@@ -62,6 +82,7 @@ func (d *DB) migrate() error {
 		args TEXT NOT NULL DEFAULT '',
 		env TEXT NOT NULL DEFAULT '',
 		proton_appid TEXT NOT NULL DEFAULT '',
+		rel_dir TEXT NOT NULL DEFAULT '',
 		peak_rss_mb INTEGER NOT NULL DEFAULT 0,
 		peak_io_mbps INTEGER NOT NULL DEFAULT 0,
 		play_time_sec INTEGER NOT NULL DEFAULT 0
@@ -76,21 +97,95 @@ func (d *DB) migrate() error {
 		FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
 	);
 	`
-	_, err := d.db.Exec(schema)
+	if _, err := d.db.Exec(schema); err != nil {
+		return err
+	}
+	rows, err := d.db.Query("SELECT name FROM pragma_table_info('games') WHERE name='rel_dir'")
+	if err != nil {
+		return err
+	}
+	found := rows.Next()
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	if !found {
+		_, err = d.db.Exec("ALTER TABLE games ADD COLUMN rel_dir TEXT NOT NULL DEFAULT ''")
+	}
 	return err
 }
 
 // UpsertGame 插入或更新游戏条目。
 func (d *DB) UpsertGame(g *Game) error {
-	if g.ID == "" || g.Name == "" {
+	return d.UpsertGames([]*Game{g})
+}
+
+// UpsertGames validates and publishes a scan atomically, preserving unrelated
+// records and existing play/hardware statistics; it does not delete user assets.
+func (d *DB) UpsertGames(list []*Game) error {
+	if len(list) > 20000 {
+		return errors.New("game index exceeds capacity")
+	}
+	for _, g := range list {
+		if err := ValidateIndexGame(g); err != nil {
+			return err
+		}
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	statement, err := tx.Prepare(gameUpsertSQL)
+	if err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+	for _, g := range list {
+		if err := upsertGame(statement, g); err != nil {
+			return errors.Join(err, statement.Close(), tx.Rollback())
+		}
+	}
+	if err := statement.Close(); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+	return tx.Commit()
+}
+
+// ValidateIndexGame bounds persisted metadata and checks category, target and
+// relative paths before a scanner opens or modifies the index.
+func ValidateIndexGame(g *Game) error {
+	if g == nil || g.ID == "" || g.Name == "" || len(g.ID) > 512 || len(g.Name) > 4096 {
 		return errors.New("game id and name cannot be empty")
 	}
+	if !validCategory(g.Category) || (g.Target != "gui_only" && g.Target != "web_only") {
+		return errors.New("invalid game category or target")
+	}
+	if len(g.RelDir) > 4096 || len(g.Exe) > 4096 || len(g.Icon) > 4096 || len(g.ProtonAppID) > 128 || len(g.Args)+len(g.Env) > 32<<10 {
+		return errors.New("game index fields exceed capacity")
+	}
+	if g.RelDir != "" && (!filepath.IsLocal(filepath.FromSlash(g.RelDir)) || strings.Contains(g.RelDir, "\\") || path.Clean(g.RelDir) != g.RelDir || strings.Count(g.RelDir, "/") != 1 || !strings.HasPrefix(g.RelDir, g.Category+"_games/")) {
+		return errors.New("invalid indexed game directory")
+	}
+	if g.RelDir != "" {
+		id, _ := FolderIdentity(path.Base(g.RelDir))
+		if id != g.ID {
+			return errors.New("indexed directory prefix differs from game ID")
+		}
+	}
+	for _, value := range []string{g.ID, g.Name, g.RelDir, g.Exe, g.Icon, g.Args, g.Env, g.ProtonAppID} {
+		if strings.ContainsRune(value, 0) {
+			return errors.New("game metadata contains NUL")
+		}
+	}
+	if g.Exe != "" && (!filepath.IsLocal(filepath.FromSlash(g.Exe)) || strings.Contains(g.Exe, "\\")) {
+		return errors.New("game executable escapes its folder")
+	}
+	return nil
+}
 
-	_, err := d.db.Exec(`
+const gameUpsertSQL = `
 		INSERT INTO games (
 			id, name, category, target, icon, exe, args, env, proton_appid,
-			peak_rss_mb, peak_io_mbps, play_time_sec
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			peak_rss_mb, peak_io_mbps, play_time_sec, rel_dir
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
 			category = excluded.category,
@@ -99,9 +194,18 @@ func (d *DB) UpsertGame(g *Game) error {
 			exe = excluded.exe,
 			args = excluded.args,
 			env = excluded.env,
-			proton_appid = excluded.proton_appid`,
+			proton_appid = excluded.proton_appid,
+			rel_dir = CASE WHEN excluded.rel_dir='' THEN games.rel_dir ELSE excluded.rel_dir END
+		WHERE games.name IS NOT excluded.name OR games.category IS NOT excluded.category
+		   OR games.target IS NOT excluded.target OR games.icon IS NOT excluded.icon
+		   OR games.exe IS NOT excluded.exe OR games.args IS NOT excluded.args
+		   OR games.env IS NOT excluded.env OR games.proton_appid IS NOT excluded.proton_appid
+		   OR (excluded.rel_dir!='' AND games.rel_dir IS NOT excluded.rel_dir)`
+
+func upsertGame(statement *sql.Stmt, g *Game) error {
+	_, err := statement.Exec(
 		g.ID, g.Name, g.Category, g.Target, g.Icon, g.Exe, g.Args, g.Env, g.ProtonAppID,
-		g.PeakRSSMB, g.PeakIOMBps, g.PlayTimeSec,
+		g.PeakRSSMB, g.PeakIOMBps, g.PlayTimeSec, g.RelDir,
 	)
 	return err
 }
@@ -134,8 +238,12 @@ func (d *DB) RecordUserPlayTime(userID int64, gameID string, durationSec int64) 
 }
 
 // ListGames 按照端目标（gui_only / web_only）过滤查询游戏清单（第 4.2 节）。
-func (d *DB) ListGames(target string) ([]*Game, error) {
-	query := "SELECT id, name, category, target, icon, exe, args, env, proton_appid, peak_rss_mb, peak_io_mbps, play_time_sec FROM games"
+func (d *DB) ListGames(target string) (result []*Game, resultErr error) {
+	relDir := "''"
+	if d.hasRelDir {
+		relDir = "rel_dir"
+	}
+	query := "SELECT id, name, category, target, icon, exe, args, env, proton_appid, peak_rss_mb, peak_io_mbps, play_time_sec, " + relDir + " FROM games"
 	var rows *sql.Rows
 	var err error
 
@@ -150,19 +258,37 @@ func (d *DB) ListGames(target string) ([]*Game, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 
 	var games []*Game
 	for rows.Next() {
 		var g Game
 		if err := rows.Scan(
 			&g.ID, &g.Name, &g.Category, &g.Target, &g.Icon, &g.Exe, &g.Args,
-			&g.Env, &g.ProtonAppID, &g.PeakRSSMB, &g.PeakIOMBps, &g.PlayTimeSec,
+			&g.Env, &g.ProtonAppID, &g.PeakRSSMB, &g.PeakIOMBps, &g.PlayTimeSec, &g.RelDir,
 		); err != nil {
 			return nil, err
 		}
 		games = append(games, &g)
 	}
 
-	return games, nil
+	return games, rows.Err()
+}
+
+// GetGame reads one index record without loading the full catalog. Legacy
+// read-only indexes return an empty RelDir and never migrate on a query.
+func (d *DB) GetGame(ctx context.Context, id string) (*Game, error) {
+	if id == "" || len(id) > 512 {
+		return nil, errors.New("invalid game identity")
+	}
+	relDir := "''"
+	if d.hasRelDir {
+		relDir = "rel_dir"
+	}
+	var g Game
+	err := d.db.QueryRowContext(ctx, "SELECT id,name,category,target,icon,exe,args,env,proton_appid,peak_rss_mb,peak_io_mbps,play_time_sec,"+relDir+" FROM games WHERE id=?", id).Scan(&g.ID, &g.Name, &g.Category, &g.Target, &g.Icon, &g.Exe, &g.Args, &g.Env, &g.ProtonAppID, &g.PeakRSSMB, &g.PeakIOMBps, &g.PlayTimeSec, &g.RelDir)
+	if err != nil {
+		return nil, err
+	}
+	return &g, nil
 }
