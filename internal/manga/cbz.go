@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -188,32 +187,10 @@ func (r *CBZReader) ReadEntryContext(ctx context.Context, entryName string) ([]b
 	}
 
 	limit := int64(32 << 20)
-	if entryName == "metadata.json" {
+	if entryName == "metadata.json" || entryName == "ComicInfo.xml" {
 		limit = 1 << 20
 	}
 	return archiveutil.ReadEntry(ctx, f, limit)
-}
-
-// ParseMetadata 提取解析 metadata.json 元数据。
-func (r *CBZReader) ParseMetadata() (*PackageMetadata, error) {
-	data, err := r.ReadEntry("metadata.json")
-	if err != nil {
-		return nil, err
-	}
-
-	var meta PackageMetadata
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, err
-	}
-	if len(meta.ID) > 256 || len(meta.Title) > 4096 || len(meta.Author) > 4096 || len(meta.Description) > 64<<10 || len(meta.Tags) > 512 || meta.LocalChapters < 0 || meta.LocalChapters > 20000 || meta.OnlineChapters < 0 || meta.OnlineChapters > 20000 {
-		return nil, errors.New("manga metadata exceeds field capacity")
-	}
-	for _, tag := range meta.Tags {
-		if len(tag) > 256 {
-			return nil, errors.New("manga tag exceeds field capacity")
-		}
-	}
-	return &meta, nil
 }
 
 // GetCoverEntry 按照多级回退规范获取封面文件条目名（第 7.2 节）。
@@ -247,7 +224,15 @@ func (r *CBZReader) ReadCoverBytes(customCover string) ([]byte, error) {
 }
 
 // ScanMangaFromCBZ 扫描单个 CBZ 构建 Manga 元数据实体。
-func ScanMangaFromCBZ(cbzPath string) (_ *Manga, result error) {
+func ScanMangaFromCBZ(cbzPath string) (*Manga, error) {
+	return ScanMangaFromCBZContext(context.Background(), cbzPath)
+}
+
+// ScanMangaFromCBZContext reads one archive with cancellable metadata decoding.
+func ScanMangaFromCBZContext(ctx context.Context, cbzPath string) (_ *Manga, result error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	r, err := OpenCBZ(cbzPath)
 	if err != nil {
 		return nil, err
@@ -256,14 +241,15 @@ func ScanMangaFromCBZ(cbzPath string) (_ *Manga, result error) {
 
 	stem := strings.TrimSuffix(filepath.Base(cbzPath), filepath.Ext(cbzPath))
 	manga := &Manga{
-		ID:         stem,
-		Title:      stem,
-		RelPath:    filepath.Base(cbzPath),
-		TotalPages: len(r.pages),
-		UpdatedAt:  time.Now().UTC(),
+		ID:           stem,
+		Title:        stem,
+		RelPath:      filepath.Base(cbzPath),
+		TotalPages:   len(r.pages),
+		ChapterCount: r.chapterCount(),
+		UpdatedAt:    time.Now().UTC(),
 	}
 
-	meta, err := r.ParseMetadata()
+	meta, err := r.ParseMetadataContext(ctx)
 	if err != nil && !errors.Is(err, ErrEntryNotFound) {
 		return nil, fmt.Errorf("invalid manga metadata: %w", err)
 	}

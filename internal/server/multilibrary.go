@@ -39,10 +39,11 @@ func (r *Router) moduleDirectory(root, category string, names ...string) (string
 
 type mangaItem struct {
 	*manga.Manga
-	LibraryID   string `json:"library_id"`
-	LibraryName string `json:"library_name"`
-	LogicalPath string `json:"logical_path"`
-	ReadOnly    bool   `json:"read_only"`
+	LibraryID     string `json:"library_id"`
+	LibraryName   string `json:"library_name"`
+	LogicalPath   string `json:"logical_path"`
+	ReadOnly      bool   `json:"read_only"`
+	MetadataError string `json:"metadata_error,omitempty"`
 }
 
 func (r *Router) queryLibraries(w http.ResponseWriter, req *http.Request) ([]*library.Library, bool) {
@@ -87,6 +88,37 @@ func (r *Router) listMangaLibraries(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		if _, err := os.Stat(filepath.Join(dir, "manga.db")); errors.Is(err, os.ErrNotExist) {
+			if _, err = os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				http.Error(w, "manga directory unavailable", 503)
+				return
+			}
+			paths, total, err := r.mangaCatalog.Page(req.Context(), dir, limit+1-len(items), offset)
+			if err != nil {
+				http.Error(w, "manga catalog unavailable or exceeds capacity", 503)
+				return
+			}
+			if offset >= total {
+				offset -= total
+				continue
+			}
+			offset = 0
+			select {
+			case r.mediaReads <- struct{}{}:
+			case <-req.Context().Done():
+				return
+			}
+			rows, readErr := r.discoverMangaPage(req, lib, paths)
+			<-r.mediaReads
+			if readErr != nil {
+				http.Error(w, "manga metadata unavailable: "+readErr.Error(), 503)
+				return
+			}
+			items = append(items, rows...)
+			if len(items) > limit {
+				break
+			}
 			continue
 		} else if err != nil {
 			http.Error(w, "manga index unavailable", 503)
@@ -131,4 +163,29 @@ func (r *Router) listMangaLibraries(w http.ResponseWriter, req *http.Request) {
 	}
 	w.Header().Set("X-Has-More", strconv.FormatBool(more))
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (r *Router) discoverMangaPage(req *http.Request, lib *library.Library, paths []string) ([]mangaItem, error) {
+	rows := make([]mangaItem, 0, len(paths))
+	for _, relative := range paths {
+		if !filepath.IsLocal(filepath.FromSlash(relative)) || strings.ContainsAny(relative, "\\\x00:") {
+			return nil, errors.New("invalid discovered path")
+		}
+		logical := lib.ID + ":media_library/manga/" + relative
+		physical, err := r.libMgr.ResolveCategoryPath(logical, "media_library/manga")
+		if err != nil {
+			return nil, err
+		}
+		book, err := r.mangaDiscovery.Metadata(req.Context(), physical, relative)
+		if err != nil {
+			if req.Context().Err() != nil {
+				return nil, req.Context().Err()
+			}
+			book = &manga.Manga{ID: manga.PathIdentity(relative), Title: strings.TrimSuffix(filepath.Base(relative), filepath.Ext(relative)), RelPath: relative}
+			rows = append(rows, mangaItem{Manga: book, LibraryID: lib.ID, LibraryName: lib.Name, LogicalPath: logical, ReadOnly: lib.ReadOnly, MetadataError: "书籍元数据不可用，可尝试打开或检查源文件"})
+			continue
+		}
+		rows = append(rows, mangaItem{Manga: book, LibraryID: lib.ID, LibraryName: lib.Name, LogicalPath: logical, ReadOnly: lib.ReadOnly})
+	}
+	return rows, nil
 }

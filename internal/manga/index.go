@@ -34,7 +34,7 @@ func (d *DB) UpsertIndexed(ctx context.Context, book *Manga) error {
 	if len(ids) > 1 {
 		return errors.New("duplicate manga index paths require repair")
 	}
-	id := fmt.Sprintf("%x", sha256.Sum256([]byte(book.RelPath)))
+	id := PathIdentity(book.RelPath)
 	if len(ids) == 1 {
 		id = ids[0]
 	}
@@ -49,3 +49,6 @@ func (d *DB) UpsertIndexed(ctx context.Context, book *Manga) error {
 	book.ID = id
 	return d.UpsertMangaContext(ctx, book)
 }
+
+// PathIdentity returns a root-independent ID for a validated relative book path.
+func PathIdentity(relative string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(relative))) }

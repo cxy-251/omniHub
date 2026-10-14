@@ -36,27 +36,29 @@ import (
 
 // Router 负责 HTTP 请求的统一路由分发与鉴权控制。
 type Router struct {
-	mux           *http.ServeMux
-	libMgr        *library.Manager
-	authDB        *auth.DB
-	authMid       *auth.Middleware
-	clipboard     *tools.ClipboardManager
-	taskMgr       *tasks.Manager
-	taskRegistry  *tasks.Registry
-	gameRuns      *games.Manager
-	gameDiscovery *scanner.GameDiscovery
-	webGames      *webGameGrants
-	webGameReads  chan struct{}
-	webGameOpens  chan struct{}
-	progressDB    *audio.ProgressDB
-	userState     *userstate.DB
-	megaClient    *mega.Client
-	videoCatalog  *shortvideo.VideoCatalog
-	textCatalog   *catalog.Catalog
-	audioCatalog  *catalog.Catalog
-	audioMetadata *audio.MetadataCache
-	mangaReaders  *manga.ReaderCache
-	mediaReads    chan struct{}
+	mux            *http.ServeMux
+	libMgr         *library.Manager
+	authDB         *auth.DB
+	authMid        *auth.Middleware
+	clipboard      *tools.ClipboardManager
+	taskMgr        *tasks.Manager
+	taskRegistry   *tasks.Registry
+	gameRuns       *games.Manager
+	gameDiscovery  *scanner.GameDiscovery
+	webGames       *webGameGrants
+	webGameReads   chan struct{}
+	webGameOpens   chan struct{}
+	progressDB     *audio.ProgressDB
+	userState      *userstate.DB
+	megaClient     *mega.Client
+	videoCatalog   *shortvideo.VideoCatalog
+	textCatalog    *catalog.Catalog
+	audioCatalog   *catalog.Catalog
+	audioMetadata  *audio.MetadataCache
+	mangaReaders   *manga.ReaderCache
+	mangaDiscovery *manga.DiscoveryCache
+	mangaCatalog   *catalog.Catalog
+	mediaReads     chan struct{}
 
 	// 专区数据库连接复用缓存（第 12.2 节避免高频请求重复 Open 与 Migrate）
 	dbMu      sync.RWMutex
@@ -91,30 +93,32 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 	}
 
 	r := &Router{
-		mux:           http.NewServeMux(),
-		metaDB:        make(map[string]*gallery.MetaDB),
-		svStorage:     make(map[string]*shortvideo.Storage),
-		mangaDB:       make(map[string]*manga.DB),
-		libMgr:        libMgr,
-		authDB:        authDB,
-		authMid:       auth.NewMiddleware(authDB, localToken),
-		clipboard:     tools.NewClipboardManager(50),
-		taskMgr:       tasks.NewManager(),
-		taskRegistry:  registry,
-		gameRuns:      games.NewManagerWithRecorder(gamePlayRecorder(readingDB)),
-		gameDiscovery: scanner.NewGameDiscovery(),
-		webGames:      newWebGameGrants(),
-		webGameReads:  make(chan struct{}, 16),
-		webGameOpens:  make(chan struct{}, 2),
-		progressDB:    progDB,
-		userState:     readingDB,
-		megaClient:    mega.NewClient("", 5*time.Minute),
-		videoCatalog:  shortvideo.NewVideoCatalog(),
-		textCatalog:   catalog.New(".txt", ".epub", ".md", ".rst"),
-		audioCatalog:  catalog.New(audio.FileExtensions()...),
-		audioMetadata: audio.NewMetadataCache(),
-		mangaReaders:  manga.NewReaderCache(),
-		mediaReads:    make(chan struct{}, 2),
+		mux:            http.NewServeMux(),
+		metaDB:         make(map[string]*gallery.MetaDB),
+		svStorage:      make(map[string]*shortvideo.Storage),
+		mangaDB:        make(map[string]*manga.DB),
+		libMgr:         libMgr,
+		authDB:         authDB,
+		authMid:        auth.NewMiddleware(authDB, localToken),
+		clipboard:      tools.NewClipboardManager(50),
+		taskMgr:        tasks.NewManager(),
+		taskRegistry:   registry,
+		gameRuns:       games.NewManagerWithRecorder(gamePlayRecorder(readingDB)),
+		gameDiscovery:  scanner.NewGameDiscovery(),
+		webGames:       newWebGameGrants(),
+		webGameReads:   make(chan struct{}, 16),
+		webGameOpens:   make(chan struct{}, 2),
+		progressDB:     progDB,
+		userState:      readingDB,
+		megaClient:     mega.NewClient("", 5*time.Minute),
+		videoCatalog:   shortvideo.NewVideoCatalog(),
+		textCatalog:    catalog.New(".txt", ".epub", ".md", ".rst"),
+		audioCatalog:   catalog.New(audio.FileExtensions()...),
+		audioMetadata:  audio.NewMetadataCache(),
+		mangaReaders:   manga.NewReaderCache(),
+		mangaDiscovery: manga.NewDiscoveryCache(),
+		mangaCatalog:   catalog.New(".cbz"),
+		mediaReads:     make(chan struct{}, 2),
 	}
 	r.registerRoutes()
 	return r, nil
@@ -228,6 +232,7 @@ func (r *Router) Close() error {
 	}
 	r.closed = true
 	r.audioMetadata.Close()
+	r.mangaDiscovery.Close()
 	r.webGames.close()
 	r.gameDiscovery.Close()
 	var errs []error

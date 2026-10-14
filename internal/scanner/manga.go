@@ -47,7 +47,7 @@ func IndexMangaFile(ctx context.Context, root, file string) (result error) {
 	if err != nil || !filepath.IsLocal(relative) || strings.ContainsAny(relative, "\\\x00:") {
 		return errors.New("archive is outside manga category")
 	}
-	book, err := manga.ScanMangaFromCBZ(file)
+	book, err := manga.ScanMangaFromCBZContext(ctx, file)
 	if err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func ScanMangaContext(ctx context.Context, root, scope string) (count int, resul
 			return count, err
 		}
 		file := filepath.Join(scope, filepath.FromSlash(path))
-		book, err := manga.ScanMangaFromCBZ(file)
+		book, err := manga.ScanMangaFromCBZContext(ctx, file)
 		if err != nil {
 			return count, fmt.Errorf("read %q: %w", path, err)
 		}

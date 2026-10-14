@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, request, type Status } from './api';
 import { MangaWindow } from './mangaWindow';
 
-type Book = { title: string; logical_path: string; library_name: string; read_only: boolean; total_pages: number };
+type Book = { metadata_error?: string; title: string; logical_path: string; library_name: string; read_only: boolean; total_pages: number };
 type Page = { index: number; chapter_index: number; entry: string };
 type PageList = { pages: Page[]; total: number; file_version: string };
 type Position = { page_index: number; chapter_index: number; scroll_offset_ratio: number; position_mode?: string };
@@ -291,7 +291,7 @@ export default function MangaLibrary({ active }: { active: boolean }) {
     {error ? <p role="alert" className="text-danger">{error}</p> : null}
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">{books.map(book => <button key={book.logical_path} className="overflow-hidden rounded-lg border border-line bg-surface text-left" onClick={() => setSelected(book)}>
       <img className="aspect-[3/4] w-full object-cover" loading="lazy" decoding="async" src={active ? `/api/media/manga/cover?path=${encodeURIComponent(book.logical_path)}&revision=${revision}` : undefined} alt={book.title} />
-      <span className="block break-all p-2 text-sm">{book.title}<span className="block text-xs text-muted">{book.library_name} · {book.total_pages} 页</span></span>
+      <span className="block break-all p-2 text-sm">{book.title}<span className="block text-xs text-muted">{book.library_name} · {book.metadata_error ? '页数未知' : `${book.total_pages} 页`}</span>{book.metadata_error ? <span className="block text-xs text-danger">{book.metadata_error}</span> : null}</span>
     </button>)}</div><div className="flex gap-3"><button className={button} disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 24))}>上一页</button><button className={button} disabled={!more} onClick={() => setOffset(value => value + 24)}>下一页</button></div>
   </section>;
 }
