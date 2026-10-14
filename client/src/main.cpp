@@ -11,6 +11,7 @@
 #include "games/game_launcher.h"
 #include "backend_api.h"
 #include "native_lifecycle.h"
+#include "player/media_queue.h"
 
 int main(int argc, char *argv[])
 {
@@ -26,6 +27,7 @@ int main(int argc, char *argv[])
     // 注册 QML 原生类型
     qmlRegisterType<MpvItem>("omniHub.Media", 1, 0, "MpvItem");
     qmlRegisterType<GameLauncher>("omniHub.Games", 1, 0, "GameLauncher");
+    qmlRegisterType<MediaQueue>("omniHub.Media", 1, 0, "MediaQueue");
 
     int result = 0;
     {

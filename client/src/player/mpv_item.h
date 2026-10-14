@@ -77,6 +77,8 @@ public:
 
     // Resumes playback, loading the current source again after a stop.
     Q_INVOKABLE void play();
+    // Reload the current source from zero, including repeated playlist entries.
+    Q_INVOKABLE void restart();
     // Requests pause without destroying the decoder or current position.
     Q_INVOKABLE void pause();
     // Stops decoding; the source address remains available for a later play.
@@ -96,6 +98,8 @@ signals:
     void tracksChanged();
     void subtitleDelayChanged();
     void videoBrightnessChanged();
+    // One end notification per EOF transition; explicit stop/errors do not advance.
+    void playbackEnded();
 
 private:
     void initMpv();
@@ -129,6 +133,7 @@ private:
     double m_videoBrightness = 0;
     quint64 m_trackRevision = 0;
     int m_trackCount = 0;
+    bool m_eof = false;
 
     friend class MpvRenderer;
     friend class MpvCore;

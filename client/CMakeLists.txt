@@ -48,6 +48,9 @@ set(SOURCES
     src/native_lifecycle.h
     src/player/mpv_item.cpp
     src/player/mpv_item.h
+    src/player/media_queue.cpp
+    src/player/media_queue.h
+    src/player/media_address.h
     src/games/game_launcher.cpp
     src/games/game_launcher.h
 )
@@ -85,11 +88,18 @@ option(OMNIHUB_BUILD_PLAYER_CHECK "Build the isolated OpenGL player integration 
 option(OMNIHUB_BUILD_YIELD_CHECK "Build the native GUI process handoff check" OFF)
 if(OMNIHUB_BUILD_YIELD_CHECK)
     qt_add_executable(omnihub_yield_check tests/yield_check.cpp
-        src/native_lifecycle.cpp src/native_lifecycle.h src/backend_api.cpp src/backend_api.h)
+        src/native_lifecycle.cpp src/native_lifecycle.h src/backend_api.cpp src/backend_api.h
+        src/player/media_queue.cpp src/player/media_queue.h)
     target_include_directories(omnihub_yield_check PRIVATE src)
     target_link_libraries(omnihub_yield_check PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network)
 endif()
 if(OMNIHUB_BUILD_PLAYER_CHECK)
+    qt_add_executable(omnihub_queue_check tests/queue_check.cpp qml.qrc
+        src/player/mpv_item.cpp src/player/mpv_item.h
+        src/player/media_queue.cpp src/player/media_queue.h)
+    target_include_directories(omnihub_queue_check PRIVATE src/player)
+    target_link_libraries(omnihub_queue_check PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::OpenGL ${MPV_TARGET})
     qt_add_executable(omnihub_player_check
         tests/player_check.cpp src/player/mpv_item.cpp src/player/mpv_item.h
     )

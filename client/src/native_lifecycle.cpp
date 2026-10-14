@@ -1,5 +1,6 @@
 #include "native_lifecycle.h"
 #include "backend_api.h"
+#include "player/media_queue.h"
 #include <QCoreApplication>
 #include <QFile>
 #include <QSaveFile>
@@ -22,6 +23,22 @@ bool validSession(const QString &id) {
     for (const auto character : id) if (!character.isLetterOrNumber()) return false;
     return true;
 }
+constexpr int snapshotLimit = (2 << 20) + (32 << 10);
+bool validPlaylist(const QVariantMap &state) {
+    if (!state.contains("entries")) return !state.contains("index");
+    const auto raw = state.value("entries");
+    if (raw.metaType().id() != QMetaType::QVariantList && raw.metaType().id() != QMetaType::QStringList) return false;
+    const auto values = raw.toList();
+    if (values.size() > 256) return false;
+    QStringList entries;
+    for (const auto &value : values) { if (value.metaType().id() != QMetaType::QString) return false; entries.append(value.toString()); }
+    const auto index = state.value("index");
+    if (index.metaType().id() != QMetaType::Int && index.metaType().id() != QMetaType::LongLong && index.metaType().id() != QMetaType::Double) return false;
+    const double position = index.toDouble();
+    if (!std::isfinite(position) || std::floor(position) != position || position < -1 || position > 255) return false;
+    MediaQueue queue;
+    return queue.replace(entries, static_cast<int>(position)) && (entries.isEmpty() || queue.currentSource() == state.value("source").toString());
+}
 }
 NativeLifecycle::NativeLifecycle(bool restore, QObject *parent) : QObject(parent) {
     if (!restore) return;
@@ -29,16 +46,16 @@ NativeLifecycle::NativeLifecycle(bool restore, QObject *parent) : QObject(parent
     if (QCoreApplication::arguments().contains("--statistics-failed")) m_error = "游戏已退出，但游玩时长保存失败，请检查服务与用户状态存储";
     QFile file(statePath());
     if (!file.exists()) return;
-    if (file.size() > 16384 || !file.open(QIODevice::ReadOnly)) { m_error = "无法读取原生界面恢复状态"; return; }
+    if (file.size() > snapshotLimit || !file.open(QIODevice::ReadOnly)) { m_error = "无法读取原生界面恢复状态"; return; }
     QJsonParseError parse;
-    const auto bytes = file.read(16385);
-    if (bytes.size() > 16384 || file.error() != QFile::NoError) { m_error = "原生界面恢复状态超限或读取失败"; return; }
+    const auto bytes = file.read(snapshotLimit + 1);
+    if (bytes.size() > snapshotLimit || file.error() != QFile::NoError) { m_error = "原生界面恢复状态超限或读取失败"; return; }
     const auto document = QJsonDocument::fromJson(bytes, &parse);
     if (parse.error != QJsonParseError::NoError || !document.isObject()) { m_error = "原生界面恢复状态无效"; return; }
     const auto state = document.object();
     const double position = state.value("position").toDouble(-1);
     const double page = state.value("page").toDouble(-1);
-    if (!state.value("source").isString() || state.value("source").toString().size() > 4096 || !state.value("paused").isBool() || !state.value("position").isDouble() || !std::isfinite(position) || position < 0 || position > 31536000 || !state.value("page").isDouble() || !std::isfinite(page) || page < 0 || page > 2 || std::floor(page) != page) { m_error = "原生界面恢复字段无效"; return; }
+    if (!state.value("source").isString() || state.value("source").toString().size() > 8192 || !state.value("paused").isBool() || !state.value("position").isDouble() || !std::isfinite(position) || position < 0 || position > 31536000 || !state.value("page").isDouble() || !std::isfinite(page) || page < 0 || page > 2 || std::floor(page) != page || !validPlaylist(state.toVariantMap())) { m_error = "原生界面恢复字段无效"; return; }
     m_restored = document.object().toVariantMap();
 }
 
@@ -47,7 +64,7 @@ bool NativeLifecycle::yieldToGame(const QString &sessionId, const QVariantMap &s
     const QString source = state.value("source").toString();
     const double position = state.value("position").toDouble();
     const int page = state.value("page").toInt();
-    if (!validSession(sessionId) || source.size() > 4096 || !std::isfinite(position) || position < 0 || position > 31536000 || page < 0 || page > 2) return fail("游戏或恢复状态无效");
+    if (!validSession(sessionId) || source.size() > 8192 || !std::isfinite(position) || position < 0 || position > 31536000 || page < 0 || page > 2 || !validPlaylist(state)) return fail("游戏或恢复状态无效");
     const QString directory = BackendApi::configurationDirectory();
     if (!QDir().mkpath(directory)) return fail("无法准备界面状态目录");
     auto lock = std::make_unique<QLockFile>(QDir(directory).filePath("native-yield.lock"));
@@ -55,7 +72,10 @@ bool NativeLifecycle::yieldToGame(const QString &sessionId, const QVariantMap &s
     if (!lock->tryLock()) return fail("另一个客户端正在让出资源");
     QSaveFile output(statePath());
     if (!output.open(QIODevice::WriteOnly) || !output.setPermissions(QFile::ReadOwner | QFile::WriteOwner)) return fail("无法保存界面恢复状态");
-    const QByteArray data = QJsonDocument(QJsonObject{{"source", source}, {"position", position}, {"paused", state.value("paused").toBool()}, {"page", page}}).toJson(QJsonDocument::Compact);
+    QJsonObject saved{{"source", source}, {"position", position}, {"paused", state.value("paused").toBool()}, {"page", page}};
+    if (state.contains("entries")) { saved.insert("entries", QJsonValue::fromVariant(state.value("entries"))); saved.insert("index", state.value("index").toInt()); }
+    const QByteArray data = QJsonDocument(saved).toJson(QJsonDocument::Compact);
+    if (data.size() > snapshotLimit) return fail("界面恢复状态超限");
     if (output.write(data) != data.size() || !output.commit()) return fail("界面状态保存失败");
     qint64 observerPid = 0;
     QProcess observer;

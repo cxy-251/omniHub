@@ -9,15 +9,33 @@ Item {
     property alias source: mpv.source
     property alias position: mpv.position
     property bool pauseRequested: mpv.pauseRequested
+    property alias playlistEntries: queue.entries
+    property alias playlistIndex: queue.currentIndex
+    property string playlistError: ""
     property var audioTracks: mpv.tracks.filter(function(track) { return track.type === "audio" })
     property var subtitleTracks: [{id: -1, label: "关闭字幕", selected: false}].concat(mpv.tracks.filter(function(track) { return track.type === "sub" }))
 
-    function restorePlayback(source, position, paused) {
-        mpv.source = source
+    MediaQueue { id: queue }
+    function restorePlayback(source, position, paused, entries, index) {
+        if (entries && entries.length > 0 && queue.replace(entries, index)) mpv.source = queue.currentSource
+        else { if (source.length > 0) queue.replace([source]); mpv.source = source }
         if (position > 0) mpv.position = position
         if (paused) mpv.pause()
     }
-    function openMedia(url) { mpv.source = url.toString() }
+    function loadCurrent() {
+        if (queue.currentSource === mpv.source) mpv.restart()
+        else mpv.source = queue.currentSource
+    }
+    function openFiles(urls) {
+        if (!urls || urls.length === 0 || urls.length > 256) { playlistError = "请选择 1–256 个媒体文件"; return false }
+        if (!queue.replace(urls.map(function(url) { return url.toString() }))) return false
+        playlistError = ""
+        loadCurrent()
+        return true
+    }
+    function openMedia(url) { return openFiles([url]) }
+    function nextMedia() { if (queue.next()) loadCurrent() }
+    function previousMedia() { if (queue.previous()) loadCurrent() }
     function selectedTrackIndex(model) {
         for (var index = 0; index < model.length; index++) if (model[index].selected) return index
         return model.length > 0 ? 0 : -1
@@ -40,9 +58,9 @@ Item {
     FileDialog {
         id: mediaDialog
         title: "打开音视频"
-        fileMode: FileDialog.OpenFile
+        fileMode: FileDialog.OpenFiles
         nameFilters: ["音视频 (*.mp4 *.mkv *.webm *.avi *.mov *.m4v *.mp3 *.flac *.ogg *.m4a *.wav *.opus)", "所有文件 (*)"]
-        onAccepted: playerView.openMedia(selectedFile)
+        onAccepted: playerView.openFiles(selectedFiles)
     }
     FileDialog {
         id: subtitleDialog
@@ -51,13 +69,16 @@ Item {
         nameFilters: ["字幕 (*.srt *.ass *.ssa *.vtt)"]
         onAccepted: mpv.addSubtitle(selectedFile.toString())
     }
-    MpvItem { id: mpv; anchors.fill: parent; anchors.bottomMargin: controls.height }
+    MpvItem {
+        id: mpv; anchors.fill: parent; anchors.bottomMargin: controls.height
+        onPlaybackEnded: { if (queue.next()) playerView.loadCurrent(); else mpv.pause() }
+    }
     Label {
         anchors.centerIn: parent
         width: parent.width * 0.8
-        text: mpv.error || (mpv.source.length === 0 ? "点击“打开文件”选择音视频" : "")
+        text: playlistError || queue.error || mpv.error || (mpv.source.length === 0 ? "点击“打开文件”选择音视频，可多选" : "")
         textFormat: Text.PlainText
-        color: mpv.error ? "#f85149" : "#c9d1d9"
+        color: playlistError || queue.error || mpv.error ? "#f85149" : "#c9d1d9"
         wrapMode: Text.Wrap
         horizontalAlignment: Text.AlignHCenter
         visible: text.length > 0
@@ -90,12 +111,15 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 Button { text: mpv.playing ? "暂停" : "播放"; enabled: mpv.source.length > 0; onClicked: mpv.playing ? mpv.pause() : mpv.play() }
+                Button { text: "上一项"; enabled: queue.currentIndex > 0; onClicked: playerView.previousMedia() }
+                Button { text: "下一项"; enabled: queue.currentIndex >= 0 && queue.currentIndex + 1 < queue.entries.length; onClicked: playerView.nextMedia() }
                 Slider { Layout.fillWidth: true; from: 0; to: Math.max(1, mpv.duration); value: mpv.position; enabled: mpv.duration > 0; onMoved: mpv.position = value }
                 Label { text: playerView.timeLabel(mpv.position) + " / " + playerView.timeLabel(mpv.duration); color: "#e6edf3" }
             }
             RowLayout {
                 Layout.fillWidth: true
                 Button { text: "打开文件"; onClicked: mediaDialog.open() }
+                Button { text: "列表 " + (queue.currentIndex + 1) + "/" + queue.entries.length; enabled: queue.entries.length > 0; onClicked: playlistDialog.open() }
                 Button { text: "音轨 / 字幕"; enabled: mpv.duration > 0 || mpv.playing; onClicked: tracksDialog.open() }
                 Label { text: "音量"; color: "#e6edf3" }
                 Slider { Layout.fillWidth: true; Layout.maximumWidth: 180; from: 0; to: 100; value: mpv.volume; onMoved: mpv.volume = value }
@@ -106,6 +130,28 @@ Item {
                     displayText: mpv.playbackRate + "×"
                     onActivated: function(index) { mpv.playbackRate = model[index] }
                 }
+            }
+        }
+    }
+    Dialog {
+        id: playlistDialog
+        anchors.centerIn: parent
+        title: "播放列表"
+        width: Math.max(280, Math.min(playerView.width - 32, 600))
+        height: Math.max(180, Math.min(playerView.height - 32, 420))
+        modal: true
+        standardButtons: Dialog.Close
+        ListView {
+            anchors.fill: parent
+            clip: true
+            model: queue.entries
+            delegate: ItemDelegate {
+                required property string modelData
+                required property int index
+                width: ListView.view.width
+                highlighted: queue.currentIndex === index
+                contentItem: Label { text: modelData; textFormat: Text.PlainText; elide: Text.ElideMiddle }
+                onClicked: { if (queue.select(index)) playerView.loadCurrent(); playlistDialog.close() }
             }
         }
     }

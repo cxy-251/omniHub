@@ -60,7 +60,7 @@ OMNIHUB_QT_YIELD_CHECK="$PWD/.build/client/omnihub_yield_check" \
 
 运行库/平台插件及 offscreen 参数按上文提供。该检查使用同一检查程序的 GUI、Core 观察器、恢复 GUI 三种分支；确认原 GUI 已退出但实际游戏存活，服务端停止游戏后恢复四项快照。输出 `GUI_YIELD_OK` 才表示链路通过；Linux `/proc` 内存数据仅作诊断，不用于信号控制。普通 Go 测试跳过此可选检查。
 
-产品客户端启动游戏后退出完整 GUI 进程，Core 观察器正常期间缓存连接配置，仅查询当前会话；完成后重新打开 GUI。配置目录中的 `native-ui.json` 是限量界面恢复快照，`native-yield.lock` 防止清理与恢复重叠。连续服务查询失败会带明确状态未知提示恢复界面。此次 Linux offscreen Core 观察器约 26MiB RSS，尚不代表商业游戏、跨平台 GUI 或完整客户端空闲内存预算已验收。
+产品客户端启动游戏后退出完整 GUI 进程，Core 观察器正常期间缓存连接配置，仅查询当前会话；完成后重新打开 GUI。配置目录中的 `native-ui.json` 是限量界面恢复快照，现含列表/当前项、媒体位置/暂停/页面；兼容旧四字段快照，文件最大约 2MiB，只在交接时保存。`native-yield.lock` 防止清理与恢复重叠。连续服务查询失败会带明确状态未知提示恢复界面。此次 Linux offscreen Core 观察器约 26MiB RSS，尚不代表商业游戏、跨平台 GUI 或完整客户端空闲内存预算已验收。
 
 ## 音轨与字幕检查
 
@@ -73,3 +73,13 @@ OMNIHUB_QT_YIELD_CHECK="$PWD/.build/client/omnihub_yield_check" \
 仍按上文提供 offscreen/RHI/OpenGL 和 SDK 环境。检查读取真实轨道、切到第二音轨/字幕、关闭字幕、加入第三条外部字幕、字幕延迟请求、真实彩色视频像素和原有暂停/精确跳转/渲染器重建。中文/空格路径转换为 file URL 后加载；只有 `TRACK_SWITCH_DISABLE_EXTERNAL_AND_DELAY_OK` 和 `CLEAN_EXIT 0` 均出现才通过。默认两个参数的原播放器检查仍可使用。
 
 轨道通过异步 mpv 属性事件更新，每媒体首次加载补一次异步读取；最多 256 条、单字段 512 字节，源替换清空旧清单并用加载版本拒绝迟到回复。外部字幕限本地 SRT/ASS/SSA/VTT 和 8MiB，界面按纯文本显示元数据。真实文件对话框选择和触控硬件操作尚需用户设备验收；不把 API/像素检查当作这两项验收。
+
+## 播放列表接续检查
+
+启用 OMNIHUB_BUILD_PLAYER_CHECK 后同时生成 omnihub_queue_check，输入项目内约 1.2 秒的真实短视频：
+
+```sh
+.build/client/omnihub_queue_check "$SHORT_VIDEO"
+```
+
+使用相同 offscreen/SDK 环境。检查实际加载 PlayerView.qml、两项相同路径逐项播放、真实 EOF 自动接续、末项停留、显式重播，以及超出 256 项/1MiB 的列表不改变原值；必须输出 `PLAYLIST_BOUNDS_DUPLICATE_EOF_FINAL_PAUSE_AND_REPLAY_OK` 才通过，退出码零本身不够。清单模型没有计时器或磁盘操作，解码器仍由当前页销毁。

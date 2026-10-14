@@ -26,7 +26,7 @@ int main(int argc,char **argv) {
     window.resize(640,360);window.show();
     if (restore) {
         const auto data = lifecycle.restored();
-        if (data.value("source").toString() != "fixture" || data.value("position").toDouble() != 4.25 || !data.value("paused").toBool() || data.value("page").toInt() != 1 || !lifecycle.error().isEmpty()) return 12;
+        if (data.value("source").toString() != "fixture" || data.value("position").toDouble() != 4.25 || !data.value("paused").toBool() || data.value("page").toInt() != 1 || data.value("entries").toStringList() != QStringList({"fixture", "fixture"}) || data.value("index").toInt() != 1 || !lifecycle.error().isEmpty()) return 12;
         if (!record("yield-restored.json",QJsonObject{{"restored",true},{"pid",QCoreApplication::applicationPid()}})) return 13;
         QTimer::singleShot(100,&app,&QCoreApplication::quit);
     } else {
@@ -35,7 +35,7 @@ int main(int argc,char **argv) {
             if (!record("yield-observer.json",QJsonObject{{"observer_pid",pid},{"gui_pid",QCoreApplication::applicationPid()}})) app.exit(14);
         });
         QObject::connect(&lifecycle,&NativeLifecycle::errorChanged,&app,[&](){app.exit(15);});
-        QTimer::singleShot(300,&app,[&](){lifecycle.yieldToGame(QString::fromLocal8Bit(argv[1]),{{"source","fixture"},{"position",4.25},{"paused",true},{"page",1}});});
+        QTimer::singleShot(300,&app,[&](){lifecycle.yieldToGame(QString::fromLocal8Bit(argv[1]),{{"source","fixture"},{"position",4.25},{"paused",true},{"page",1},{"entries",QStringList{"fixture","fixture"}},{"index",1}});});
     }
     return app.exec();
 }

@@ -1,4 +1,5 @@
 #include "mpv_item.h"
+#include "media_address.h"
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
 #include <QOpenGLContext>
@@ -180,8 +181,8 @@ void MpvItem::initMpv()
     }
     int status = mpv_initialize(core->handle);
     if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); m_core.reset(); return; }
-    for (const auto &property : {"time-pos", "duration", "pause", "idle-active"}) {
-        const mpv_format format = (std::strcmp(property, "pause") == 0 || std::strcmp(property, "idle-active") == 0) ? MPV_FORMAT_FLAG : MPV_FORMAT_DOUBLE;
+    for (const auto &property : {"time-pos", "duration", "pause", "idle-active", "eof-reached"}) {
+        const mpv_format format = (std::strcmp(property, "time-pos") == 0 || std::strcmp(property, "duration") == 0) ? MPV_FORMAT_DOUBLE : MPV_FORMAT_FLAG;
         status = mpv_observe_property(core->handle, 0, property, format);
         if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); m_core.reset(); return; }
     }
@@ -228,6 +229,10 @@ void MpvItem::onMpvEvents()
                 const bool value = *static_cast<int *>(property->data) != 0;
                 if (std::strcmp(property->name, "pause") == 0) m_paused = value;
                 if (std::strcmp(property->name, "idle-active") == 0) m_idle = value;
+                if (std::strcmp(property->name, "eof-reached") == 0 && m_loaded && m_eof != value) {
+                    m_eof = value;
+                    if (value) emit playbackEnded();
+                }
                 const bool playing = !m_paused && !m_idle;
                 if (playing != m_playing) { m_playing = playing; emit playingChanged(); }
             }
@@ -258,6 +263,7 @@ void MpvItem::loadSource()
 {
     if (!m_rendererReady || !m_core || m_source.isEmpty()) return;
     m_loaded = false;
+    m_eof = false;
     ++m_trackRevision;
     const QByteArray source = m_source.toUtf8();
     const char *command[] = {"loadfile", source.constData(), nullptr};
@@ -267,10 +273,9 @@ void MpvItem::loadSource()
 
 void MpvItem::setSource(const QString &source)
 {
-    if (source.size() > 8192 || source.contains(QChar::Null)) { setError(tr("媒体地址无效")); return; }
-    const QUrl url(source);
-    const QString address = url.isLocalFile() ? url.toLocalFile() : source;
-    if (address.size() > 8192 || address.contains(QChar::Null)) { setError(tr("媒体地址无效")); return; }
+    const auto parsed = source.isEmpty() ? std::optional<QString>(QString()) : mediaAddress(source);
+    if (!parsed) { setError(tr("媒体地址无效")); return; }
+    const QString address = *parsed;
     if (address == m_source) return;
     stop();
     m_source = address;
@@ -331,10 +336,12 @@ void MpvItem::setPaused(bool paused)
     if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
 }
 
-void MpvItem::play() { if (m_idle && !m_source.isEmpty()) loadSource(); setPaused(false); }
+void MpvItem::play() { if (m_idle && !m_source.isEmpty()) loadSource(); else if (m_eof) setPosition(0); setPaused(false); }
+void MpvItem::restart() { if (m_source.isEmpty()) return; stop(); m_restorePosition = 0; setPaused(false); loadSource(); }
 void MpvItem::pause() { setPaused(true); }
 void MpvItem::stop() {
     m_loaded = false;
+    m_eof = false;
     ++m_trackRevision;
     if (!m_tracks.isEmpty()) { m_tracks.clear(); emit tracksChanged(); }
     m_trackCount = 0;
@@ -419,9 +426,9 @@ void MpvItem::setVideoBrightness(double value) {
 }
 
 void MpvItem::addSubtitle(const QString &path) {
-    if (path.size() > 8192 || path.contains(QChar::Null)) { setError(tr("字幕地址无效")); return; }
-    const QUrl url(path);
-    const QString local = url.isLocalFile() ? url.toLocalFile() : path;
+    const auto address = mediaAddress(path);
+    if (!address) { setError(tr("字幕地址无效")); return; }
+    const QString local = *address;
     const QFileInfo file(local);
     const QString suffix = file.suffix().toLower();
     if (!m_core || !m_loaded || m_trackCount >= 256 || local.size() > 8192 || local.contains(QChar::Null) || !file.isAbsolute() || !file.isFile() || file.size() > 8 * 1024 * 1024 || (suffix != "srt" && suffix != "ass" && suffix != "ssa" && suffix != "vtt")) { setError(tr("请选择不超过 8MiB 的本地 SRT/ASS/SSA/VTT 字幕，媒体轨道最多 256 条")); return; }

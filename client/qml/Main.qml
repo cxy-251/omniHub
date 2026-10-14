@@ -15,6 +15,8 @@ Window {
     property string savedMediaSource: restoredUI.source || initialExternalFile
     property real savedMediaPosition: restoredUI.position || 0
     property bool savedMediaPaused: !!restoredUI.paused
+    property var savedPlaylistEntries: restoredUI.entries || []
+    property int savedPlaylistIndex: restoredUI.index !== undefined ? restoredUI.index : -1
 
     function yieldForGame(sessionId) {
         if (!lifecycle) return
@@ -22,8 +24,10 @@ Window {
             savedMediaSource = playerLoader.item.source
             savedMediaPosition = playerLoader.item.position
             savedMediaPaused = playerLoader.item.pauseRequested
+            savedPlaylistEntries = playerLoader.item.playlistEntries.slice()
+            savedPlaylistIndex = playerLoader.item.playlistIndex
         }
-        lifecycle.yieldToGame(sessionId, {source: savedMediaSource, position: savedMediaPosition, paused: savedMediaPaused, page: stack.currentIndex})
+        lifecycle.yieldToGame(sessionId, {source: savedMediaSource, position: savedMediaPosition, paused: savedMediaPaused, page: stack.currentIndex, entries: savedPlaylistEntries, index: savedPlaylistIndex})
     }
 
     function selectPage(index) {
@@ -34,6 +38,8 @@ Window {
             savedMediaSource = playerLoader.item.source
             savedMediaPosition = playerLoader.item.position
             savedMediaPaused = playerLoader.item.pauseRequested
+            savedPlaylistEntries = playerLoader.item.playlistEntries.slice()
+            savedPlaylistIndex = playerLoader.item.playlistIndex
         }
         stack.currentIndex = index
     }
@@ -116,7 +122,7 @@ Window {
                 id: playerLoader
                 active: stack.currentIndex === 0
                 sourceComponent: Component { PlayerView { } }
-                onLoaded: item.restorePlayback(mainWindow.savedMediaSource, mainWindow.savedMediaPosition, mainWindow.savedMediaPaused)
+                onLoaded: item.restorePlayback(mainWindow.savedMediaSource, mainWindow.savedMediaPosition, mainWindow.savedMediaPaused, mainWindow.savedPlaylistEntries, mainWindow.savedPlaylistIndex)
             }
 
             Loader {
