@@ -47,34 +47,60 @@ func ScanGamesContext(ctx context.Context, standaloneGamesDir string) (int, erro
 // ScanGameCategories scans only explicit active categories; nil scans all.
 // Disabled categories are neither read nor marked missing.
 func ScanGameCategories(ctx context.Context, standaloneGamesDir string, categories []string) (count int, resultErr error) {
-	if len(categories) > 128 {
-		return 0, errors.New("scan categories exceed capacity")
-	}
-	allowed := make(map[string]bool, len(categories))
-	for _, category := range categories {
-		if !games.ValidCategory(category) {
-			return 0, errors.New("invalid scan category")
-		}
-		allowed[category] = true
+	indexed, err := ReadGameMetadata(ctx, standaloneGamesDir, categories)
+	if err != nil {
+		return 0, err
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	root, err := os.OpenRoot(standaloneGamesDir)
+	db, err := games.OpenDB(standaloneGamesDir)
 	if err != nil {
 		return 0, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, db.Close()) }()
+	if categories == nil {
+		err = db.PublishScan(ctx, indexed)
+	} else {
+		err = db.PublishCategories(ctx, indexed, categories)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return len(indexed), nil
+}
+
+// ReadGameMetadata enumerates bounded host metadata without opening/creating an
+// index or writing assets. Returned records belong exclusively to the caller.
+func ReadGameMetadata(ctx context.Context, standaloneGamesDir string, categories []string) (result []*games.Game, resultErr error) {
+	if len(categories) > 128 {
+		return nil, errors.New("scan categories exceed capacity")
+	}
+	allowed := make(map[string]bool, len(categories))
+	for _, category := range categories {
+		if !games.ValidCategory(category) {
+			return nil, errors.New("invalid scan category")
+		}
+		allowed[category] = true
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(standaloneGamesDir)
+	if err != nil {
+		return nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
 	directories, err := gameEntries(root, ".")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	indexed := make([]*games.Game, 0)
 	retainedBytes := 0
 	ids := make(map[string]bool)
 	for _, category := range directories {
 		if err := ctx.Err(); err != nil {
-			return 0, err
+			return nil, err
 		}
 		if !category.IsDir() || category.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(category.Name(), "_games") {
 			continue
@@ -89,18 +115,18 @@ func ScanGameCategories(ctx context.Context, standaloneGamesDir string, categori
 		}
 		entries, err := gameEntries(root, category.Name())
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, entry := range entries {
 			if err := ctx.Err(); err != nil {
-				return 0, err
+				return nil, err
 			}
 			if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || strings.HasPrefix(entry.Name(), ".") {
 				continue
 			}
 			id, title := games.FolderIdentity(entry.Name())
 			if ids[id] {
-				return 0, fmt.Errorf("duplicate game prefix %q", id)
+				return nil, fmt.Errorf("duplicate game prefix %q", id)
 			}
 			ids[id] = true
 			game := &games.Game{ID: id, Name: title, Category: name, Target: target, RelDir: category.Name() + "/" + entry.Name()}
@@ -108,18 +134,18 @@ func ScanGameCategories(ctx context.Context, standaloneGamesDir string, categori
 			info, err := root.Lstat(configPath)
 			if err == nil {
 				if !info.Mode().IsRegular() || info.Size() > 64<<10 {
-					return 0, errors.New("game metadata must be a regular file within 64KiB")
+					return nil, errors.New("game metadata must be a regular file within 64KiB")
 				}
 				file, err := root.Open(configPath)
 				if err != nil {
-					return 0, err
+					return nil, err
 				}
 				data, readErr := io.ReadAll(io.LimitReader(file, (64<<10)+1))
 				if err := errors.Join(readErr, file.Close()); err != nil {
-					return 0, err
+					return nil, err
 				}
 				if len(data) > 64<<10 {
-					return 0, errors.New("game metadata exceeds capacity")
+					return nil, errors.New("game metadata exceeds capacity")
 				}
 				var meta struct {
 					Name        string          `json:"name"`
@@ -130,7 +156,7 @@ func ScanGameCategories(ctx context.Context, standaloneGamesDir string, categori
 					ProtonAppID string          `json:"proton_appid"`
 				}
 				if err := json.Unmarshal(data, &meta); err != nil {
-					return 0, fmt.Errorf("invalid game metadata: %w", err)
+					return nil, fmt.Errorf("invalid game metadata: %w", err)
 				}
 				if meta.Name != "" {
 					game.Name = meta.Name
@@ -138,51 +164,38 @@ func ScanGameCategories(ctx context.Context, standaloneGamesDir string, categori
 				game.Exe = meta.Exe
 				game.Args, err = launchMetadataField(meta.Args, '[')
 				if err != nil {
-					return 0, err
+					return nil, err
 				}
 				game.Env, err = launchMetadataField(meta.Env, '{')
 				if err != nil {
-					return 0, err
+					return nil, err
 				}
 				game.Icon = meta.Icon
 				game.ProtonAppID = meta.ProtonAppID
 			} else if !errors.Is(err, os.ErrNotExist) {
-				return 0, err
+				return nil, err
 			}
 			if err := games.ValidateIndexGame(game); err != nil {
-				return 0, fmt.Errorf("invalid game %q: %w", game.RelDir, err)
+				return nil, fmt.Errorf("invalid game %q: %w", game.RelDir, err)
 			}
 			if _, _, err := games.ParseLaunchFields(game.Args, game.Env); err != nil {
-				return 0, fmt.Errorf("invalid launch metadata for %q: %w", game.RelDir, err)
+				return nil, fmt.Errorf("invalid launch metadata for %q: %w", game.RelDir, err)
 			}
+			game.Available = true
 			indexed = append(indexed, game)
 			retainedBytes += 256 + len(game.ID) + len(game.Name) + len(game.RelDir) + len(game.Exe) + len(game.Args) + len(game.Env) + len(game.Icon) + len(game.ProtonAppID)
 			if retainedBytes > 8<<20 {
-				return 0, errors.New("game scan metadata exceeds memory budget")
+				return nil, errors.New("game scan metadata exceeds memory budget")
 			}
 			if len(indexed) > 20000 {
-				return 0, errors.New("game index exceeds capacity")
+				return nil, errors.New("game index exceeds capacity")
 			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return nil, err
 	}
-	db, err := games.OpenDB(standaloneGamesDir)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, db.Close()) }()
-	publish := db.PublishScan
-	if categories != nil {
-		publish = func(ctx context.Context, list []*games.Game) error {
-			return db.PublishCategories(ctx, list, categories)
-		}
-	}
-	if err := publish(ctx, indexed); err != nil {
-		return 0, err
-	}
-	return len(indexed), nil
+	return indexed, nil
 }
 
 func launchMetadataField(raw json.RawMessage, expected byte) (string, error) {

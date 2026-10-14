@@ -8,7 +8,6 @@ import (
 	"omnihub/internal/auth"
 	"omnihub/internal/library"
 	"omnihub/internal/scanner"
-	"strings"
 )
 
 // Index publication is an explicit host operation. Browsing never mutates a
@@ -68,12 +67,7 @@ func (r *Router) handleGameIndex(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "game storage unavailable", 503)
 		return
 	}
-	categories := make([]string, 0)
-	for _, dir := range r.libMgr.ActiveDirectories() {
-		if strings.HasPrefix(dir, "standalone_games/") && strings.HasSuffix(dir, "_games") {
-			categories = append(categories, strings.TrimSuffix(strings.TrimPrefix(dir, "standalone_games/"), "_games"))
-		}
-	}
+	categories := r.activeGameCategories()
 	count, err := scanner.ScanGameCategories(req.Context(), directory, categories)
 	if err != nil {
 		http.Error(w, "game scan failed: "+err.Error(), 422)

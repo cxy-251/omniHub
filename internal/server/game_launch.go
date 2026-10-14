@@ -74,7 +74,7 @@ func (r *Router) handleGameLaunch(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// A lookup must not create or migrate an index, even in a writable library.
-	db, err := games.OpenDBReadOnly(directory)
+	db, err := r.openGameSource(req.Context(), directory)
 	if err != nil {
 		http.Error(w, "game index unavailable", 503)
 		return

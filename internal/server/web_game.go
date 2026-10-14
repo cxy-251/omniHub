@@ -78,7 +78,7 @@ func (r *Router) handleWebGameOpen(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "game library unavailable", 503)
 		return
 	}
-	db, err := games.OpenDBReadOnly(directory)
+	db, err := r.openGameSource(req.Context(), directory)
 	if err != nil {
 		http.Error(w, "game index unavailable", 503)
 		return

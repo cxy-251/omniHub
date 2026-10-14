@@ -6,7 +6,6 @@ import (
 	"omnihub/internal/auth"
 	"omnihub/internal/games"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 )
@@ -60,13 +59,7 @@ func (r *Router) listGameLibraries(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "game storage boundary invalid", 503)
 			return
 		}
-		if _, err := os.Stat(filepath.Join(directory, "games.db")); errors.Is(err, os.ErrNotExist) {
-			continue
-		} else if err != nil {
-			http.Error(w, "game index unavailable", 503)
-			return
-		}
-		db, err := games.OpenDBReadOnly(directory)
+		db, err := r.openGameSource(req.Context(), directory)
 		if err != nil {
 			http.Error(w, "game index unavailable", 503)
 			return

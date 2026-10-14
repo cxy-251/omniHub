@@ -25,6 +25,7 @@ import (
 	"omnihub/internal/manga"
 	"omnihub/internal/mega"
 	"omnihub/internal/sc2"
+	"omnihub/internal/scanner"
 	"omnihub/internal/shortvideo"
 	"omnihub/internal/tasks"
 	"omnihub/internal/text"
@@ -42,6 +43,7 @@ type Router struct {
 	clipboard     *tools.ClipboardManager
 	taskMgr       *tasks.Manager
 	gameRuns      *games.Manager
+	gameDiscovery *scanner.GameDiscovery
 	webGames      *webGameGrants
 	webGameReads  chan struct{}
 	webGameOpens  chan struct{}
@@ -91,6 +93,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		clipboard:     tools.NewClipboardManager(50),
 		taskMgr:       tasks.NewManager(),
 		gameRuns:      games.NewManager(),
+		gameDiscovery: scanner.NewGameDiscovery(),
 		webGames:      newWebGameGrants(),
 		webGameReads:  make(chan struct{}, 16),
 		webGameOpens:  make(chan struct{}, 2),
@@ -217,6 +220,7 @@ func (r *Router) Close() error {
 	r.closed = true
 	r.audioMetadata.Close()
 	r.webGames.close()
+	r.gameDiscovery.Close()
 	var errs []error
 	for _, db := range r.metaDB {
 		errs = append(errs, db.Close())
