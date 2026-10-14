@@ -2,6 +2,8 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
+#include <QSGRendererInterface>
+#include <QEvent>
 #include "player/mpv_item.h"
 #ifdef Q_OS_LINUX
 #include "player/mpris.h"
@@ -12,6 +14,7 @@
 int main(int argc, char *argv[])
 {
     qputenv("QT_QUICK_CONTROLS_STYLE", "Basic");
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     QGuiApplication app(argc, argv);
     app.setOrganizationName("omniHub");
     app.setApplicationName("omnihub_client");
@@ -20,32 +23,39 @@ int main(int argc, char *argv[])
     qmlRegisterType<MpvItem>("omniHub.Media", 1, 0, "MpvItem");
     qmlRegisterType<GameLauncher>("omniHub.Games", 1, 0, "GameLauncher");
 
-    QQmlApplicationEngine engine;
+    int result = 0;
+    {
+        BackendApi backend;
+#ifdef Q_OS_LINUX
+        MprisService mprisService;
+#endif
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("backendApi", &backend);
 
-    BackendApi backend;
-    engine.rootContext()->setContextProperty("backendApi", &backend);
-
-    // 注册 Linux MPRIS 媒体控制服务
-    #ifdef Q_OS_LINUX
-    MprisService mprisService;
-    engine.rootContext()->setContextProperty("mprisService", &mprisService);
+        // 注册 Linux MPRIS 媒体控制服务
+#ifdef Q_OS_LINUX
+        engine.rootContext()->setContextProperty("mprisService", &mprisService);
 #endif
 
-    // 处理外部打开文件命令行参数 (第 9.3 节)
-    QString externalFile;
-    if (argc > 1) {
-        externalFile = QString::fromLocal8Bit(argv[1]);
+        // 处理外部打开文件命令行参数 (第 9.3 节)
+        QString externalFile;
+        if (argc > 1) {
+            externalFile = QString::fromLocal8Bit(argv[1]);
+        }
+        engine.rootContext()->setContextProperty("initialExternalFile", externalFile);
+
+        const QUrl url(QStringLiteral("qrc:/qml/Main.qml"));
+        QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
+                         &app, [url](QObject *obj, const QUrl &objUrl) {
+            if (!obj && url == objUrl)
+                QCoreApplication::exit(-1);
+        }, Qt::QueuedConnection);
+
+        engine.load(url);
+
+        result = app.exec();
     }
-    engine.rootContext()->setContextProperty("initialExternalFile", externalFile);
-
-    const QUrl url(QStringLiteral("qrc:/qml/Main.qml"));
-    QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
-                     &app, [url](QObject *obj, const QUrl &objUrl) {
-        if (!obj && url == objUrl)
-            QCoreApplication::exit(-1);
-    }, Qt::QueuedConnection);
-
-    engine.load(url);
-
-    return app.exec();
+    // Renderers may release their final core reference during engine teardown.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    return result;
 }

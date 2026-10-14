@@ -11,6 +11,16 @@ Item {
         anchors.fill: parent
     }
 
+    Text {
+        anchors.centerIn: parent
+        width: parent.width * 0.8
+        text: mpv.error
+        visible: text.length > 0
+        color: "#f85149"
+        wrapMode: Text.Wrap
+        horizontalAlignment: Text.AlignHCenter
+    }
+
     TouchControls {
         anchors.fill: parent
         playerItem: mpv

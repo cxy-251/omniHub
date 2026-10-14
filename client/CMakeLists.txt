@@ -68,3 +68,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 install(TARGETS omnihub_client DESTINATION bin)
+
+option(OMNIHUB_BUILD_PLAYER_CHECK "Build the isolated OpenGL player integration check" OFF)
+if(OMNIHUB_BUILD_PLAYER_CHECK)
+    qt_add_executable(omnihub_player_check
+        tests/player_check.cpp src/player/mpv_item.cpp src/player/mpv_item.h
+    )
+    target_include_directories(omnihub_player_check PRIVATE src/player)
+    target_link_libraries(omnihub_player_check PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::OpenGL ${MPV_TARGET}
+    )
+endif()
