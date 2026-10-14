@@ -133,7 +133,7 @@ func TestContainerMetadataRejectsMalformedLengths(t *testing.T) {
 		}
 	}
 	result := Metadata{}
-	if err := vorbisComments(commentFields("TITLE=\xff"), &result, false); err == nil {
+	if err := vorbisComments(commentFields("TITLE=\xff"), &result, "flac"); err == nil {
 		t.Fatal("invalid UTF-8 comment accepted")
 	}
 }

@@ -23,7 +23,7 @@ func sizedField(data *[]byte, order binary.ByteOrder) ([]byte, error) {
 	return field, nil
 }
 
-func vorbisComments(data []byte, result *Metadata, framing bool) error {
+func vorbisComments(data []byte, result *Metadata, format string) error {
 	vendor, err := sizedField(&data, binary.LittleEndian)
 	if err != nil {
 		return err
@@ -86,8 +86,8 @@ func vorbisComments(data []byte, result *Metadata, framing bool) error {
 			}
 		}
 	}
-	// Vorbis adds a framing byte, whereas FLAC and Opus do not.
-	if !framing && len(data) != 0 || framing && (len(data) != 1 || data[0] != 1) {
+	// Vorbis requires a framing bit; Opus permits padding/binary extensions.
+	if format == "flac" && len(data) != 0 || format == "vorbis" && (len(data) == 0 || data[0]&1 == 0) {
 		return errors.New("unexpected audio comment trailing bytes")
 	}
 	return nil
@@ -165,7 +165,7 @@ func (r *tagInput) flac(result *Metadata) error {
 					return errors.New("duplicate FLAC comment block")
 				}
 				comments = true
-				err = vorbisComments(data, result, false)
+				err = vorbisComments(data, result, "flac")
 			} else {
 				err = flacPicture(data, result)
 			}

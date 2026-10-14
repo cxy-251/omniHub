@@ -53,7 +53,7 @@ func (r *tagInput) read(offset, size int64) ([]byte, error) {
 	return data, err
 }
 
-// ReadMetadata reads ID3/MP4/FLAC/WAVE labels and a bounded embedded picture from
+// ReadMetadata reads ID3/MP4/FLAC/WAVE/Ogg labels and a bounded embedded picture from
 // an already opened regular file. MP4 media payload is skipped by offset, so a
 // trailing moov does not require scanning the audio. Total tag reads cap at 8MiB.
 func ReadMetadata(ctx context.Context, file *os.File) (Metadata, error) {
@@ -73,19 +73,26 @@ func ReadMetadata(ctx context.Context, file *os.File) (Metadata, error) {
 	if err != nil {
 		return result, err
 	}
+	legacyTags := true
 	if string(prefix[:3]) == "ID3" {
 		err = r.id3(prefix, &result)
 	} else if string(prefix[4:8]) == "ftyp" {
+		legacyTags = false
 		err = r.mp4(0, r.size, 0, "", &result)
 	} else if string(prefix[:4]) == "fLaC" {
+		legacyTags = false
 		err = r.flac(&result)
 	} else if string(prefix[:4]) == "RIFF" {
+		legacyTags = false
 		err = r.wav(&result)
+	} else if string(prefix[:4]) == "OggS" {
+		legacyTags = false
+		err = r.ogg(&result)
 	}
 	if err != nil {
 		return Metadata{}, err
 	}
-	if r.size >= 128 && (result.Title == "" || result.Artist == "" || result.Album == "") {
+	if legacyTags && r.size >= 128 && (result.Title == "" || result.Artist == "" || result.Album == "") {
 		tail, err := r.read(r.size-128, 128)
 		if err != nil {
 			return Metadata{}, err
