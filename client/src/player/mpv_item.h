@@ -2,9 +2,11 @@
 
 #include <QQuickFramebufferObject>
 #include <memory>
+#include <QVariantList>
 
 class MpvRenderer;
 class MpvCore;
+struct mpv_node;
 
 // MpvItem owns GUI playback state; its renderer owns the OpenGL context.
 class MpvItem : public QQuickFramebufferObject
@@ -18,6 +20,9 @@ class MpvItem : public QQuickFramebufferObject
     Q_PROPERTY(bool playing READ isPlaying NOTIFY playingChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
     Q_PROPERTY(bool pauseRequested READ pauseRequested NOTIFY pauseRequestedChanged)
+    Q_PROPERTY(QVariantList tracks READ tracks NOTIFY tracksChanged)
+    Q_PROPERTY(double subtitleDelay READ subtitleDelay WRITE setSubtitleDelay NOTIFY subtitleDelayChanged)
+    Q_PROPERTY(double videoBrightness READ videoBrightness WRITE setVideoBrightness NOTIFY videoBrightnessChanged)
 
 public:
     // Creates GUI state; media loading waits for a render-thread GL context.
@@ -47,7 +52,7 @@ public:
 
     // Returns the requested playback multiplier.
     double playbackRate() const { return m_playbackRate; }
-    // Accepts finite speed in [0.25, 4]; rejection is reported through error.
+    // Accepts finite speed in [0.25, 3]; rejection is reported through error.
     void setPlaybackRate(double rate);
 
     // Derived from observed pause and idle state, rather than command optimism.
@@ -56,6 +61,19 @@ public:
     QString error() const { return m_error; }
     // Returns pause intent even while a source is waiting for initialization.
     bool pauseRequested() const { return m_loadPaused; }
+    // Bounded audio/subtitle descriptors from the loaded media, not file guesses.
+    QVariantList tracks() const { return m_tracks; }
+    // Subtitle timing adjustment in seconds; finite values within +/-60 accepted.
+    double subtitleDelay() const { return m_subtitleDelay; }
+    void setSubtitleDelay(double seconds);
+    // Video color adjustment in [-100,100], independent of display backlight.
+    double videoBrightness() const { return m_videoBrightness; }
+    void setVideoBrightness(double value);
+    // Select a known loaded track; subtitle -1 explicitly disables subtitles.
+    Q_INVOKABLE void selectAudioTrack(int id);
+    Q_INVOKABLE void selectSubtitleTrack(int id);
+    // Load a local SRT/ASS/SSA/VTT file, limited to 8MiB, without shell commands.
+    Q_INVOKABLE void addSubtitle(const QString &path);
 
     // Resumes playback, loading the current source again after a stop.
     Q_INVOKABLE void play();
@@ -75,6 +93,9 @@ signals:
     void playingChanged();
     void errorChanged();
     void pauseRequestedChanged();
+    void tracksChanged();
+    void subtitleDelayChanged();
+    void videoBrightnessChanged();
 
 private:
     void initMpv();
@@ -85,6 +106,9 @@ private:
     void loadSource();
     void seek(double seconds, const char *mode);
     void setPaused(bool paused);
+    void selectTrack(const char *type, int id);
+    void readTracks();
+    void updateTracks(const mpv_node &node);
 
     std::shared_ptr<MpvCore> m_core;
     QString m_source;
@@ -100,6 +124,11 @@ private:
     bool m_loaded = false;
     double m_restorePosition = -1;
     QString m_error;
+    QVariantList m_tracks;
+    double m_subtitleDelay = 0;
+    double m_videoBrightness = 0;
+    quint64 m_trackRevision = 0;
+    int m_trackCount = 0;
 
     friend class MpvRenderer;
     friend class MpvCore;

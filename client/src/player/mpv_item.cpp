@@ -12,6 +12,9 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <QUrl>
+#include <QFileInfo>
+#include <limits>
 
 // The core lives on the GUI thread, but a renderer retains it until its GL
 // context is freed. deleteLater avoids destroying the core on the render thread.
@@ -182,6 +185,8 @@ void MpvItem::initMpv()
         status = mpv_observe_property(core->handle, 0, property, format);
         if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); m_core.reset(); return; }
     }
+    status = mpv_observe_property(core->handle, 0, "track-list", MPV_FORMAT_NODE);
+    if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); m_core.reset(); return; }
     mpv_set_wakeup_callback(core->handle, [](void *data) { static_cast<MpvCore *>(data)->post(false); }, core);
 }
 
@@ -212,7 +217,9 @@ void MpvItem::onMpvEvents()
         if (event->event_id == MPV_EVENT_PROPERTY_CHANGE && event->data) {
             auto *property = static_cast<mpv_event_property *>(event->data);
             if (!property->data) continue;
-            if (property->format == MPV_FORMAT_DOUBLE) {
+            if (std::strcmp(property->name, "track-list") == 0 && m_loaded) {
+                updateTracks(*static_cast<mpv_node *>(property->data));
+            } else if (property->format == MPV_FORMAT_DOUBLE) {
                 const double value = *static_cast<double *>(property->data);
                 if (!std::isfinite(value) || value < 0) continue;
                 if (std::strcmp(property->name, "time-pos") == 0 && m_loaded && m_position != value) { m_position = value; emit positionChanged(); }
@@ -226,8 +233,13 @@ void MpvItem::onMpvEvents()
             }
         } else if (event->event_id == MPV_EVENT_FILE_LOADED) {
             m_loaded = true;
+            readTracks();
             if (m_restorePosition >= 0) { setPosition(m_restorePosition); m_restorePosition = -1; }
             setPaused(m_loadPaused);
+        } else if (event->event_id == MPV_EVENT_GET_PROPERTY_REPLY && event->reply_userdata == m_trackRevision && m_loaded) {
+            auto *property = static_cast<mpv_event_property *>(event->data);
+            if (event->error < 0) setError(QString::fromUtf8(mpv_error_string(event->error)));
+            else if (property && property->data && property->format == MPV_FORMAT_NODE) updateTracks(*static_cast<mpv_node *>(property->data));
         } else if ((event->event_id == MPV_EVENT_COMMAND_REPLY || event->event_id == MPV_EVENT_SET_PROPERTY_REPLY) && event->error < 0) {
             setError(QString::fromUtf8(mpv_error_string(event->error)));
         } else if (event->event_id == MPV_EVENT_END_FILE && event->data) {
@@ -246,6 +258,7 @@ void MpvItem::loadSource()
 {
     if (!m_rendererReady || !m_core || m_source.isEmpty()) return;
     m_loaded = false;
+    ++m_trackRevision;
     const QByteArray source = m_source.toUtf8();
     const char *command[] = {"loadfile", source.constData(), nullptr};
     const int status = mpv_command_async(m_core->handle, 0, command);
@@ -255,9 +268,12 @@ void MpvItem::loadSource()
 void MpvItem::setSource(const QString &source)
 {
     if (source.size() > 8192 || source.contains(QChar::Null)) { setError(tr("媒体地址无效")); return; }
-    if (source == m_source) return;
+    const QUrl url(source);
+    const QString address = url.isLocalFile() ? url.toLocalFile() : source;
+    if (address.size() > 8192 || address.contains(QChar::Null)) { setError(tr("媒体地址无效")); return; }
+    if (address == m_source) return;
     stop();
-    m_source = source;
+    m_source = address;
     if (m_loadPaused) { m_loadPaused = false; emit pauseRequestedChanged(); }
     m_restorePosition = -1;
     setError({});
@@ -300,7 +316,7 @@ void MpvItem::setVolume(double volume)
 
 void MpvItem::setPlaybackRate(double rate)
 {
-    if (!std::isfinite(rate) || rate < 0.25 || rate > 4) { setError(tr("播放速度无效")); return; }
+    if (!std::isfinite(rate) || rate < 0.25 || rate > 3) { setError(tr("播放速度无效")); return; }
     if (m_playbackRate == rate) return;
     m_playbackRate = rate; emit playbackRateChanged();
     if (m_core) { const int status = mpv_set_property_async(m_core->handle, 0, "speed", MPV_FORMAT_DOUBLE, &rate); if (status < 0) setError(QString::fromUtf8(mpv_error_string(status))); }
@@ -319,6 +335,9 @@ void MpvItem::play() { if (m_idle && !m_source.isEmpty()) loadSource(); setPause
 void MpvItem::pause() { setPaused(true); }
 void MpvItem::stop() {
     m_loaded = false;
+    ++m_trackRevision;
+    if (!m_tracks.isEmpty()) { m_tracks.clear(); emit tracksChanged(); }
+    m_trackCount = 0;
     if (!m_loadPaused) { m_loadPaused = true; emit pauseRequestedChanged(); }
     if (!m_core) return;
     const char *command[] = {"stop", nullptr};
@@ -326,3 +345,88 @@ void MpvItem::stop() {
     if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
 }
 void MpvItem::seekRelative(double seconds) { seek(seconds, "relative+exact"); }
+
+namespace {
+const mpv_node *trackField(const mpv_node &node, const char *name) {
+    if (node.format != MPV_FORMAT_NODE_MAP || !node.u.list || node.u.list->num < 0 || node.u.list->num > 64) return nullptr;
+    for (int i = 0; i < node.u.list->num; ++i)
+        if (node.u.list->keys[i] && std::strncmp(node.u.list->keys[i], name, std::strlen(name) + 1) == 0) return &node.u.list->values[i];
+    return nullptr;
+}
+QString trackText(const mpv_node *node) {
+    if (!node || node->format != MPV_FORMAT_STRING || !node->u.string) return {};
+    int length = 0;
+    while (length < 512 && node->u.string[length]) ++length;
+    return QString::fromUtf8(node->u.string, length);
+}
+}
+
+void MpvItem::readTracks() {
+    if (!m_core || !m_loaded) return;
+    const int status = mpv_get_property_async(m_core->handle, m_trackRevision, "track-list", MPV_FORMAT_NODE);
+    if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
+}
+
+void MpvItem::updateTracks(const mpv_node &node) {
+    if (node.format != MPV_FORMAT_NODE_ARRAY || !node.u.list || node.u.list->num < 0 || node.u.list->num > 256) { setError(tr("媒体轨道数量或格式无效")); return; }
+    m_trackCount = node.u.list->num;
+    QVariantList tracks;
+    for (int i = 0; i < node.u.list->num; ++i) {
+        const auto &entry = node.u.list->values[i];
+        const auto *id = trackField(entry, "id");
+        const QString type = trackText(trackField(entry, "type"));
+        if (type != "audio" && type != "sub") continue;
+        if (!id || id->format != MPV_FORMAT_INT64 || id->u.int64 <= 0 || id->u.int64 > std::numeric_limits<int>::max()) { setError(tr("媒体轨道编号无效")); return; }
+        const auto *selected = trackField(entry, "selected");
+        const QString title = trackText(trackField(entry, "title"));
+        const QString language = trackText(trackField(entry, "lang"));
+        const QString label = QString::number(id->u.int64) + (language.isEmpty() ? "" : " · " + language) + (title.isEmpty() ? "" : " · " + title);
+        tracks.append(QVariantMap{{"id", static_cast<int>(id->u.int64)}, {"type", type}, {"label", label}, {"selected", selected && selected->format == MPV_FORMAT_FLAG && selected->u.flag != 0}});
+    }
+    if (tracks != m_tracks) { m_tracks = tracks; emit tracksChanged(); }
+}
+
+void MpvItem::selectTrack(const char *type, int id) {
+    bool valid = std::strcmp(type, "sub") == 0 && id == -1;
+    for (const auto &track : m_tracks) {
+        const auto entry = track.toMap();
+        if (entry.value("type").toString() == QString::fromLatin1(type) && entry.value("id").toInt() == id) valid = true;
+    }
+    if (!valid || !m_loaded || !m_core) { setError(tr("请选择当前媒体已有轨道")); return; }
+    const char *property = std::strcmp(type, "sub") == 0 ? "sid" : "aid";
+    int status;
+    if (id == -1) { const char *value = "no"; status = mpv_set_property_async(m_core->handle, 0, property, MPV_FORMAT_STRING, &value); }
+    else { int64_t value = id; status = mpv_set_property_async(m_core->handle, 0, property, MPV_FORMAT_INT64, &value); }
+    if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
+}
+void MpvItem::selectAudioTrack(int id) { selectTrack("audio", id); }
+void MpvItem::selectSubtitleTrack(int id) { selectTrack("sub", id); }
+
+void MpvItem::setSubtitleDelay(double seconds) {
+    if (!std::isfinite(seconds) || seconds < -60 || seconds > 60) { setError(tr("字幕延迟应在 -60 到 60 秒之间")); return; }
+    if (!m_core || m_subtitleDelay == seconds) return;
+    const int status = mpv_set_property_async(m_core->handle, 0, "sub-delay", MPV_FORMAT_DOUBLE, &seconds);
+    if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); return; }
+    m_subtitleDelay = seconds; emit subtitleDelayChanged();
+}
+
+void MpvItem::setVideoBrightness(double value) {
+    if (!std::isfinite(value) || value < -100 || value > 100) { setError(tr("画面亮度范围无效")); return; }
+    if (!m_core || value == m_videoBrightness) return;
+    const int status = mpv_set_property_async(m_core->handle, 0, "brightness", MPV_FORMAT_DOUBLE, &value);
+    if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); return; }
+    m_videoBrightness = value; emit videoBrightnessChanged();
+}
+
+void MpvItem::addSubtitle(const QString &path) {
+    if (path.size() > 8192 || path.contains(QChar::Null)) { setError(tr("字幕地址无效")); return; }
+    const QUrl url(path);
+    const QString local = url.isLocalFile() ? url.toLocalFile() : path;
+    const QFileInfo file(local);
+    const QString suffix = file.suffix().toLower();
+    if (!m_core || !m_loaded || m_trackCount >= 256 || local.size() > 8192 || local.contains(QChar::Null) || !file.isAbsolute() || !file.isFile() || file.size() > 8 * 1024 * 1024 || (suffix != "srt" && suffix != "ass" && suffix != "ssa" && suffix != "vtt")) { setError(tr("请选择不超过 8MiB 的本地 SRT/ASS/SSA/VTT 字幕，媒体轨道最多 256 条")); return; }
+    const QByteArray name = local.toUtf8();
+    const char *command[] = {"sub-add", name.constData(), "select", nullptr};
+    const int status = mpv_command_async(m_core->handle, 0, command);
+    if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
+}
