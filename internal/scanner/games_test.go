@@ -53,7 +53,7 @@ func TestGameScanPublishesDirectoryAndRejectsBadBatch(t *testing.T) {
 }
 
 func TestInvalidGameMetadataLeavesIndexBytesUntouched(t *testing.T) {
-	for _, metadata := range []string{`{`, `{"exe":"../outside"}`, `{"exe":"C:\\outside.exe"}`, `{"name":"\u0000"}`} {
+	for _, metadata := range []string{`{`, `{"exe":"../outside"}`, `{"exe":"C:\\outside.exe"}`, `{"name":"\u0000"}`, `{"args":42}`, `{"args":[null]}`, `{"env":{"OMNI_SAVE_DIR":"override"}}`} {
 		t.Run(metadata, func(t *testing.T) {
 			root := t.TempDir()
 			folder := filepath.Join(root, "3ds_games", "003 - Original")

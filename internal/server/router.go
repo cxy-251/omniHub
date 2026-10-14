@@ -202,7 +202,10 @@ func (r *Router) getGamesDB(root string) (*games.DB, error) {
 	if db := r.gamesDB[key]; db != nil {
 		return db, nil
 	}
-	gamesDir := filepath.Join(root, "standalone_games")
+	gamesDir, err := r.gameStorageDirectory(root)
+	if err != nil {
+		return nil, err
+	}
 	open := games.OpenDB
 	if readOnly {
 		open = games.OpenDBReadOnly
@@ -307,6 +310,7 @@ func (r *Router) registerRoutes() {
 
 	// 游戏中心接口（双端过滤）
 	r.mux.HandleFunc("/api/games/list", r.handleGamesList)
+	r.mux.HandleFunc("/api/games/launch", r.handleGameLaunch)
 	r.mux.HandleFunc("/api/games/session", r.handleGameSession)
 	r.mux.HandleFunc("/api/games/stop", r.handleGameStop)
 
@@ -1484,7 +1488,7 @@ func (r *Router) handleSC2Launch(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "game library is read-only", 403)
 			return
 		}
-		logsDir, err := r.libMgr.ResolveCategoryPath(primary.ID+":standalone_games/logs", "standalone_games")
+		gamesDir, err := r.gameStorageDirectory(primary.RootPath)
 		if err != nil {
 			http.Error(w, "game log boundary unavailable", 503)
 			return
@@ -1494,7 +1498,7 @@ func (r *Router) handleSC2Launch(w http.ResponseWriter, req *http.Request) {
 			GameDir: sc2Dir,
 			ExePath: filepath.Join("Support64", "SC2Switcher_x64.exe"),
 			Args:    args,
-			LogsDir: logsDir,
+			LogsDir: filepath.Join(gamesDir, "logs"),
 			IsAdmin: true,
 			UserID:  user.ID,
 		})

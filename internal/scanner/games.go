@@ -88,12 +88,12 @@ func ScanGames(standaloneGamesDir string) (count int, resultErr error) {
 					return 0, errors.New("game metadata exceeds capacity")
 				}
 				var meta struct {
-					Name        string `json:"name"`
-					Exe         string `json:"exe"`
-					Args        string `json:"args"`
-					Env         string `json:"env"`
-					Icon        string `json:"icon"`
-					ProtonAppID string `json:"proton_appid"`
+					Name        string          `json:"name"`
+					Exe         string          `json:"exe"`
+					Args        json.RawMessage `json:"args"`
+					Env         json.RawMessage `json:"env"`
+					Icon        string          `json:"icon"`
+					ProtonAppID string          `json:"proton_appid"`
 				}
 				if err := json.Unmarshal(data, &meta); err != nil {
 					return 0, fmt.Errorf("invalid game metadata: %w", err)
@@ -102,8 +102,14 @@ func ScanGames(standaloneGamesDir string) (count int, resultErr error) {
 					game.Name = meta.Name
 				}
 				game.Exe = meta.Exe
-				game.Args = meta.Args
-				game.Env = meta.Env
+				game.Args, err = launchMetadataField(meta.Args, '[')
+				if err != nil {
+					return 0, err
+				}
+				game.Env, err = launchMetadataField(meta.Env, '{')
+				if err != nil {
+					return 0, err
+				}
 				game.Icon = meta.Icon
 				game.ProtonAppID = meta.ProtonAppID
 			} else if !errors.Is(err, os.ErrNotExist) {
@@ -111,6 +117,9 @@ func ScanGames(standaloneGamesDir string) (count int, resultErr error) {
 			}
 			if err := games.ValidateIndexGame(game); err != nil {
 				return 0, fmt.Errorf("invalid game %q: %w", game.RelDir, err)
+			}
+			if _, _, err := games.ParseLaunchFields(game.Args, game.Env); err != nil {
+				return 0, fmt.Errorf("invalid launch metadata for %q: %w", game.RelDir, err)
 			}
 			indexed = append(indexed, game)
 			retainedBytes += 256 + len(game.ID) + len(game.Name) + len(game.RelDir) + len(game.Exe) + len(game.Args) + len(game.Env) + len(game.Icon) + len(game.ProtonAppID)
@@ -131,4 +140,20 @@ func ScanGames(standaloneGamesDir string) (count int, resultErr error) {
 		return 0, err
 	}
 	return len(indexed), nil
+}
+
+func launchMetadataField(raw json.RawMessage, expected byte) (string, error) {
+	text := strings.TrimSpace(string(raw))
+	if text == "" || text == "null" {
+		return "", nil
+	}
+	if strings.HasPrefix(text, `"`) {
+		var legacy string
+		err := json.Unmarshal(raw, &legacy)
+		return legacy, err
+	}
+	if text[0] != expected {
+		return "", errors.New("invalid launch metadata field type")
+	}
+	return text, nil
 }

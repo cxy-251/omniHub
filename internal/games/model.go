@@ -12,7 +12,7 @@ type Game struct {
 	Target      string `json:"target"`       // "gui_only" 或 "web_only"（第 4.2 节）
 	Icon        string `json:"icon"`         // 图标路径或文件名
 	Exe         string `json:"exe"`          // 可执行文件相对路径
-	Args        string `json:"args"`         // 启动命令行参数
+	Args        string `json:"args"`         // JSON argv 数组；兼容旧引用/转义字符串
 	Env         string `json:"env"`          // 额外环境变量 (JSON 键值对)
 	ProtonAppID string `json:"proton_appid"` // Proton 容器 appid
 	RelDir      string `json:"rel_dir"`      // 正斜线目录，相对 standalone_games；旧索引为空

@@ -108,27 +108,8 @@ func validateLaunch(opt LaunchOptions) (path string, result error) {
 	if !opt.IsAdmin && opt.UserID <= 0 {
 		return "", errors.New("authenticated user required")
 	}
-	total := 0
-	for _, arg := range opt.Args {
-		total += len(arg)
-		if len(arg) > 4096 || strings.ContainsRune(arg, 0) {
-			return "", errors.New("invalid game argument")
-		}
-	}
-	for _, env := range opt.Env {
-		total += len(env)
-		key, _, ok := strings.Cut(env, "=")
-		if !ok || len(env) > 4096 || strings.ContainsRune(env, 0) || key == "" || strings.EqualFold(key, "OMNI_SAVE_DIR") {
-			return "", errors.New("invalid game environment")
-		}
-		for i, c := range key {
-			if !(c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && c >= '0' && c <= '9') {
-				return "", errors.New("invalid environment name")
-			}
-		}
-	}
-	if total > 32<<10 {
-		return "", errors.New("game arguments/environment exceed capacity")
+	if err := validateLaunchValues(opt.Args, opt.Env); err != nil {
+		return "", err
 	}
 	info, err := os.Lstat(opt.GameDir)
 	if err != nil {
