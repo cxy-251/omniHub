@@ -80,11 +80,11 @@ const MediaHub = {
   // --- 全格式音频底栏 ---
   initAudioBar() {
     const player = new Audio(); this.audioPlayer = player;
-    this.audioLoggedIn = false; this.audioSequence = 0; this.audioRestoring = false;
+    this.audioUserID = 0; this.audioSequence = 0; this.audioRestoring = false;
     this.audioLastSaved = 0;
     fetch('/api/auth/status').then(r => r.json()).then(status => {
-      if (this.audioPlayer === player) this.audioLoggedIn = status.user?.id > 0;
-    }).catch(() => { if (this.audioPlayer === player) this.audioLoggedIn = false; });
+      if (this.audioPlayer === player) this.audioUserID = status.user?.id || 0;
+    }).catch(() => { if (this.audioPlayer === player) this.audioUserID = 0; });
     const options = { signal: lifetime.signal };
     const playBtn = document.getElementById('audio-play-pause');
     const slider = document.getElementById('audio-progress');
@@ -128,12 +128,12 @@ const MediaHub = {
 
   saveAudioProgress(force = false, keepalive = false) {
     const player = this.audioPlayer;
-    if (!this.audioLoggedIn || !player || !this.currentAudioId || this.audioRestoring || !Number.isFinite(player.currentTime)) return;
+    if (!this.audioUserID || !player || !this.currentAudioId || this.audioRestoring || !Number.isFinite(player.currentTime)) return;
     const now = Date.now();
     if (!force && now - this.audioLastSaved < 30000) return;
     this.audioLastSaved = now;
     const id = this.currentAudioId;
-    const options = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audio_id: id, offset: player.currentTime }) };
+    const options = { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Omni-Account-ID': String(this.audioUserID) }, body: JSON.stringify({ audio_id: id, offset: player.currentTime }) };
     const pending = keepalive ? globalThis.fetch('/api/media/audio/progress', { ...options, keepalive: true, credentials: 'same-origin' }) : fetch('/api/media/audio/progress', options);
     pending.then(response => { if (!response.ok) throw new Error('断点保存失败'); }).catch(error => {
       if (!keepalive && error.name !== 'AbortError' && this.currentAudioId === id) this.audioError(error.message);

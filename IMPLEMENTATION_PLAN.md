@@ -40,6 +40,8 @@ Web 框架已确认：React + TypeScript + Tailwind CSS + Vite，便于融入用
 
 ## 当前阶段记录
 
+2026-10-14 音频实际浏览器验收：提前告知后使用 Applications 现有 Chrome、项目内隔离配置与 FFmpeg 生成的五种真实 12 秒音轨；通过 CDP 操作实际界面，没有插件或 Playwright。MP3/M4A/FLAC/WAV/Ogg Vorbis 均完成解码、时间推进、切换和标签显示；MP3 内嵌 128px 封面优先，其他轨回退 64px 目录封面。40% 跳转保存为 4.8 秒，重开恢复约 4.81 秒；隐藏音频子页移除封面节点且继续伴听，离开整个媒体模块暂停并清除 src，始终仅一个 Audio 对象，无运行异常。测试 Chrome 使用 mute-audio，不将此视为实体扬声器/音频设备验收。补齐旧播放器保存头的账号标识：同一旧播放器仍存活时切换认证账号，其迟到保存被 409 拒绝，新账号已有 3.2 秒断点保持不变。pnpm 构建及嵌入静态资源的 Go 服务编译通过；测试结果/截图保留 .test-tmp/ui-epub/audio-result.json 和 audio-player.png，测试进程退出、隔离配置已清理。跨浏览器/Qt/实体设备、读取峰值和其他架构范围继续推进。
+
 2026-10-14 Ogg 标签：增加 Vorbis/Opus 的按页元数据读取，最多 2,048 页/八个逻辑流，沿用累计 8MiB 读取与重组预算。校验页面 CRC、流序号、起始/结束和续页标记；注释跨页按 lacing 组包，识别首个支持音轨的第二个注释包后停止，不扫描设置包、音频或后续链轨。忽略复用容器中的不支持逻辑流，但仍验证页完整性；支持中文注释与 METADATA_BLOCK_PICTURE 内嵌图片，复用 FLAC 图片边界。Vorbis 验证 framing bit，Opus 允许合法填充/二进制扩展，FLAC 仍禁止尾部附加字节；已识别容器不再额外探测 ID3v1 尾部。测试覆盖跨页、图片、复用逻辑流、Opus padding、CRC/序号/续页破坏、截断、取消与 8MiB 容量；现有 FFmpeg 在项目内生成真实 Vorbis/Opus 文件，两者中文标签读取成功。Go 全套与 Windows/macOS 服务编译通过，本次未使用浏览器或插件。Ogg-FLAC/非常见编码、RF64/RIFX、音频封面完整解码、真实播放与 Qt 音频仍待推进，不把标签测试当作音频播放验收。
 
 2026-10-14 FLAC/WAV 标签：音频元数据按文件签名增加原生 FLAC 的 Vorbis Comment/PICTURE、RIFF/WAVE 的 LIST/INFO 和内嵌 ID3。复用既有接口、读取预算和缓存，不为专辑列表逐轨提取标签。FLAC 校验起始 STREAMINFO、块长度、字段数量和 UTF-8，拒绝重复注释及错误尾部；内嵌正封面优先，图片 URI 不访问网络。WAV 校验 RIFF 总长度、子块长度和奇数填充，按偏移跳过 data，仅读取 INFO/ID3；无法确定编码的旧 INFO 字节保留字符值，不猜测系统区域设置。新增中文标签/真实 PNG、图片外链边界、截断/错误长度、WAV 内嵌 ID3及 2GiB 稀疏 WAV 尾部标签验证，后者读取不到 1KiB。Go 全套测试和 Windows/macOS 服务编译通过，未使用浏览器或插件。Ogg 分页/跨页注释、RF64/RIFX 等 WAV 扩展、封面解码及真实客户端验收仍待推进，不能据此称为全格式音频验收完成。
