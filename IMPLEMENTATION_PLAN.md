@@ -40,6 +40,8 @@ Web 框架已确认：React + TypeScript + Tailwind CSS + Vite，便于融入用
 
 ## 当前阶段记录
 
+2026-10-14 Qt 首次完整 C++ 构建：重新检查现有 Applications 工具链，当前 GCC 已包含 libc/GL 开发头文件；通过正确的运行库搜索路径与 `-idirafter`/启动文件前缀使用，避免 C++ `include_next` 被错误头文件顺序破坏。在项目 .build/qt-deps 解压与 SteamOS 仓库匹配的 libmpv 及缺失运行依赖，没有修改系统或 Applications；仅项目内 libmpv 副本修正其绝对 mujs 依赖名。CMake 改为优先 pkg-config 导入目标，无 pkg-config 时按 CMAKE_PREFIX_PATH 找头文件和真实链接库，避免只传 -lmpv 导致非系统 SDK 无法链接；新增构建说明。实际编译发现并补齐 QOpenGLContext 头文件。GCC 15.1.1/Qt 6.9.1/Ninja 的 Linux Release 全部 C++ 单元和 QML 资源编译、最终链接成功，产物 .build/qt-native/omnihub_client，运行依赖检查无缺失项。没有使用浏览器或插件。此处完成的是实际编译门槛：播放器仍在无当前 GL 上下文时初始化 mpv、失败后注册空回调，并在错误线程轮询事件/释放渲染资源；必须重构后再做原生运行/播放验收，不能把链接成功称为 GUI 完成。Windows/macOS 原生构建、交付打包和其他架构范围仍继续。
+
 2026-10-14 音频实际浏览器验收：提前告知后使用 Applications 现有 Chrome、项目内隔离配置与 FFmpeg 生成的五种真实 12 秒音轨；通过 CDP 操作实际界面，没有插件或 Playwright。MP3/M4A/FLAC/WAV/Ogg Vorbis 均完成解码、时间推进、切换和标签显示；MP3 内嵌 128px 封面优先，其他轨回退 64px 目录封面。40% 跳转保存为 4.8 秒，重开恢复约 4.81 秒；隐藏音频子页移除封面节点且继续伴听，离开整个媒体模块暂停并清除 src，始终仅一个 Audio 对象，无运行异常。测试 Chrome 使用 mute-audio，不将此视为实体扬声器/音频设备验收。补齐旧播放器保存头的账号标识：同一旧播放器仍存活时切换认证账号，其迟到保存被 409 拒绝，新账号已有 3.2 秒断点保持不变。pnpm 构建及嵌入静态资源的 Go 服务编译通过；测试结果/截图保留 .test-tmp/ui-epub/audio-result.json 和 audio-player.png，测试进程退出、隔离配置已清理。跨浏览器/Qt/实体设备、读取峰值和其他架构范围继续推进。
 
 2026-10-14 Ogg 标签：增加 Vorbis/Opus 的按页元数据读取，最多 2,048 页/八个逻辑流，沿用累计 8MiB 读取与重组预算。校验页面 CRC、流序号、起始/结束和续页标记；注释跨页按 lacing 组包，识别首个支持音轨的第二个注释包后停止，不扫描设置包、音频或后续链轨。忽略复用容器中的不支持逻辑流，但仍验证页完整性；支持中文注释与 METADATA_BLOCK_PICTURE 内嵌图片，复用 FLAC 图片边界。Vorbis 验证 framing bit，Opus 允许合法填充/二进制扩展，FLAC 仍禁止尾部附加字节；已识别容器不再额外探测 ID3v1 尾部。测试覆盖跨页、图片、复用逻辑流、Opus padding、CRC/序号/续页破坏、截断、取消与 8MiB 容量；现有 FFmpeg 在项目内生成真实 Vorbis/Opus 文件，两者中文标签读取成功。Go 全套与 Windows/macOS 服务编译通过，本次未使用浏览器或插件。Ogg-FLAC/非常见编码、RF64/RIFX、音频封面完整解码、真实播放与 Qt 音频仍待推进，不把标签测试当作音频播放验收。

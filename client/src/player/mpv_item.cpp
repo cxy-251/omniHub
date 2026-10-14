@@ -1,5 +1,6 @@
 #include "mpv_item.h"
 #include <QOpenGLFramebufferObject>
+#include <QOpenGLContext>
 #include <QQuickWindow>
 #include <QDebug>
 

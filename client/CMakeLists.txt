@@ -11,13 +11,24 @@ find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Quick Qml Network OpenGL)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Qt6 6.6 REQUIRED COMPONENTS DBus)
 endif()
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(MPV REQUIRED mpv)
-
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${MPV_INCLUDE_DIRS}
-)
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(MPV QUIET IMPORTED_TARGET mpv)
+endif()
+if(TARGET PkgConfig::MPV)
+    set(MPV_TARGET PkgConfig::MPV)
+else()
+    # Portable SDKs and Windows packages need not ship pkg-config. Respect
+    # CMAKE_PREFIX_PATH and keep the actual library path on the imported target.
+    find_path(MPV_INCLUDE_DIR NAMES mpv/client.h REQUIRED)
+    find_library(MPV_LIBRARY NAMES mpv libmpv REQUIRED)
+    add_library(Mpv::Mpv UNKNOWN IMPORTED)
+    set_target_properties(Mpv::Mpv PROPERTIES
+        IMPORTED_LOCATION "${MPV_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${MPV_INCLUDE_DIR}"
+    )
+    set(MPV_TARGET Mpv::Mpv)
+endif()
 
 set(SOURCES
     src/main.cpp
@@ -41,6 +52,7 @@ qt_add_executable(omnihub_client
     ${SOURCES}
     ${QML_RESOURCES}
 )
+target_include_directories(omnihub_client PRIVATE src)
 
 target_link_libraries(omnihub_client PRIVATE
     Qt6::Core
@@ -49,7 +61,7 @@ target_link_libraries(omnihub_client PRIVATE
     Qt6::Qml
     Qt6::Network
     Qt6::OpenGL
-    ${MPV_LIBRARIES}
+    ${MPV_TARGET}
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(omnihub_client PRIVATE Qt6::DBus)
