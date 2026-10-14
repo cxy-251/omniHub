@@ -302,6 +302,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/games/launch", r.handleGameLaunch)
 	r.mux.HandleFunc("/api/games/session", r.handleGameSession)
 	r.mux.HandleFunc("/api/games/stop", r.handleGameStop)
+	r.mux.HandleFunc("/api/native/progress", r.handleNativeProgress)
 
 	// 任务调试台接口
 	r.mux.HandleFunc("/api/tasks/run", r.handleTasksRun)

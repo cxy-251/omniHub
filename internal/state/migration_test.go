@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,6 +98,10 @@ func TestBootstrapMigrationCopiesOnlyGlobalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := time.Now().UTC()
+	native := userstate.NativePosition{ID: strings.Repeat("a", 64), Version: strings.Repeat("b", 64), Position: 12.5, Duration: 90, Paused: true, Volume: 42, Rate: 1.5}
+	if err := positions.SaveNative(context.Background(), 1, native); err != nil {
+		t.Fatal(err)
+	}
 	if err := positions.RecordGamePlay(context.Background(), 1, "001", started, started.Add(3*time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +121,10 @@ func TestBootstrapMigrationCopiesOnlyGlobalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer copied.Close()
+	resumed, err := copied.Native(context.Background(), 1, native.ID, native.Version)
+	if err != nil || resumed == nil || resumed.Position != 12.5 || resumed.Volume != 42 {
+		t.Fatalf("native resume not migrated: %+v %v", resumed, err)
+	}
 	p, err := copied.Manga(context.Background(), 1, key)
 	if err != nil || p == nil || p.ScrollOffsetRatio != 0.8 {
 		t.Fatal("user reading state not migrated")
