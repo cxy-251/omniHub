@@ -41,6 +41,7 @@ type Router struct {
 	authMid       *auth.Middleware
 	clipboard     *tools.ClipboardManager
 	taskMgr       *tasks.Manager
+	gameRuns      *games.Manager
 	progressDB    *audio.ProgressDB
 	userState     *userstate.DB
 	megaClient    *mega.Client
@@ -87,6 +88,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		authMid:       auth.NewMiddleware(authDB, localToken),
 		clipboard:     tools.NewClipboardManager(50),
 		taskMgr:       tasks.NewManager(),
+		gameRuns:      games.NewManager(),
 		progressDB:    progDB,
 		userState:     readingDB,
 		megaClient:    mega.NewClient("", 5*time.Minute),
@@ -215,7 +217,9 @@ func (r *Router) getGamesDB(root string) (*games.DB, error) {
 }
 
 // CanReconfigure 返回是否没有运行中的资源任务，供生命周期控制器切换配置前检查。
-func (r *Router) CanReconfigure() bool { return !r.taskMgr.HasRunningTasks() }
+func (r *Router) CanReconfigure() bool {
+	return !r.taskMgr.HasRunningTasks() && !r.gameRuns.HasRunning()
+}
 
 // Close 在 HTTP 服务完成退出后关闭所有模块连接，允许重复调用。
 func (r *Router) Close() error {
@@ -239,7 +243,7 @@ func (r *Router) Close() error {
 	for _, db := range r.gamesDB {
 		errs = append(errs, db.Close())
 	}
-	errs = append(errs, r.progressDB.Close(), r.userState.Close(), r.taskMgr.Close(), r.mangaReaders.Close())
+	errs = append(errs, r.progressDB.Close(), r.userState.Close(), r.taskMgr.Close(), r.gameRuns.Close(), r.mangaReaders.Close())
 	return errors.Join(errs...)
 }
 
@@ -303,6 +307,8 @@ func (r *Router) registerRoutes() {
 
 	// 游戏中心接口（双端过滤）
 	r.mux.HandleFunc("/api/games/list", r.handleGamesList)
+	r.mux.HandleFunc("/api/games/session", r.handleGameSession)
+	r.mux.HandleFunc("/api/games/stop", r.handleGameStop)
 
 	// 任务调试台接口
 	r.mux.HandleFunc("/api/tasks/run", r.handleTasksRun)
@@ -1483,21 +1489,24 @@ func (r *Router) handleSC2Launch(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "game log boundary unavailable", 503)
 			return
 		}
-		launched, err := games.LaunchGame(req.Context(), games.LaunchOptions{
+		user := auth.UserFromContext(req.Context())
+		launched, err := r.gameRuns.Start(req.Context(), primary.ID+":sc2", games.LaunchOptions{
 			GameDir: sc2Dir,
 			ExePath: filepath.Join("Support64", "SC2Switcher_x64.exe"),
 			Args:    args,
 			LogsDir: logsDir,
 			IsAdmin: true,
+			UserID:  user.ID,
 		})
 		if err != nil {
 			http.Error(w, fmt.Sprintf("launch failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"status": "launched",
-			"pid":    launched.PID,
-			"args":   args,
+			"status":     "launched",
+			"pid":        launched.PID,
+			"session_id": launched.ID,
+			"args":       args,
 		})
 		return
 	}

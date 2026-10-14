@@ -26,7 +26,15 @@ func TestNativeGameHelper(t *testing.T) {
 			break
 		}
 	}
-	time.Sleep(200 * time.Millisecond)
+	delay := 200 * time.Millisecond
+	if value := os.Getenv("OMNIHUB_TEST_GAME_DELAY"); value != "" {
+		var err error
+		delay, err = time.ParseDuration(value)
+		if err != nil {
+			os.Exit(3)
+		}
+	}
+	time.Sleep(delay)
 	if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"save": os.Getenv("OMNI_SAVE_DIR"), "args": os.Args[start:]}); err != nil {
 		os.Exit(2)
 	}
