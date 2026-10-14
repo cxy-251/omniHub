@@ -58,6 +58,7 @@ func (d *DB) migrate() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username TEXT UNIQUE NOT NULL,
 		password_hash TEXT NOT NULL,
+		auth_version INTEGER NOT NULL DEFAULT 0,
 		role TEXT NOT NULL,
 		level INTEGER NOT NULL DEFAULT 0,
 		status TEXT NOT NULL DEFAULT 'active',
@@ -85,6 +86,9 @@ func (d *DB) migrate() error {
 	`
 	_, err := d.db.Exec(schema)
 	if err != nil {
+		return err
+	}
+	if err = d.migrateAccountVersion(); err != nil {
 		return err
 	}
 	return d.migrateDevices()
@@ -209,6 +213,11 @@ func (d *DB) CreateUser(username, password, role string, level int) (*User, erro
 		username, string(hash), role, level, nowStr,
 	)
 	if err != nil {
+		var constraint interface{ Code() int }
+		// SQLITE_CONSTRAINT_UNIQUE (2067): only username is unique here.
+		if errors.As(err, &constraint) && constraint.Code() == 2067 {
+			return nil, ErrAccountExists
+		}
 		return nil, fmt.Errorf("failed to insert user: %w", err)
 	}
 
@@ -282,9 +291,9 @@ func (d *DB) Authenticate(ip, username, password string) (*User, error) {
 	var u User
 	var createdAtStr string
 	err := d.db.QueryRow(`
-		SELECT id, username, password_hash, role, level, status, created_at
+		SELECT id, username, password_hash, role, level, status, created_at,auth_version
 		FROM users WHERE username = ?`, username,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Level, &u.Status, &createdAtStr)
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.Level, &u.Status, &createdAtStr, &u.AuthVersion)
 
 	if err != nil {
 		d.RecordIPFailure(ip)
@@ -362,6 +371,9 @@ func (d *DB) RevokeUserSessions(userID int64) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err = tx.Exec("UPDATE users SET auth_version=auth_version+1 WHERE id=?", userID); err != nil {
+		return err
+	}
 	if _, err = tx.Exec("DELETE FROM user_sessions WHERE user_id=?", userID); err != nil {
 		return err
 	}
@@ -456,7 +468,7 @@ func (d *DB) UpdateUserLevel(userID int64, level int) error {
 	if role == RoleAdmin && level != LevelAdmin {
 		return errors.New("administrator level must remain 99")
 	}
-	if _, err := tx.Exec("UPDATE users SET level=? WHERE id=?", level, userID); err != nil {
+	if _, err := tx.Exec("UPDATE users SET level=?,auth_version=auth_version+1 WHERE id=?", level, userID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec("DELETE FROM user_sessions WHERE user_id=?", userID); err != nil {

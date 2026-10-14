@@ -31,6 +31,7 @@ type User struct {
 	ID           int64     `json:"id"`
 	Username     string    `json:"username"`
 	PasswordHash string    `json:"-"`
+	AuthVersion  int64     `json:"-"`
 	Role         string    `json:"role"`
 	Level        int       `json:"level"`
 	Status       string    `json:"status"` // "active" 或 "disabled"

@@ -266,6 +266,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/auth/setup", r.handleAuthSetup)
 	r.mux.HandleFunc("/api/auth/login", r.handleAuthLogin)
 	r.mux.HandleFunc("/api/auth/logout", r.handleLogout)
+	r.mux.HandleFunc("/api/auth/password", r.handleOwnPassword)
 	r.mux.HandleFunc("/api/admin/devices", r.handleDevices)
 
 	// 媒体库管理接口
@@ -329,6 +330,9 @@ func (r *Router) registerRoutes() {
 	// 权限管理 Admin 接口
 	r.mux.HandleFunc("/api/admin/permissions", r.handleAdminPermissions)
 	r.mux.HandleFunc("/api/admin/users", r.handleAdminUsers)
+	r.mux.HandleFunc("/api/admin/users/create", r.handleAccountChange)
+	r.mux.HandleFunc("/api/admin/users/status", r.handleAccountChange)
+	r.mux.HandleFunc("/api/admin/users/password", r.handleAccountChange)
 
 	// 局域网小工具接口
 	r.mux.HandleFunc("/api/tools/clipboard", r.handleToolsClipboard)
@@ -458,7 +462,7 @@ func (r *Router) handleAuthLogin(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := r.authDB.CreateSession(user.ID, token, 24*time.Hour); err != nil {
+	if err := r.authDB.CreateVerifiedSession(req.Context(), user, token, 24*time.Hour); err != nil {
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
 	}
@@ -1154,12 +1158,22 @@ func (r *Router) handleAdminUsers(w http.ResponseWriter, req *http.Request) {
 
 	switch req.Method {
 	case http.MethodGet:
-		users, err := r.authDB.ListUsers()
+		limit, offset, err := pageBounds(req)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, "invalid account page", 400)
 			return
 		}
-		writeJSON(w, http.StatusOK, users)
+		users, err := r.authDB.ListUsersPage(req.Context(), limit+1, offset)
+		if err != nil {
+			accountError(w, err)
+			return
+		}
+		more := len(users) > limit
+		if more {
+			users = users[:limit]
+		}
+		w.Header().Set("X-Has-More", strconv.FormatBool(more))
+		writeJSON(w, 200, users)
 	case http.MethodPost:
 		var p struct {
 			UserID int64 `json:"user_id"`

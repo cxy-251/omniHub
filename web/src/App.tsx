@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { api, post, type Status } from './api';
 
+const PasswordChange = lazy(() => import('./PasswordChange'));
 const ModulePage = lazy(() => import('./ModulePage'));
 const LibraryManager = lazy(() => import('./LibraryManager'));
 const modules = [
@@ -21,6 +22,7 @@ export default function App() {
   const [active, setActive] = useState<ModuleID | 'portal'>('portal');
   const [error, setError] = useState('');
   const [loginOpen, setLoginOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -58,6 +60,7 @@ export default function App() {
       <div className="flex flex-wrap items-center gap-3"><h1 className="text-xl font-semibold text-primary">omniHub</h1><span className="text-sm text-muted">{library}</span></div>
       <div className="flex items-center gap-3"><span className="text-sm text-muted">{status?.user.username ?? '访客'}{status ? ` · Lv.${status.user.level}` : ''}</span>
         <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => setLoginOpen(!loginOpen)}>登录账号</button>
+ {status?.logged_in ? <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => setPasswordOpen(value => !value)}>修改密码</button> : null}
  {status?.logged_in ? <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => { void post('/api/auth/logout', {}).then(() => window.location.reload()).catch((e: Error) => setError(e.message)); }}>退出登录</button> : null}</div>
     </header>
     <nav className="flex gap-2 overflow-x-auto border-b border-line px-4 py-3 sm:px-6" aria-label="主要导航">
@@ -66,6 +69,7 @@ export default function App() {
     </nav>
     <main className="mx-auto max-w-screen-2xl p-4 sm:p-6">
       {error ? <p role="alert" className="mb-4 whitespace-pre-wrap text-danger">{error}</p> : null}
+      {passwordOpen && status?.logged_in ? <Suspense fallback={<p role="status">正在加载…</p>}><PasswordChange onCancel={() => setPasswordOpen(false)} /></Suspense> : null}
       {loginOpen ? <form className="mb-6 flex flex-wrap items-end gap-3 rounded-lg border border-line bg-panel p-4" onSubmit={login}>
         <label className="flex flex-col gap-2 text-sm">用户名<input className="min-w-40 rounded-md border border-line bg-background px-3 py-2" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} required maxLength={64} /></label>
         <label className="flex flex-col gap-2 text-sm">密码<input className="min-w-40 rounded-md border border-line bg-background px-3 py-2" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required maxLength={72} /></label>
