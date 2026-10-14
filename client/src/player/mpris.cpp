@@ -80,7 +80,7 @@ void MprisService::publish() {
     if (!QDBusConnection::sessionBus().send(message)) { qWarning("MPRIS notification delivery failed"); m_deliveryFailed = true; }
 }
 void MprisRoot::Raise() { if (auto *window=m_service->window()) { window->show(); window->raise(); window->requestActivate(); } }
-void MprisRoot::Quit() { QCoreApplication::quit(); }
+void MprisRoot::Quit() { if (auto *window=m_service->window()) window->close(); else QCoreApplication::quit(); }
 QString MprisPlayer::status() const { const auto *p=m_service->player(); return !p||!p->mediaLoaded()?"Stopped":p->isPlaying()?"Playing":"Paused"; }
 double MprisPlayer::rate() const { auto *p=m_service->player(); return p?p->playbackRate():1; }
 double MprisPlayer::volume() const { auto *p=m_service->player(); return p?p->volume()/100:0; }

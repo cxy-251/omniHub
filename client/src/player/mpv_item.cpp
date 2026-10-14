@@ -149,6 +149,7 @@ MpvItem::MpvItem(QQuickItem *parent) : QQuickFramebufferObject(parent)
 
 MpvItem::~MpvItem()
 {
+    emit closing();
     if (m_core) m_core->owner = nullptr;
 }
 
@@ -235,7 +236,7 @@ void MpvItem::onMpvEvents()
                 if (std::strcmp(property->name, "idle-active") == 0) m_idle = value;
                 if (std::strcmp(property->name, "eof-reached") == 0 && m_loaded && m_eof != value) {
                     m_eof = value;
-                    if (value) emit playbackEnded();
+                    if (value) { emit mediaCompleted(); emit playbackEnded(); }
                 }
                 const bool playing = !m_paused && !m_idle;
                 if (playing != m_playing) { m_playing = playing; emit playingChanged(); }
@@ -296,6 +297,7 @@ void MpvItem::setSource(const QString &source)
     if (!parsed) { setError(tr("媒体地址无效")); return; }
     const QString address = *parsed;
     if (address == m_source) return;
+    emit sourceChanging();
     stop();
     if (!m_mediaMetadata.isEmpty()) { m_mediaMetadata.clear(); emit mediaMetadataChanged(); }
     m_source = address;
@@ -313,6 +315,7 @@ void MpvItem::setPosition(double position)
 {
     if (!std::isfinite(position) || position < 0 || position > 31536000) { setError(tr("播放位置无效")); return; }
     if (!m_loaded) {
+        emit seekRequested();
         m_restorePosition = position;
         if (m_position != position) { m_position = position; emit positionChanged(); }
         return;
@@ -329,7 +332,7 @@ void MpvItem::seek(double seconds, const char *mode)
     const char *command[] = {"seek", value.constData(), mode, nullptr};
     const int status = mpv_command_async(m_core->handle, 0, command);
     if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
-    else m_seekPending = true;
+    else { m_seekPending = true; emit seekRequested(); }
 }
 
 void MpvItem::setVolume(double volume)
@@ -361,6 +364,7 @@ void MpvItem::play() { if (!m_loaded && !m_loading && !m_source.isEmpty()) loadS
 void MpvItem::restart() { if (m_source.isEmpty()) return; stop(); m_restorePosition = 0; setPaused(false); loadSource(); }
 void MpvItem::pause() { setPaused(true); }
 void MpvItem::stop() {
+    emit stopping();
     m_loaded = false;
     m_loading = false;
     m_seekPending = false;

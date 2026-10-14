@@ -92,6 +92,11 @@ public:
 
 signals:
     void sourceChanged();
+    // Capture state while source/decoder fields still belong to the old file.
+    void sourceChanging();
+    void closing();
+    void mediaCompleted();
+    void stopping();
     void positionChanged();
     void durationChanged();
     void volumeChanged();
@@ -108,6 +113,7 @@ signals:
     void mediaLoadedChanged();
     // Actual position after an asynchronous seek has resumed rendering.
     void seekCompleted(double position);
+    void seekRequested();
 
 private:
     void initMpv();

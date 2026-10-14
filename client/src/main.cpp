@@ -12,6 +12,7 @@
 #include "backend_api.h"
 #include "native_lifecycle.h"
 #include "player/media_queue.h"
+#include "player/native_resume.h"
 
 int main(int argc, char *argv[])
 {
@@ -33,12 +34,16 @@ int main(int argc, char *argv[])
     {
         BackendApi backend;
         NativeLifecycle lifecycle(restore);
+        NativeResume resume;
+        QObject::connect(&backend,&BackendApi::statusChanged,&resume,[&]{if(backend.connected()&&backend.hasAdmin())resume.refresh();});
+        QObject::connect(&lifecycle,&NativeLifecycle::observerStarted,&resume,[&](qint64){resume.flush();});
 #ifdef Q_OS_LINUX
         MprisService mprisService;
 #endif
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty("backendApi", &backend);
         engine.rootContext()->setContextProperty("nativeLifecycle", &lifecycle);
+        engine.rootContext()->setContextProperty("nativeResume", &resume);
 
         // 注册 Linux MPRIS 媒体控制服务
 #ifdef Q_OS_LINUX

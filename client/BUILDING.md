@@ -95,3 +95,18 @@ dbus-run-session -- node scripts/check-mpris.mjs "$PROJECT_FIXTURE"
 提供 Qt 插件/QML/动态运行库环境，测试路径须在项目中。验证 org.mpris.MediaPlayer2 根接口与 Player 属性、类型化 trackid、真实标题/作者/本地封面、Pause/PlayPause、音量/倍速、SetPosition、过期编号拒绝、停止后从零播放、PropertiesChanged 与实际 Seeked 通知，以及内部分配/bind 方法不暴露。输出 MPRIS_ACTUAL_PLAYER_OK 才通过。相同 source 的列表条目使用不同轨道代际，Position 不逐帧发布。
 
 协议参考 [Player](https://specifications.freedesktop.org/mpris/latest/Player_Interface.html) 和 [根接口](https://specifications.freedesktop.org/mpris/latest/Media_Player.html)。无实际会话总线/名称已占用时本地播放仍可使用；销毁仅注销自身注册成功的服务。无 TrackList 扩展、循环/随机或 OpenUri 能力时不宣称支持这些可选能力。当前封面支持本地 sidecar，嵌入封面提取与实体锁屏/息屏后台仍待验收。
+
+## 两次独立进程的账号断点检查
+
+```sh
+cmake -S client -B .build/client -DOMNIHUB_BUILD_RESUME_CHECK=ON
+cmake --build .build/client --target omnihub_resume_check --parallel 2
+OMNIHUB_QT_RESUME_CHECK="$PWD/.build/client/omnihub_resume_check" \
+OMNIHUB_QT_RESUME_MEDIA="$PROJECT_EIGHT_SECOND_VIDEO" \
+TMPDIR="$PWD/.test-tmp" \
+go test ./internal/server -run '^TestNativeResumeInSeparateQtProcesses$' -count=1 -v
+```
+
+按上文提供 offscreen/RHI/运行库环境。Go 生成无资源库的真实服务/账号与私有连接文件；第一 Qt 进程暂停并保存约 4.25 秒、音量 42/倍速 1.5，第二个独立进程从全局数据库恢复。客户端保存位置量化到 0.1 秒，Go 再只读检查实际账号表；必须同时出现 NATIVE_RESUME_SAVED 和 NATIVE_RESUME_REOPEN_RESTORED。普通 Go 测试跳过 Qt，独立模式不使用浏览器或插件。
+
+NativeResume 只有一个网络请求和最多 16 个合并快照，15 秒活动检查，不活跃时停表；换源前/析构前捕获原文件状态，按播放代次和用户操作阻止迟到恢复覆盖当前播放。暂停/切换/关闭保存，普通窗口关闭及 MPRIS Quit 在事件循环退出前最多排空 1.5 秒，游戏让出也在 quit 前排空。暂不提供断网磁盘日志；失败显式显示，不声称最后一次进度必然落盘。本地凭证请求禁止自动重定向。

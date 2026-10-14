@@ -76,7 +76,7 @@ Item {
     Label {
         anchors.centerIn: parent
         width: parent.width * 0.8
-        text: playlistError || queue.error || mpv.error || (mpv.source.length === 0 ? "点击“打开文件”选择音视频，可多选" : "")
+        text: playlistError || queue.error || mpv.error || (typeof nativeResume !== "undefined" ? nativeResume.error : "") || (mpv.source.length === 0 ? "点击“打开文件”选择音视频，可多选" : "")
         textFormat: Text.PlainText
         color: playlistError || queue.error || mpv.error ? "#f85149" : "#c9d1d9"
         wrapMode: Text.Wrap

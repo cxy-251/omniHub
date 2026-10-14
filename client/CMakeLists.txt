@@ -51,6 +51,8 @@ set(SOURCES
     src/player/media_queue.cpp
     src/player/media_queue.h
     src/player/media_address.h
+    src/player/native_resume.cpp
+    src/player/native_resume.h
     src/games/game_launcher.cpp
     src/games/game_launcher.h
 )
@@ -85,6 +87,14 @@ endif()
 install(TARGETS omnihub_client DESTINATION bin)
 
 option(OMNIHUB_BUILD_PLAYER_CHECK "Build the isolated OpenGL player integration check" OFF)
+option(OMNIHUB_BUILD_RESUME_CHECK "Build the real service-backed media resume check" OFF)
+if(OMNIHUB_BUILD_RESUME_CHECK)
+    qt_add_executable(omnihub_resume_check tests/resume_check.cpp
+        src/player/mpv_item.cpp src/player/mpv_item.h src/player/native_resume.cpp src/player/native_resume.h
+        src/backend_api.cpp src/backend_api.h)
+    target_include_directories(omnihub_resume_check PRIVATE src/player)
+    target_link_libraries(omnihub_resume_check PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network Qt6::OpenGL ${MPV_TARGET})
+endif()
 option(OMNIHUB_BUILD_YIELD_CHECK "Build the native GUI process handoff check" OFF)
 if(OMNIHUB_BUILD_YIELD_CHECK)
     qt_add_executable(omnihub_yield_check tests/yield_check.cpp

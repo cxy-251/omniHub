@@ -10,6 +10,7 @@ Window {
     visible: true
     title: "omniHub Native Client"
     color: "#0d1117"
+    onClosing: { if (typeof nativeResume !== "undefined") nativeResume.flush() }
     property var lifecycle: typeof nativeLifecycle === "undefined" ? null : nativeLifecycle
     property var restoredUI: lifecycle ? lifecycle.restored : ({})
     property string savedMediaSource: restoredUI.source || initialExternalFile
@@ -127,6 +128,7 @@ Window {
                 onLoaded: {
                     item.restorePlayback(mainWindow.savedMediaSource, mainWindow.savedMediaPosition, mainWindow.savedMediaPaused, mainWindow.savedPlaylistEntries, mainWindow.savedPlaylistIndex)
                     if (typeof mprisService !== "undefined") mprisService.bind(item)
+                    if (typeof nativeResume !== "undefined") nativeResume.bind(item, mainWindow.savedMediaPosition === 0)
                 }
             }
 

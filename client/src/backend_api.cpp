@@ -42,6 +42,8 @@ QNetworkRequest BackendApi::localRequest(const QString &path) {
     request.setRawHeader("X-Omni-Local-Token", info.value("token").toString().toUtf8());
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setTransferTimeout(5000);
+    // Local privileged requests must never forward their credential on a redirect.
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     return request;
 }
 
