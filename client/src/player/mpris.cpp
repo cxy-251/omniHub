@@ -7,17 +7,16 @@
 #include <cmath>
 #include <QDir>
 
-static const char *busName = "org.mpris.MediaPlayer2.omnihub";
 static const char *objectPath = "/org/mpris/MediaPlayer2";
-MprisService::MprisService(QObject *parent) : QObject(parent) {
+MprisService::MprisService(QObject *parent, const QString &serviceName) : QObject(parent), m_serviceName(serviceName) {
     new MprisRoot(this); new MprisPlayer(this);
     auto bus = QDBusConnection::sessionBus();
-    if (!bus.registerService(busName)) { qWarning("MPRIS unavailable: session bus disconnected or name already owned"); return; }
-    if (!bus.registerObject(objectPath, this, QDBusConnection::ExportAdaptors)) { bus.unregisterService(busName); return; }
+    if (!bus.registerService(m_serviceName)) { qWarning("MPRIS unavailable: session bus disconnected or name already owned"); return; }
+    if (!bus.registerObject(objectPath, this, QDBusConnection::ExportAdaptors)) { bus.unregisterService(m_serviceName); return; }
     m_registered = true;
 }
 MprisService::~MprisService() {
-    if (m_registered) { auto bus = QDBusConnection::sessionBus(); bus.unregisterObject(objectPath); bus.unregisterService(busName); }
+    if (m_registered) { auto bus = QDBusConnection::sessionBus(); bus.unregisterObject(objectPath); bus.unregisterService(m_serviceName); }
 }
 void MprisService::bind(QObject *view) {
     for (const auto &connection : m_connections) QObject::disconnect(connection);

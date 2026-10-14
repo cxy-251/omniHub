@@ -42,6 +42,8 @@ endif()
 
 set(SOURCES
     src/main.cpp
+    src/host/external_router.cpp
+    src/host/external_router.h
     src/backend_api.cpp
     src/backend_api.h
     src/native_lifecycle.cpp
@@ -85,6 +87,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 install(TARGETS omnihub_client DESTINATION bin)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    install(PROGRAMS desktop/omnihub-client DESTINATION bin)
+    install(FILES desktop/omnihub.desktop DESTINATION share/applications)
+endif()
 
 option(OMNIHUB_BUILD_PLAYER_CHECK "Build the isolated OpenGL player integration check" OFF)
 option(OMNIHUB_BUILD_RESUME_CHECK "Build the real service-backed media resume check" OFF)

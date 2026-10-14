@@ -110,3 +110,11 @@ go test ./internal/server -run '^TestNativeResumeInSeparateQtProcesses$' -count=
 按上文提供 offscreen/RHI/运行库环境。Go 生成无资源库的真实服务/账号与私有连接文件；第一 Qt 进程暂停并保存约 4.25 秒、音量 42/倍速 1.5，第二个独立进程从全局数据库恢复。客户端保存位置量化到 0.1 秒，Go 再只读检查实际账号表；必须同时出现 NATIVE_RESUME_SAVED 和 NATIVE_RESUME_REOPEN_RESTORED。普通 Go 测试跳过 Qt，独立模式不使用浏览器或插件。
 
 NativeResume 只有一个网络请求和最多 16 个合并快照，15 秒活动检查，不活跃时停表；换源前/析构前捕获原文件状态，按播放代次和用户操作阻止迟到恢复覆盖当前播放。暂停/切换/关闭保存，普通窗口关闭及 MPRIS Quit 在事件循环退出前最多排空 1.5 秒，游戏让出也在 quit 前排空。暂不提供断网磁盘日志；失败显式显示，不声称最后一次进度必然落盘。本地凭证请求禁止自动重定向。
+
+## 外部窗口与主播放隔离检查
+
+```sh
+dbus-run-session -- node scripts/check-external-player.mjs "$TAGGED_VIDEO" "$SECOND_VIDEO"
+```
+
+在项目内使用带 Fixture title 标签的八秒媒体及另一个文件，提供 SDK 环境。检查真实主界面从隔离快照开始播放、另一个外部窗口播放，第二次命令行调用成功转发并退出；外部 D-Bus owner 不变、主 owner/轨道/Playing 不变，无效文件拒绝且不破坏原实例，正常关闭两窗口。输出 EXTERNAL_SINGLE_WINDOW_ROUTING_AND_HUB_ISOLATION_OK 才通过。独立私有总线，不接用户桌面、不使用浏览器或插件。MPRIS 检查现定位 org.mpris.MediaPlayer2.omnihub.external，主界面仍使用标准基础名称。

@@ -13,6 +13,7 @@
 #include "native_lifecycle.h"
 #include "player/media_queue.h"
 #include "player/native_resume.h"
+#include "host/external_router.h"
 
 int main(int argc, char *argv[])
 {
@@ -24,6 +25,22 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
     app.setOrganizationName("omniHub");
     app.setApplicationName("omnihub_client");
+    QStringList externalFiles;
+    if (argc > 1 && !restore) {
+        for (int index=1;index<argc;++index) {
+            const QString argument=QString::fromLocal8Bit(argv[index]);
+            if(index==1&&argument=="--")continue;
+            externalFiles.append(argument);
+        }
+    }
+    ExternalRouter externalRouter;
+    if (!externalFiles.isEmpty()) {
+        const int disposition=externalRouter.start(externalFiles);
+        if (disposition<=0) { if(disposition<0)fprintf(stderr,"%s\n",externalRouter.error().toUtf8().constData());return disposition<0?2:0; }
+        QStringList normalized;
+        if(!ExternalRouter::localFiles(externalFiles,normalized)){fprintf(stderr,"External media changed during startup\n");return 2;}
+        externalFiles=normalized;
+    }
 
     // 注册 QML 原生类型
     qmlRegisterType<MpvItem>("omniHub.Media", 1, 0, "MpvItem");
@@ -38,7 +55,7 @@ int main(int argc, char *argv[])
         QObject::connect(&backend,&BackendApi::statusChanged,&resume,[&]{if(backend.connected()&&backend.hasAdmin())resume.refresh();});
         QObject::connect(&lifecycle,&NativeLifecycle::observerStarted,&resume,[&](qint64){resume.flush();});
 #ifdef Q_OS_LINUX
-        MprisService mprisService;
+        MprisService mprisService(nullptr,externalFiles.isEmpty()?"org.mpris.MediaPlayer2.omnihub":"org.mpris.MediaPlayer2.omnihub.external");
 #endif
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty("backendApi", &backend);
@@ -56,8 +73,9 @@ int main(int argc, char *argv[])
             externalFile = QString::fromLocal8Bit(argv[1]);
         }
         engine.rootContext()->setContextProperty("initialExternalFile", externalFile);
+        engine.rootContext()->setContextProperty("initialExternalFiles", externalFiles);
 
-        const QUrl url(QStringLiteral("qrc:/qml/Main.qml"));
+        const QUrl url(externalFiles.isEmpty()?QStringLiteral("qrc:/qml/Main.qml"):QStringLiteral("qrc:/qml/ExternalPlayerWindow.qml"));
         QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
                          &app, [url](QObject *obj, const QUrl &objUrl) {
             if (!obj && url == objUrl)
@@ -65,6 +83,13 @@ int main(int argc, char *argv[])
         }, Qt::QueuedConnection);
 
         engine.load(url);
+        if(!externalFiles.isEmpty()&&!engine.rootObjects().isEmpty()){
+            auto *window=engine.rootObjects().first();
+            QObject::connect(&externalRouter,&ExternalRouter::filesRequested,window,[window](const QStringList &files){
+                const QVariant values=files;
+                if(!QMetaObject::invokeMethod(window,"openFiles",Q_ARG(QVariant,values)))qWarning("External file routing failed");
+            });
+        }
 #ifdef Q_OS_LINUX
         if (!engine.rootObjects().isEmpty()) mprisService.setWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().first()));
 #endif

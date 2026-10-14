@@ -51,8 +51,9 @@ for (const file of [path.join(bin, 'omnihub_client'), ...files(path.join(directo
   fs.copyFileSync(real, path.join(lib, soname)); copied.set(soname, real);
  }
 }
-const wrapper = mode => `#!/bin/sh\nset -eu\nrelease_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexport LD_LIBRARY_PATH="$release_dir/lib\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="$release_dir/plugins"\nexport QML_IMPORT_PATH="$release_dir/qml"\nexport QML2_IMPORT_PATH="$release_dir/qml"\nexec "$release_dir/bin/${mode === 'client' ? 'omnihub_client' : 'omnihub-server'}"${mode === 'desktop' ? ' --desktop' : ''} "$@"\n`;
-for (const [entry, mode] of [['omniHub', 'desktop'], ['server', 'server'], ['client', 'client']]) fs.writeFileSync(path.join(directory, entry), wrapper(mode), {mode: 0o755});
+const wrapper = mode => `#!/bin/sh\nset -eu\nrelease_dir=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)\nexport LD_LIBRARY_PATH="$release_dir/lib\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="$release_dir/plugins"\nexport QML_IMPORT_PATH="$release_dir/qml"\nexport QML2_IMPORT_PATH="$release_dir/qml"\nexec "$release_dir/bin/${mode === 'client' ? 'omnihub_client' : 'omnihub-server'}"${mode === 'desktop' ? ' --desktop' : ''} "$@"\n`;
+for (const [entry, mode] of [['omniHub', 'desktop'], ['server', 'server'], ['client', 'client'], ['omnihub-client', 'client']]) fs.writeFileSync(path.join(directory, entry), wrapper(mode), {mode: 0o755});
+fs.copyFileSync(path.join(root,'client','desktop','omnihub.desktop'),path.join(directory,'omnihub.desktop'));
 fs.writeFileSync(path.join(bin, 'qt.conf'), '[Paths]\nPrefix=..\nLibraries=lib\nPlugins=plugins\nQmlImports=qml\n');
 fs.copyFileSync(path.join(root, 'RUNNING.md'), path.join(directory, 'README.md'));
 fs.copyFileSync(path.join(root, 'DELIVERY_STATUS.md'), path.join(directory, 'DELIVERY_STATUS.md'));

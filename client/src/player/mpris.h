@@ -13,7 +13,7 @@
 class MprisService : public QObject {
     Q_OBJECT
 public:
-    explicit MprisService(QObject *parent = nullptr);
+    explicit MprisService(QObject *parent = nullptr, const QString &serviceName = "org.mpris.MediaPlayer2.omnihub");
     ~MprisService() override;
     // Replace the active QML view; null/destroyed views clear protocol capabilities.
     Q_INVOKABLE void bind(QObject *view);
@@ -36,6 +36,7 @@ private:
     quint64 m_generation = 0;
     bool m_registered = false;
     bool m_deliveryFailed = false;
+    QString m_serviceName;
     QString m_artwork;
     void refreshArtwork();
 };
