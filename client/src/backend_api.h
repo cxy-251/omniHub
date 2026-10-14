@@ -45,6 +45,8 @@ public:
     // 保存启用分类，服务端会校验路径并保留停用分类的原文件。
     Q_INVOKABLE void saveCategories(const QStringList &directories);
     static QNetworkRequest localRequest(const QString &path);
+    // Shared platform/configured directory for protected native client state.
+    static QString configurationDirectory();
 signals:
     void statusChanged();
     void librariesChanged();

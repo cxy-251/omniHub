@@ -4,10 +4,15 @@ import QtQuick.Layouts 1.15
 import omniHub.Games 1.0
 
 Item {
+    id: gameLauncherView
+    signal gameStarted(string sessionId)
     GameLauncher {
         id: launcher
         Component.onCompleted: {
             if (backendApi.hasAdmin) { fetchGames(); refreshSession() }
+        }
+        onLaunchFinished: function(gameId, success) {
+            if (success) gameLauncherView.gameStarted(session.id)
         }
     }
     Connections {

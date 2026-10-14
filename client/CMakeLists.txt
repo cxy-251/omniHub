@@ -44,6 +44,8 @@ set(SOURCES
     src/main.cpp
     src/backend_api.cpp
     src/backend_api.h
+    src/native_lifecycle.cpp
+    src/native_lifecycle.h
     src/player/mpv_item.cpp
     src/player/mpv_item.h
     src/games/game_launcher.cpp
@@ -80,6 +82,13 @@ endif()
 install(TARGETS omnihub_client DESTINATION bin)
 
 option(OMNIHUB_BUILD_PLAYER_CHECK "Build the isolated OpenGL player integration check" OFF)
+option(OMNIHUB_BUILD_YIELD_CHECK "Build the native GUI process handoff check" OFF)
+if(OMNIHUB_BUILD_YIELD_CHECK)
+    qt_add_executable(omnihub_yield_check tests/yield_check.cpp
+        src/native_lifecycle.cpp src/native_lifecycle.h src/backend_api.cpp src/backend_api.h)
+    target_include_directories(omnihub_yield_check PRIVATE src)
+    target_link_libraries(omnihub_yield_check PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network)
+endif()
 if(OMNIHUB_BUILD_PLAYER_CHECK)
     qt_add_executable(omnihub_player_check
         tests/player_check.cpp src/player/mpv_item.cpp src/player/mpv_item.h

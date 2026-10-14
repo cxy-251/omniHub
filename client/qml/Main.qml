@@ -10,9 +10,21 @@ Window {
     visible: true
     title: "omniHub Native Client"
     color: "#0d1117"
-    property string savedMediaSource: initialExternalFile
-    property real savedMediaPosition: 0
-    property bool savedMediaPaused: false
+    property var lifecycle: typeof nativeLifecycle === "undefined" ? null : nativeLifecycle
+    property var restoredUI: lifecycle ? lifecycle.restored : ({})
+    property string savedMediaSource: restoredUI.source || initialExternalFile
+    property real savedMediaPosition: restoredUI.position || 0
+    property bool savedMediaPaused: !!restoredUI.paused
+
+    function yieldForGame(sessionId) {
+        if (!lifecycle) return
+        if (playerLoader.item) {
+            savedMediaSource = playerLoader.item.source
+            savedMediaPosition = playerLoader.item.position
+            savedMediaPaused = playerLoader.item.pauseRequested
+        }
+        lifecycle.yieldToGame(sessionId, {source: savedMediaSource, position: savedMediaPosition, paused: savedMediaPaused, page: stack.currentIndex})
+    }
 
     function selectPage(index) {
         if (stack.currentIndex === index) return
@@ -55,6 +67,14 @@ Window {
 
     Column {
         anchors.fill: parent
+        Label {
+            width: parent.width
+            visible: !!mainWindow.lifecycle && mainWindow.lifecycle.error.length > 0
+            text: mainWindow.lifecycle ? mainWindow.lifecycle.error : ""
+            textFormat: Text.PlainText
+            color: "#f85149"
+            wrapMode: Text.Wrap
+        }
 
         // 顶栏导航
         Rectangle {
@@ -90,7 +110,7 @@ Window {
             id: stack
             width: parent.width
             height: parent.height - 48
-            currentIndex: initialExternalFile !== "" ? 0 : 1
+            currentIndex: mainWindow.restoredUI.page !== undefined ? mainWindow.restoredUI.page : (initialExternalFile !== "" ? 0 : 1)
 
             Loader {
                 id: playerLoader
@@ -101,7 +121,7 @@ Window {
 
             Loader {
                 active: stack.currentIndex === 1
-                sourceComponent: Component { GameLauncherView { } }
+                sourceComponent: Component { GameLauncherView { onGameStarted: function(sessionId) { mainWindow.yieldForGame(sessionId) } } }
             }
             Loader {
                 active: stack.currentIndex === 2

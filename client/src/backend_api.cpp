@@ -8,7 +8,7 @@
 
 BackendApi::BackendApi(QObject *parent) : QObject(parent) {}
 
-QNetworkRequest BackendApi::localRequest(const QString &path) {
+QString BackendApi::configurationDirectory() {
     QString configDir = qEnvironmentVariable("OMNIHUB_CONFIG_DIR");
     if (configDir.isEmpty()) {
 #ifdef Q_OS_WIN
@@ -21,7 +21,11 @@ QNetworkRequest BackendApi::localRequest(const QString &path) {
         configDir = QDir(base).filePath("omnihub");
 #endif
     }
-    QFile connection(QDir(configDir).filePath("local-client.json"));
+    return configDir;
+}
+
+QNetworkRequest BackendApi::localRequest(const QString &path) {
+    QFile connection(QDir(configurationDirectory()).filePath("local-client.json"));
     if (!connection.open(QIODevice::ReadOnly)) return QNetworkRequest();
     const QJsonObject info = QJsonDocument::fromJson(connection.readAll()).object();
     QUrl url(info.value("url").toString());

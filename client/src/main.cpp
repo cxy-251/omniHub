@@ -10,9 +10,13 @@
 #endif
 #include "games/game_launcher.h"
 #include "backend_api.h"
+#include "native_lifecycle.h"
 
 int main(int argc, char *argv[])
 {
+    if (argc > 1 && QString::fromLocal8Bit(argv[1]) == "--watch-game")
+        return NativeLifecycle::watchGame(argc, argv);
+    const bool restore = argc > 1 && QString::fromLocal8Bit(argv[1]) == "--resume-ui";
     qputenv("QT_QUICK_CONTROLS_STYLE", "Basic");
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     QGuiApplication app(argc, argv);
@@ -26,11 +30,13 @@ int main(int argc, char *argv[])
     int result = 0;
     {
         BackendApi backend;
+        NativeLifecycle lifecycle(restore);
 #ifdef Q_OS_LINUX
         MprisService mprisService;
 #endif
         QQmlApplicationEngine engine;
         engine.rootContext()->setContextProperty("backendApi", &backend);
+        engine.rootContext()->setContextProperty("nativeLifecycle", &lifecycle);
 
         // 注册 Linux MPRIS 媒体控制服务
 #ifdef Q_OS_LINUX
@@ -39,7 +45,7 @@ int main(int argc, char *argv[])
 
         // 处理外部打开文件命令行参数 (第 9.3 节)
         QString externalFile;
-        if (argc > 1) {
+        if (argc > 1 && !restore) {
             externalFile = QString::fromLocal8Bit(argv[1]);
         }
         engine.rootContext()->setContextProperty("initialExternalFile", externalFile);

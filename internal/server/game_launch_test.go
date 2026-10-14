@@ -161,6 +161,7 @@ func TestIndexedLaunchUsesOwningLibraryAndHostMetadata(t *testing.T) {
 	if !reflect.DeepEqual(observed.Args[1:], expected) || observed.Env != "$HOME; literal 中文" || observed.Save != filepath.Join(folder, "save") {
 		t.Fatalf("host argv/save boundary changed: %+v", observed)
 	}
+	checkQtGameYield(t, router, run.ID)
 	if w := request("/api/games/stop", `{"id":"`+run.ID+`"}`, "native-token"); w.Code != 202 {
 		t.Fatalf("stop: %d %s", w.Code, w.Body.String())
 	}

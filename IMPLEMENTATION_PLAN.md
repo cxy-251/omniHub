@@ -173,3 +173,7 @@ Flash/Retro 运行器入口也改为独立 TypeScript/Vite 构建，嵌入 dist�
 提前告知后用已有 Chrome、项目隔离 profile 和自编写 NES/SWF fixture 实测。NES 真实 fceumm 核心启动并有 PPU 色块；Ruffle 真实 WASM 解码自编 SWF，320×240、12fps、两帧元数据及红色像素正确，二者保持 origin=null。测试脚本精确按卡片编号和运行器 URL 选取，避免库名中的编号造成误选；退出时 iframe 消失，资源授权返回 403。跨 OOPIF 跟踪网络，没有外部 HTTP 请求，未处理异常为零；像素由 Go PNG 解码核验，结果和截图保留 .test-tmp/web-runtime，自建 Chrome profile 清理。未使用插件、Playwright 或用户浏览器资料。pnpm 构建、Go 全套与 Windows amd64/macOS arm64 服务编译通过。
 
 当前浏览器数据库/本地存储被明确禁用，不假装状态已持久化；后续须接账号级存档、导入导出、时长，并验收其他九个核心、输入/音频、复杂 SWF/RPG/SLG/引擎兼容和资源峰值。商业 BIOS/游戏仍由用户资源库提供，包内 core 各自许可证保留，不以 EmulatorJS 前端许可证替代。Qt/Wine/Proton 和完整游戏内存让出及其余架构目标继续推进。
+
+2026-10-14 原生 GUI 进程资源让出阶段：Qt 游戏启动成功后，原子保存限量恢复快照（媒体来源、位置、暂停、当前页），启动同一可执行文件的 `--watch-game` 分支并退出 QGuiApplication/QML/GL 进程。观察分支仅初始化 QCoreApplication/Qt Network，每秒最多一个有超时和响应大小限制的会话查询；正常游玩不重复读取连接配置、不写快照。服务继续持有游戏进程，不由客户端数字 PID 控制。让出锁保持至 GUI 进程静态析构后，避免快速退出的游戏与旧 GUI 清理同时重新创建界面；观察器标准流重定向至空设备，修复脱离进程继承调用方输出管道而阻塞退出观察的问题。游戏实际退出后重启 `--resume-ui`，恢复快照；连续十五次服务/会话错误后明确提示状态未知，不能声称游戏已经结束。让出失败则保留原界面并显示错误。
+
+必要验证：新增可选真实 Qt/Go 会话检查，GUI 退出时实际隔离游戏仍在运行，服务端停止后 Core 观察器启动新的 GUI 且四个快照字段正确。最新 Linux offscreen 测量观察器 RSS 26,912KiB、PSS 16,869KiB、Private_Dirty 3,432KiB；这些数值只属于该检查和当前环境，不代表全客户端空闲 RSS 达到 40–80MB 目标。完整 Main.qml 另行验证真实恢复快照及切页/播放器释放/暂停位置恢复。Qt Linux Release 和 Go 全套测试通过。本阶段没有浏览器或插件操作，也没有产品 malloc_trim 补丁。Wine/Proton、商业游戏、跨系统 GUI 实际运行、用户级时长/引擎存档、完整原生媒体页与其他架构功能仍须继续实现；当前快照不是全局用户媒体断点数据库。

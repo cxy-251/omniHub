@@ -47,3 +47,17 @@ OMNIHUB_QT_GAME_CHECK="$PWD/.build/client/omnihub_game_check" \
 动态 SDK 的运行库路径由本机环境提供。检查验证两页清单、库/游戏标识、真实子进程启动及准备文件、会话停止和实际退出；只有输出 `GAME_CHECK_OK` 且 Go 端确认准备文件/无活动游戏才通过。普通 Go 全套测试不依赖 Qt。该检查不代表商业游戏、Wine/Proton、完整游戏期间内存让出或跨系统 Qt 运行已完成。
 
 原生游戏检查现在先通过真实 GameLauncher 发起所选库索引扫描，再分页；新增的测试目录不会预写索引。大厅中的“扫描所选库”是明确的管理员写操作，仅对在线可写库启用，运行中的游戏/任务或正在扫描会阻止新的扫描。只读库使用其已有索引，不由此按钮建库或迁移。
+
+## GUI 进程让出检查
+
+```sh
+cmake -S client -B .build/client -DOMNIHUB_BUILD_YIELD_CHECK=ON
+cmake --build .build/client --target omnihub_yield_check --parallel 2
+OMNIHUB_QT_YIELD_CHECK="$PWD/.build/client/omnihub_yield_check" \
+  TMPDIR="$PWD/.test-tmp" \
+  go test ./internal/server -run '^TestIndexedLaunchUsesOwningLibraryAndHostMetadata$' -count=1 -v
+```
+
+运行库/平台插件及 offscreen 参数按上文提供。该检查使用同一检查程序的 GUI、Core 观察器、恢复 GUI 三种分支；确认原 GUI 已退出但实际游戏存活，服务端停止游戏后恢复四项快照。输出 `GUI_YIELD_OK` 才表示链路通过；Linux `/proc` 内存数据仅作诊断，不用于信号控制。普通 Go 测试跳过此可选检查。
+
+产品客户端启动游戏后退出完整 GUI 进程，Core 观察器正常期间缓存连接配置，仅查询当前会话；完成后重新打开 GUI。配置目录中的 `native-ui.json` 是限量界面恢复快照，`native-yield.lock` 防止清理与恢复重叠。连续服务查询失败会带明确状态未知提示恢复界面。此次 Linux offscreen Core 观察器约 26MiB RSS，尚不代表商业游戏、跨平台 GUI 或完整客户端空闲内存预算已验收。
