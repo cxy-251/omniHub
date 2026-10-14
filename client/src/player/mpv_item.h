@@ -17,6 +17,7 @@ class MpvItem : public QQuickFramebufferObject
     Q_PROPERTY(double playbackRate READ playbackRate WRITE setPlaybackRate NOTIFY playbackRateChanged)
     Q_PROPERTY(bool playing READ isPlaying NOTIFY playingChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
+    Q_PROPERTY(bool pauseRequested READ pauseRequested NOTIFY pauseRequestedChanged)
 
 public:
     // Creates GUI state; media loading waits for a render-thread GL context.
@@ -32,7 +33,7 @@ public:
     // Accepts paths/URLs up to 8,192 characters, excluding embedded nulls.
     void setSource(const QString &source);
 
-    // Returns the latest observed time in seconds.
+    // Returns observed seconds, or the queued restore time before a file loads.
     double position() const { return m_position; }
     // Accepts finite seconds in [0, 31536000], clamped to the known duration.
     void setPosition(double pos);
@@ -53,6 +54,8 @@ public:
     bool isPlaying() const { return m_playing; }
     // Returns the latest initialization, media or command error for QML display.
     QString error() const { return m_error; }
+    // Returns pause intent even while a source is waiting for initialization.
+    bool pauseRequested() const { return m_loadPaused; }
 
     // Resumes playback, loading the current source again after a stop.
     Q_INVOKABLE void play();
@@ -71,6 +74,7 @@ signals:
     void playbackRateChanged();
     void playingChanged();
     void errorChanged();
+    void pauseRequestedChanged();
 
 private:
     void initMpv();
@@ -93,6 +97,7 @@ private:
     bool m_paused = true;
     bool m_idle = true;
     bool m_loadPaused = false;
+    bool m_loaded = false;
     double m_restorePosition = -1;
     QString m_error;
 

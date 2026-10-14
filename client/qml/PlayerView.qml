@@ -5,6 +5,14 @@ import omniHub.Media 1.0
 Item {
     id: playerView
     property alias source: mpv.source
+    property alias position: mpv.position
+    property bool pauseRequested: mpv.pauseRequested
+
+    function restorePlayback(source, position, paused) {
+        mpv.source = source
+        if (position > 0) mpv.position = position
+        if (paused) mpv.pause()
+    }
 
     MpvItem {
         id: mpv

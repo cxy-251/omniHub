@@ -215,7 +215,7 @@ void MpvItem::onMpvEvents()
             if (property->format == MPV_FORMAT_DOUBLE) {
                 const double value = *static_cast<double *>(property->data);
                 if (!std::isfinite(value) || value < 0) continue;
-                if (std::strcmp(property->name, "time-pos") == 0 && m_position != value) { m_position = value; emit positionChanged(); }
+                if (std::strcmp(property->name, "time-pos") == 0 && m_loaded && m_position != value) { m_position = value; emit positionChanged(); }
                 if (std::strcmp(property->name, "duration") == 0 && m_duration != value) { m_duration = value; emit durationChanged(); }
             } else if (property->format == MPV_FORMAT_FLAG) {
                 const bool value = *static_cast<int *>(property->data) != 0;
@@ -225,6 +225,7 @@ void MpvItem::onMpvEvents()
                 if (playing != m_playing) { m_playing = playing; emit playingChanged(); }
             }
         } else if (event->event_id == MPV_EVENT_FILE_LOADED) {
+            m_loaded = true;
             if (m_restorePosition >= 0) { setPosition(m_restorePosition); m_restorePosition = -1; }
             setPaused(m_loadPaused);
         } else if ((event->event_id == MPV_EVENT_COMMAND_REPLY || event->event_id == MPV_EVENT_SET_PROPERTY_REPLY) && event->error < 0) {
@@ -244,6 +245,7 @@ void MpvItem::onMpvEvents()
 void MpvItem::loadSource()
 {
     if (!m_rendererReady || !m_core || m_source.isEmpty()) return;
+    m_loaded = false;
     const QByteArray source = m_source.toUtf8();
     const char *command[] = {"loadfile", source.constData(), nullptr};
     const int status = mpv_command_async(m_core->handle, 0, command);
@@ -256,7 +258,7 @@ void MpvItem::setSource(const QString &source)
     if (source == m_source) return;
     stop();
     m_source = source;
-    m_loadPaused = false;
+    if (m_loadPaused) { m_loadPaused = false; emit pauseRequestedChanged(); }
     m_restorePosition = -1;
     setError({});
     emit sourceChanged();
@@ -269,6 +271,11 @@ void MpvItem::setSource(const QString &source)
 void MpvItem::setPosition(double position)
 {
     if (!std::isfinite(position) || position < 0 || position > 31536000) { setError(tr("播放位置无效")); return; }
+    if (!m_loaded) {
+        m_restorePosition = position;
+        if (m_position != position) { m_position = position; emit positionChanged(); }
+        return;
+    }
     if (m_duration > 0) position = qMin(position, m_duration);
     seek(position, "absolute+exact");
 }
@@ -301,7 +308,7 @@ void MpvItem::setPlaybackRate(double rate)
 
 void MpvItem::setPaused(bool paused)
 {
-    m_loadPaused = paused;
+    if (m_loadPaused != paused) { m_loadPaused = paused; emit pauseRequestedChanged(); }
     if (!m_core) return;
     int value = paused;
     const int status = mpv_set_property_async(m_core->handle, 0, "pause", MPV_FORMAT_FLAG, &value);
@@ -311,7 +318,8 @@ void MpvItem::setPaused(bool paused)
 void MpvItem::play() { if (m_idle && !m_source.isEmpty()) loadSource(); setPaused(false); }
 void MpvItem::pause() { setPaused(true); }
 void MpvItem::stop() {
-    m_loadPaused = true;
+    m_loaded = false;
+    if (!m_loadPaused) { m_loadPaused = true; emit pauseRequestedChanged(); }
     if (!m_core) return;
     const char *command[] = {"stop", nullptr};
     const int status = mpv_command_async(m_core->handle, 0, command);

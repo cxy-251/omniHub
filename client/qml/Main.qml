@@ -10,6 +10,21 @@ Window {
     visible: true
     title: "omniHub Native Client"
     color: "#0d1117"
+    property string savedMediaSource: initialExternalFile
+    property real savedMediaPosition: 0
+    property bool savedMediaPaused: false
+
+    function selectPage(index) {
+        if (stack.currentIndex === index) return
+        // Capture before Loader destroys the item; hidden pages must not
+        // retain decoders, GPU buffers or request objects.
+        if (playerLoader.item) {
+            savedMediaSource = playerLoader.item.source
+            savedMediaPosition = playerLoader.item.position
+            savedMediaPaused = playerLoader.item.pauseRequested
+        }
+        stack.currentIndex = index
+    }
 
     Component.onCompleted: backendApi.refresh()
     Connections {
@@ -20,7 +35,7 @@ Window {
         }
         function onLibrariesChanged() {
             if (backendApi.stateReady && backendApi.connected && !backendApi.hasAdmin) setupDialog.open()
-            if (!backendApi.stateReady) stack.currentIndex = 2
+            if (!backendApi.stateReady) mainWindow.selectPage(2)
         }
     }
     Dialog {
@@ -55,17 +70,17 @@ Window {
                 Button {
                     text: "通用播放器"
                     highlighted: stack.currentIndex === 0
-                    onClicked: stack.currentIndex = 0
+                    onClicked: mainWindow.selectPage(0)
                 }
                 Button {
                     text: "独立游戏大厅"
                     highlighted: stack.currentIndex === 1
-                    onClicked: stack.currentIndex = 1
+                    onClicked: mainWindow.selectPage(1)
                 }
                 Button {
                     text: "资源库管理"
                     highlighted: stack.currentIndex === 2
-                    onClicked: { stack.currentIndex = 2; backendApi.refreshLibraries() }
+                    onClicked: { mainWindow.selectPage(2); backendApi.refreshLibraries() }
                 }
             }
         }
@@ -77,15 +92,21 @@ Window {
             height: parent.height - 48
             currentIndex: initialExternalFile !== "" ? 0 : 1
 
-            PlayerView {
-                id: player
-                source: initialExternalFile
+            Loader {
+                id: playerLoader
+                active: stack.currentIndex === 0
+                sourceComponent: Component { PlayerView { } }
+                onLoaded: item.restorePlayback(mainWindow.savedMediaSource, mainWindow.savedMediaPosition, mainWindow.savedMediaPaused)
             }
 
-            GameLauncherView {
-                id: gameLauncher
+            Loader {
+                active: stack.currentIndex === 1
+                sourceComponent: Component { GameLauncherView { } }
             }
-            LibraryView { }
+            Loader {
+                active: stack.currentIndex === 2
+                sourceComponent: Component { LibraryView { } }
+            }
         }
     }
 }
