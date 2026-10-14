@@ -265,6 +265,8 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/sections", r.handleSections)
 	r.mux.HandleFunc("/api/auth/setup", r.handleAuthSetup)
 	r.mux.HandleFunc("/api/auth/login", r.handleAuthLogin)
+	r.mux.HandleFunc("/api/auth/logout", r.handleLogout)
+	r.mux.HandleFunc("/api/admin/devices", r.handleDevices)
 
 	// 媒体库管理接口
 	r.mux.HandleFunc("/api/library/list", r.handleLibraryList)
@@ -366,9 +368,10 @@ func (r *Router) handleAuthStatus(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"logged_in": user.ID > 0,
-		"user":      user,
-		"has_admin": hasAdmin,
+		"logged_in":      user.ID > 0,
+		"user":           user,
+		"has_admin":      hasAdmin,
+		"authentication": auth.AuthenticationMethod(req.Context()),
 	})
 }
 
@@ -460,6 +463,14 @@ func (r *Router) handleAuthLogin(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if cookie, err := req.Cookie(auth.DeviceCookie); err == nil && len(cookie.Value) == 64 {
+		if err = r.authDB.RevokeCredential(req.Context(), "", auth.HashToken(cookie.Value)); err != nil {
+			http.Error(w, "device credential cleanup failed", 503)
+			return
+		}
+		r.webGames.revokeCredential(auth.HashToken(cookie.Value))
+	}
+	clearDeviceCookie(w, req)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "omni_token",
 		Value:    token,
@@ -1162,8 +1173,7 @@ func (r *Router) handleAdminUsers(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// 5.3.2 节：变更等级即时吊销所有已有会话 Token，防权限残留
-		_ = r.authDB.RevokeUserSessions(p.UserID)
+		r.webGames.revokeUser(p.UserID)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

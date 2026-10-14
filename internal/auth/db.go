@@ -84,7 +84,10 @@ func (d *DB) migrate() error {
 	);
 	`
 	_, err := d.db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+	return d.migrateDevices()
 }
 
 // HashToken 计算会话 Token 的 SHA-256 哈希值作为存储键。
@@ -354,8 +357,18 @@ func (d *DB) GetUserBySessionHash(tokenHash string) (*User, error) {
 
 // RevokeUserSessions 废止指定用户的所有活跃会话（用于降权或修改等级时即时生效，第 5.3.2 节）。
 func (d *DB) RevokeUserSessions(userID int64) error {
-	_, err := d.db.Exec("DELETE FROM user_sessions WHERE user_id = ?", userID)
-	return err
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("DELETE FROM user_sessions WHERE user_id=?", userID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("DELETE FROM trusted_devices WHERE user_id=?", userID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SetSectionRequiredLevel 设置分类标签的最低准入等级。
@@ -447,6 +460,9 @@ func (d *DB) UpdateUserLevel(userID int64, level int) error {
 		return err
 	}
 	if _, err := tx.Exec("DELETE FROM user_sessions WHERE user_id=?", userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM trusted_devices WHERE user_id=?", userID); err != nil {
 		return err
 	}
 	return tx.Commit()

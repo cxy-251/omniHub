@@ -11,10 +11,13 @@ import (
 type contextKey string
 
 const (
-	UserContextKey   contextKey = "auth_user"
-	ClientContextKey contextKey = "client_target"
-	WANContextKey    contextKey = "is_wan"
-	LocalContextKey  contextKey = "trusted_local"
+	UserContextKey       contextKey = "auth_user"
+	ClientContextKey     contextKey = "client_target"
+	WANContextKey        contextKey = "is_wan"
+	LocalContextKey      contextKey = "trusted_local"
+	methodContextKey     contextKey = "authentication_method"
+	credentialContextKey contextKey = "credential_hash"
+	deviceContextKey     contextKey = "device_id"
 )
 
 // Middleware 负责在 HTTP 链路中提取会话凭证并注入用户信息。
@@ -36,9 +39,7 @@ func (m *Middleware) IsTrustedLocal(r *http.Request) bool {
 
 // IsLoopbackDirect 判断请求是否为直接本地回环访问（排除 Cloudflare 隧道或外部反代伪装）。
 func IsLoopbackDirect(r *http.Request) bool {
-	if r.Header.Get("CF-Connecting-IP") != "" ||
-		r.Header.Get("X-Forwarded-For") != "" ||
-		r.Header.Get("X-Real-IP") != "" {
+	if hasForwardingHeaders(r) {
 		return false
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -65,7 +66,7 @@ func IsWANRequest(r *http.Request) bool {
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
-		return false
+		return host != "localhost"
 	}
 	return !ip.IsLoopback() && !ip.IsPrivate()
 }
@@ -73,7 +74,10 @@ func IsWANRequest(r *http.Request) bool {
 // Handler 返回 HTTP 鉴权处理中间件。
 func (m *Middleware) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
+		if strings.HasPrefix(r.URL.Path, "/api/auth/") || strings.HasPrefix(r.URL.Path, "/api/admin/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		ctx := context.WithValue(r.Context(), methodContextKey, "guest")
 
 		// 判定客户端类型与公网来源
 		clientTarget := TargetWeb
@@ -107,24 +111,43 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 				http.Error(w, "local administrator unavailable", http.StatusServiceUnavailable)
 				return
 			}
+			ctx = context.WithValue(ctx, methodContextKey, "local")
 			ctx = context.WithValue(ctx, UserContextKey, adminUser)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
-		// 2. 提取 Token (Header Bearer 或 Cookie)
-		token := ""
-		authHeader := r.Header.Get("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			token = strings.TrimPrefix(authHeader, "Bearer ")
-		} else if cookie, err := r.Cookie("omni_token"); err == nil {
-			token = cookie.Value
-		}
-
-		if token != "" {
-			user, err := m.db.GetUserByToken(token)
-			if err == nil && user != nil {
+		// A presented device cookie owns authentication. If revoked, expired or
+		// outside direct RFC1918 LAN, an older normal session cannot rescue it.
+		deviceCookie, deviceCookieErr := r.Cookie(DeviceCookie)
+		if deviceCookieErr == nil {
+			ctx = context.WithValue(ctx, methodContextKey, "device-invalid")
+			if IsDirectLAN(r) && validDeviceToken(deviceCookie.Value) {
+				hash := HashToken(deviceCookie.Value)
+				user, id, err := m.db.TrustedUserByHash(r.Context(), hash)
+				if err != nil {
+					http.Error(w, "device authentication store unavailable", 503)
+					return
+				}
+				if user != nil {
+					ctx = context.WithValue(ctx, UserContextKey, user)
+					ctx = context.WithValue(ctx, methodContextKey, "device")
+					ctx = context.WithValue(ctx, credentialContextKey, hash)
+					ctx = context.WithValue(ctx, deviceContextKey, id)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+		} else if hash := SessionHash(r); hash != "" {
+			user, err := m.db.GetUserBySessionHash(hash)
+			if err != nil {
+				http.Error(w, "session store unavailable", 503)
+				return
+			}
+			if user != nil {
 				ctx = context.WithValue(ctx, UserContextKey, user)
+				ctx = context.WithValue(ctx, methodContextKey, "session")
+				ctx = context.WithValue(ctx, credentialContextKey, hash)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -171,4 +194,36 @@ func IsWANFromContext(ctx context.Context) bool {
 		return v
 	}
 	return false
+}
+
+// SessionHash extracts only a bounded password-session proof, never device cookies.
+func SessionHash(req *http.Request) string {
+	token := ""
+	if value := req.Header.Get("Authorization"); strings.HasPrefix(value, "Bearer ") {
+		token = strings.TrimPrefix(value, "Bearer ")
+	} else if cookie, err := req.Cookie("omni_token"); err == nil {
+		token = cookie.Value
+	}
+	if token == "" || len(token) > 4096 {
+		return ""
+	}
+	return HashToken(token)
+}
+
+// AuthenticationMethod distinguishes local, password-session and remembered LAN identities.
+func AuthenticationMethod(ctx context.Context) string {
+	value, _ := ctx.Value(methodContextKey).(string)
+	return value
+}
+
+// CredentialHash returns the already validated credential identity for scoped resource grants.
+func CredentialHash(ctx context.Context) string {
+	value, _ := ctx.Value(credentialContextKey).(string)
+	return value
+}
+
+// DeviceID returns safe current-device metadata, never its secret token.
+func DeviceID(ctx context.Context) string {
+	value, _ := ctx.Value(deviceContextKey).(string)
+	return value
 }

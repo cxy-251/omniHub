@@ -57,6 +57,7 @@ fs.copyFileSync(path.join(root,'client','desktop','omnihub.desktop'),path.join(d
 fs.writeFileSync(path.join(bin, 'qt.conf'), '[Paths]\nPrefix=..\nLibraries=lib\nPlugins=plugins\nQmlImports=qml\n');
 fs.copyFileSync(path.join(root, 'RUNNING.md'), path.join(directory, 'README.md'));
 fs.copyFileSync(path.join(root, 'features', 'manga', 'README.md'), path.join(directory, 'MANGA_TASKS.md'));
+fs.copyFileSync(path.join(root, 'docs', 'TRUSTED_DEVICES.md'), path.join(directory, 'TRUSTED_DEVICES.md'));
 fs.copyFileSync(path.join(root, 'docs', 'TASKS.md'), path.join(directory, 'TASKS.md'));
 fs.copyFileSync(path.join(root, 'DELIVERY_STATUS.md'), path.join(directory, 'DELIVERY_STATUS.md'));
 const licenseSources = [path.join(qtRuntime, '..', '..', 'share', 'licenses'), path.join(root, '.build', 'qt-deps', 'usr', 'share', 'licenses')];

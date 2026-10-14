@@ -53,7 +53,10 @@ type SectionPermission struct {
 // TrustedDevice 记录通过审核的局域网信任设备（第 8.1 节）。
 type TrustedDevice struct {
 	DeviceName string    `json:"device_name"`
-	TokenHash  string    `json:"token_hash"`
+	ID         string    `json:"id"`
+	UserID     int64     `json:"user_id"`
+	Username   string    `json:"username"`
+	ExpiresAt  time.Time `json:"expires_at"`
 	IP         string    `json:"ip"`
 	CreatedAt  time.Time `json:"created_at"`
 }

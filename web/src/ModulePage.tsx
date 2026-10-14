@@ -14,7 +14,6 @@ type ExistingModule = {
 const loaders = {
   media: async () => { await import('../css/media.css'); return import('../js/media.js'); },
   tools: async () => { await import('../css/tools.css'); return import('../js/tools.js'); },
-  admin: async () => { await import('../css/admin.css'); return import('../js/admin.js'); },
 };
 
 const AudioLibrary = lazy(() => import('./AudioLibrary'));
@@ -22,6 +21,7 @@ const GalleryLibrary = lazy(() => import('./GalleryLibrary'));
 const VideoMatrix = lazy(() => import('./VideoMatrix'));
 const TextLibrary = lazy(() => import('./TextLibrary'));
 const MangaLibrary = lazy(() => import('./MangaLibrary'));
+const AdminPage = lazy(() => import('./AdminPage'));
 const TaskConsole = lazy(() => import('./TaskConsole'));
 const GameLibrary = lazy(() => import('./GameLibrary'));
 
@@ -32,7 +32,7 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
   const [visited, setVisited] = useState<string[]>([]);
   const moduleRef = useRef<ExistingModule | undefined>(undefined);
   useEffect(() => {
-    if (id === 'games' || id === 'tasks') return;
+    if (id === 'games' || id === 'tasks' || id === 'admin') return;
     let disposed = false;
     let module: ExistingModule | undefined;
     const tabChanged = (event: Event) => {
@@ -64,6 +64,7 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
   return <section className="tab-pane active" id={`pane-${id}`}>
     {error ? <p role="alert" className="mb-4 whitespace-pre-wrap text-danger">{error}</p> : null}
     <div id={`${id}-container`} />
+    {id === 'admin' ? <Suspense fallback={<p role="status">正在加载管理页面…</p>}><AdminPage /></Suspense> : null}
     {id === 'tasks' ? <Suspense fallback={<p role="status">正在加载任务台…</p>}><TaskConsole /></Suspense> : null}
     {id === 'games' ? <Suspense fallback={<p role="status">正在加载游戏大厅…</p>}><GameLibrary /></Suspense> : null}
     {id === 'media' && sections.includes('manga') && visited.includes('manga') ? <div hidden={mediaTab !== 'manga'} className="mt-4">

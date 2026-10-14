@@ -17,18 +17,7 @@ import (
 	"strings"
 )
 
-func webSessionHash(req *http.Request) string {
-	token := ""
-	if value := req.Header.Get("Authorization"); strings.HasPrefix(value, "Bearer ") {
-		token = strings.TrimPrefix(value, "Bearer ")
-	} else if cookie, err := req.Cookie("omni_token"); err == nil {
-		token = cookie.Value
-	}
-	if token == "" || len(token) > 4096 {
-		return ""
-	}
-	return auth.HashToken(token)
-}
+func webSessionHash(req *http.Request) string { return auth.CredentialHash(req.Context()) }
 
 func (r *Router) handleWebGameOpen(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
@@ -140,7 +129,7 @@ func (r *Router) handleWebGameOpen(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "web open cancelled", 503)
 		return
 	}
-	grant, err := r.webGames.issue(webGameGrant{libraryID: selected.ID, relative: relative, category: category, sessionHash: sessionHash, userID: user.ID, folder: folder, clientID: input.ClientID})
+	grant, err := r.webGames.issue(webGameGrant{libraryID: selected.ID, relative: relative, category: category, sessionHash: sessionHash, deviceCredential: auth.AuthenticationMethod(req.Context()) == "device", deviceID: auth.DeviceID(req.Context()), userID: user.ID, folder: folder, clientID: input.ClientID})
 	if err != nil {
 		http.Error(w, err.Error(), 503)
 		return
@@ -192,12 +181,23 @@ func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 	}
 	level := auth.LevelGuest
 	if grant.userID > 0 {
-		user, err := r.authDB.GetUserBySessionHash(grant.sessionHash)
+		var user *auth.User
+		var err error
+		if grant.deviceCredential {
+			if !auth.IsDirectLAN(req) {
+				http.Error(w, "remembered device game requires direct LAN", 403)
+				return
+			}
+			user, _, err = r.authDB.TrustedUserByHash(req.Context(), grant.sessionHash)
+		} else {
+			user, err = r.authDB.GetUserBySessionHash(grant.sessionHash)
+		}
 		if err != nil {
 			http.Error(w, "session store unavailable", 503)
 			return
 		}
 		if user == nil || user.ID != grant.userID {
+			r.webGames.revoke(grant.token)
 			http.Error(w, "web game session revoked", 403)
 			return
 		}

@@ -11,6 +11,8 @@ import (
 type webGameGrant struct {
 	token                                      string
 	libraryID, relative, category, sessionHash string
+	deviceCredential                           bool
+	deviceID                                   string
 	clientID                                   string
 	userID                                     int64
 	folder                                     os.FileInfo
@@ -77,3 +79,39 @@ func (g *webGameGrants) revoke(token string) {
 	delete(g.values, token)
 }
 func (g *webGameGrants) close() { g.mu.Lock(); defer g.mu.Unlock(); g.closed = true; clear(g.values) }
+
+// Credential transitions release the corresponding bounded iframe grants too,
+// so revoked tabs do not occupy an account's eight-game admission budget.
+func (g *webGameGrants) revokeCredential(hash string) {
+	if hash == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for token, value := range g.values {
+		if value.sessionHash == hash {
+			delete(g.values, token)
+		}
+	}
+}
+func (g *webGameGrants) revokeDevice(id string) {
+	if id == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for token, value := range g.values {
+		if value.deviceID == id {
+			delete(g.values, token)
+		}
+	}
+}
+func (g *webGameGrants) revokeUser(id int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for token, value := range g.values {
+		if value.userID == id {
+			delete(g.values, token)
+		}
+	}
+}

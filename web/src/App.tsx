@@ -57,7 +57,8 @@ export default function App() {
     <header className="sticky top-0 z-20 flex h-auto min-h-14 flex-wrap items-center justify-between gap-3 border-b border-line bg-panel px-4 py-3 sm:px-6">
       <div className="flex flex-wrap items-center gap-3"><h1 className="text-xl font-semibold text-primary">omniHub</h1><span className="text-sm text-muted">{library}</span></div>
       <div className="flex items-center gap-3"><span className="text-sm text-muted">{status?.user.username ?? '访客'}{status ? ` · Lv.${status.user.level}` : ''}</span>
-        <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => setLoginOpen(!loginOpen)}>登录账号</button></div>
+        <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => setLoginOpen(!loginOpen)}>登录账号</button>
+ {status?.logged_in ? <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => { void post('/api/auth/logout', {}).then(() => window.location.reload()).catch((e: Error) => setError(e.message)); }}>退出登录</button> : null}</div>
     </header>
     <nav className="flex gap-2 overflow-x-auto border-b border-line px-4 py-3 sm:px-6" aria-label="主要导航">
       <button className={navigationStyle(active === 'portal')} onClick={() => setActive('portal')}>门户大厅</button>

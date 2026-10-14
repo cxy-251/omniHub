@@ -204,7 +204,9 @@ func TestLocalCredentialAndClientTargetCannotBeForged(t *testing.T) {
 			req.RemoteAddr = tc.addr
 			req.Header.Set("X-Client-Target", TargetGUI)
 			req.Header.Set("X-Omni-Local-Token", tc.token)
-			req.Header.Set("CF-Connecting-IP", tc.proxy)
+			if tc.proxy != "" {
+				req.Header.Set("CF-Connecting-IP", tc.proxy)
+			}
 			mid.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				u := UserFromContext(r.Context())
 				if tc.trusted {
