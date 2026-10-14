@@ -42,6 +42,9 @@ type Router struct {
 	clipboard     *tools.ClipboardManager
 	taskMgr       *tasks.Manager
 	gameRuns      *games.Manager
+	webGames      *webGameGrants
+	webGameReads  chan struct{}
+	webGameOpens  chan struct{}
 	progressDB    *audio.ProgressDB
 	userState     *userstate.DB
 	megaClient    *mega.Client
@@ -87,6 +90,9 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		clipboard:     tools.NewClipboardManager(50),
 		taskMgr:       tasks.NewManager(),
 		gameRuns:      games.NewManager(),
+		webGames:      newWebGameGrants(),
+		webGameReads:  make(chan struct{}, 16),
+		webGameOpens:  make(chan struct{}, 2),
 		progressDB:    progDB,
 		userState:     readingDB,
 		megaClient:    mega.NewClient("", 5*time.Minute),
@@ -203,6 +209,7 @@ func (r *Router) Close() error {
 	}
 	r.closed = true
 	r.audioMetadata.Close()
+	r.webGames.close()
 	var errs []error
 	for _, db := range r.metaDB {
 		errs = append(errs, db.Close())
@@ -277,6 +284,8 @@ func (r *Router) registerRoutes() {
 
 	// 游戏中心接口（双端过滤）
 	r.mux.HandleFunc("/api/games/list", r.handleGamesList)
+	r.mux.HandleFunc("/api/games/web/open", r.handleWebGameOpen)
+	r.mux.HandleFunc("/game-content/", r.handleWebGameAsset)
 	r.mux.HandleFunc("/api/games/launch", r.handleGameLaunch)
 	r.mux.HandleFunc("/api/games/session", r.handleGameSession)
 	r.mux.HandleFunc("/api/games/stop", r.handleGameStop)
@@ -309,36 +318,9 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/mega/status", r.handleMegaStatus)
 	r.mux.HandleFunc("/api/mega/download", r.handleMegaDownload)
 
-	// Web 游戏静态资源服务（第 4.2 节）
+	// Legacy primary-only paths cannot safely host game scripts in the UI origin.
 	r.mux.HandleFunc("/standalone_games/", func(w http.ResponseWriter, req *http.Request) {
-		primary := r.libMgr.GetPrimary()
-		if primary == nil {
-			http.NotFound(w, req)
-			return
-		}
-		subPath := strings.TrimPrefix(req.URL.Path, "/standalone_games/")
-		parts := strings.Split(subPath, "/")
-		if len(parts) < 2 || (parts[0] != "rpg_games" && parts[0] != "slg_games" && parts[0] != "retro_games" && parts[0] != "flash_games") {
-			http.Error(w, "web game asset not allowed", http.StatusForbidden)
-			return
-		}
-		for _, part := range parts {
-			if part == "" || strings.HasPrefix(part, ".") || strings.EqualFold(part, "save") || strings.EqualFold(part, "saves") || strings.EqualFold(part, "logs") || strings.EqualFold(part, "omni.json") {
-				http.Error(w, "private game asset not allowed", http.StatusForbidden)
-				return
-			}
-		}
-		fullPath, err := r.libMgr.ResolveCategoryPath(primary.ID+":standalone_games/"+subPath, "standalone_games/"+parts[0])
-		if err != nil {
-			http.Error(w, "invalid game asset path", http.StatusBadRequest)
-			return
-		}
-		info, err := os.Stat(fullPath)
-		if err != nil || info.IsDir() {
-			http.NotFound(w, req)
-			return
-		}
-		http.ServeFile(w, req, fullPath)
+		http.Error(w, "open games through the indexed web entry", http.StatusGone)
 	})
 
 	// 嵌入式 Web 根路由静态文件

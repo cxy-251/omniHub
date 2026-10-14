@@ -17,7 +17,7 @@ func (d *DB) ListCatalogPage(ctx context.Context, target, category, after string
 	if d.hasRelDir {
 		relDir = boundedCatalogColumn("rel_dir", 4096)
 	}
-	query := "SELECT " + boundedCatalogColumn("id", 512) + "," + boundedCatalogColumn("name", 4096) + "," + boundedCatalogColumn("category", 32) + ",target," + boundedCatalogColumn("icon", 4096) + ",peak_rss_mb,peak_io_mbps,play_time_sec," + relDir + " FROM games WHERE target=? AND id>?"
+	query := "SELECT " + boundedCatalogColumn("id", 512) + "," + boundedCatalogColumn("name", 4096) + "," + boundedCatalogColumn("category", 32) + ",target," + boundedCatalogColumn("icon", 4096) + ",peak_rss_mb,peak_io_mbps,play_time_sec," + relDir + " FROM games WHERE " + boundedCatalogColumn("target", 16) + "=? AND id>?"
 	arguments := []any{target, after}
 	if category != "" {
 		query += " AND category=?"
@@ -45,5 +45,5 @@ func (d *DB) ListCatalogPage(ctx context.Context, target, category, after string
 }
 
 func boundedCatalogColumn(name string, limit int) string {
-	return fmt.Sprintf("CASE WHEN length(CAST(%s AS BLOB))<=%d THEN %s ELSE NULL END", name, limit, name)
+	return fmt.Sprintf("CASE WHEN octet_length(%s)<=%d THEN %s ELSE NULL END", name, limit, name)
 }

@@ -245,10 +245,11 @@ func (d *DB) GetGame(ctx context.Context, id string) (*Game, error) {
 	}
 	relDir := "''"
 	if d.hasRelDir {
-		relDir = "rel_dir"
+		relDir = boundedCatalogColumn("rel_dir", 4096)
 	}
 	var g Game
-	err := d.db.QueryRowContext(ctx, "SELECT id,name,category,target,icon,exe,args,env,proton_appid,peak_rss_mb,peak_io_mbps,play_time_sec,"+relDir+" FROM games WHERE id=?", id).Scan(&g.ID, &g.Name, &g.Category, &g.Target, &g.Icon, &g.Exe, &g.Args, &g.Env, &g.ProtonAppID, &g.PeakRSSMB, &g.PeakIOMBps, &g.PlayTimeSec, &g.RelDir)
+	columns := []string{boundedCatalogColumn("id", 512), boundedCatalogColumn("name", 4096), boundedCatalogColumn("category", 32), boundedCatalogColumn("target", 16), boundedCatalogColumn("icon", 4096), boundedCatalogColumn("exe", 4096), boundedCatalogColumn("args", 32<<10), boundedCatalogColumn("env", 32<<10), boundedCatalogColumn("proton_appid", 128), "peak_rss_mb", "peak_io_mbps", "play_time_sec", relDir}
+	err := d.db.QueryRowContext(ctx, "SELECT "+strings.Join(columns, ",")+" FROM games WHERE id=?", id).Scan(&g.ID, &g.Name, &g.Category, &g.Target, &g.Icon, &g.Exe, &g.Args, &g.Env, &g.ProtonAppID, &g.PeakRSSMB, &g.PeakIOMBps, &g.PlayTimeSec, &g.RelDir)
 	if err != nil {
 		return nil, err
 	}

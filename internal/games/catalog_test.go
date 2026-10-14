@@ -26,6 +26,9 @@ func TestCatalogOmitsLaunchFieldsAndRejectsOversizedDisplayData(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].Args != "" || list[0].Env != "" {
 		t.Fatalf("catalog loaded launch-only fields: %+v %v", list, err)
 	}
+	if _, err := db.GetGame(context.Background(), "001"); err == nil {
+		t.Fatal("single-record launch lookup loaded oversized argument fields")
+	}
 	if _, err := db.db.Exec("UPDATE games SET name=?", strings.Repeat("中", 2000)); err != nil {
 		t.Fatal(err)
 	}

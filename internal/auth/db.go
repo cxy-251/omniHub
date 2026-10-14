@@ -320,7 +320,15 @@ func (d *DB) CreateSession(userID int64, token string, duration time.Duration) e
 
 // GetUserByToken 根据 Token 查询对应用户信息并校验过期状态。
 func (d *DB) GetUserByToken(token string) (*User, error) {
-	tokenHash := HashToken(token)
+	return d.GetUserBySessionHash(HashToken(token))
+}
+
+// GetUserBySessionHash validates a retained session identity without retaining
+// its plaintext token; revocation, expiry and disabled accounts remain effective.
+func (d *DB) GetUserBySessionHash(tokenHash string) (*User, error) {
+	if len(tokenHash) != 64 {
+		return nil, errors.New("invalid session hash")
+	}
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 
 	var u User

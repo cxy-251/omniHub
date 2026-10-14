@@ -100,8 +100,18 @@ func TestOwnedGroupCleansInheritedOutputDescendant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := assertChildInactive(pid); err != nil {
-		t.Fatal(err)
+	// Closing the inherited pipe can precede the kernel's final exited state.
+	// Observe bounded completion rather than assuming SIGKILL is synchronous.
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := assertChildInactive(pid)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if err := group.Wait(nil); err != nil {
 		t.Fatal("repeated wait changed completion")

@@ -141,3 +141,15 @@ Qt GameLauncher 移除 ionice/startDetached、空格拆参及客户端 exe 输�
 必要验证：多库主副本/去重后第二页、显式库/无主库、分类停用与恶意分页/target、索引字节不变及不存在索引不创建通过；缺陷索引超长显示字段拒绝，启动字段不加载，取消查询通过。增加可选原生网络检查 target，Go 侧生成隔离服务和真实复制的子进程，实际 Qt 控制器读取 24+2 两页、返回第一页、按所选库启动、等待真实准备文件、停止/观察退出，输出 GAME_CHECK_OK 且 Go 检查无活动游戏；普通 Go 测试不依赖 Qt。Linux Qt Release 完整编译通过，完整 Main.qml 的原生切页/播放器释放/暂停恢复检查通过。该检查仍显示 Qt/驱动私有内存未充分让出，未把临时 malloc_trim 实验加入产品。Go 全套及 Windows amd64/macOS arm64 服务编译通过；Qt 跨系统运行未验收。未使用浏览器或插件。
 
 继续原范围：Web 游戏页尚需 React/TypeScript 分页及真实库路径运行器迁移，现有旧 JS 仍假定全量列表/编号目录；原生游戏完整窗口资源让出、商业游戏/Wine/Proton 驱动、统计/引擎存档隔离与配置 SC2 尚待实现，不能把本阶段控制器联调当作游戏中心全部完成。
+
+2026-10-14 Web 游戏入口与资源隔离阶段：游戏大厅迁到 React/TypeScript/Tailwind，按分类每页 24 条，不保留全量列表；请求按 library_id/id 创建唯一游戏目录的临时读取授权，退出/换模块取消打开请求、卸载 iframe，以 keepalive 释放授权。浏览器 tab 标识稳定，用 getRandomValues 支持 LAN HTTP；同账号/同 tab 的重开替换旧授权，避免迟到或丢失回复积累。授权总量 64、每账号（含共用访客身份）八个、最长 24 小时，只存内存和会话哈希，不留闲置文件句柄、清理定时器或磁盘写入；入口读取最多两个并发，资源流最多 16 个，超限明确返回错误。
+
+新增 POST /api/games/web/open 和 /game-content/{token}/：只读单条索引，按实际目录/旧编号解析；HTML 入口取配置或 root/www index，ROM/SWF 配置优先，否则必须只有一个候选，拒绝悄悄猜测多载荷。资源每次复核授权、原登录会话与账号状态/等级、分类停用、库与目录身份；只开放公开常规文件，逐组件拒绝链接、越界、存档/日志/隐藏内容和 omni.json。HTML 以不含 allow-same-origin 的 CSP sandbox 运行，CORS 只服务有限授权资源；无 referrer，不能读取父界面或管理 API。DELETE 的授权释放不依赖旧账号 cookie，仍遵循统一同源状态变更检查。旧主库猜目录资源入口返回 Gone，移除旧 innerHTML/onclick 游戏模块、无用 CSS 及未使用的吞异常 RPG polyfill。
+
+Flash/Retro 运行器入口也改为独立 TypeScript/Vite 构建，嵌入 dist；输入只接受同服务临时游戏 URL，错误与加载超时明确显示。包资源还未接入，所以不把入口存在称为 Flash/ROM 已运行。只读检查确认参考 omni-deck 已有离线 Ruffle/EmulatorJS，未修改或复制参考库资产。本阶段新增 SQL 字节长度检查至单游戏读取，使用 octet_length，在传入 Go 扫描前拒绝超长字段；列表仍不读取启动参数/环境。该预算不等于整个 SQLite/进程 RSS 的硬上限。
+
+验证：两库相同编号/不同实际资源、嵌套相对文件、授权替换/关闭/过期/容量与账号配额、两类并发槽、原登录撤销、分类停用、私有目录/链接、索引字节不变、非法/多载荷及超长启动字段测试通过。提前告知后使用 Applications 已有 Chrome 与项目内隔离 profile，经实际 React 界面打开小 HTML fixture；真实 Web 登录账号、opaque origin=null、所属库相对 XHR、父界面和管理 API 拒绝、离开后 iframe 消失/原授权 403，未处理异常为零。截图/结果在 .test-tmp/web-game，profile 已清理；可选 CDP 检查代码提交，普通 Go 测试不启动 Chrome，未使用插件或 Playwright。pnpm 构建、Go 全套及 Windows amd64/macOS arm64 服务编译通过。
+
+最后全套测试暴露旧进程测试的时序假设：继承输出 EOF 可以早于内核最终退出状态；清理没有返回错误，fixture 原定睡眠一分钟，但约 110ms 内输出已关闭。测试改为一秒内观察实际不活跃状态，不改清理实现；连续 20 次关键检查及全套通过。这不是绕过仍活动进程的验证。
+
+下一阶段优先接通真实索引流程：目前 ScanGames 没有正式调用方，空库不会自建游戏索引；须提供初始化/刷新和增量更新，兼顾只读库及闲置 I/O。随后接入离线运行时并验收真实 ROM/SWF/RPG/SLG、图形/浏览器存储/NW.js 兼容、账号存档与时长；Qt/Wine/Proton、完整游戏资源让出及其他架构功能仍继续完成，不以此小 HTML 隔离检查代替全部游戏功能。
