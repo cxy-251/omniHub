@@ -55,7 +55,7 @@ NativeLifecycle::NativeLifecycle(bool restore, QObject *parent) : QObject(parent
     const auto state = document.object();
     const double position = state.value("position").toDouble(-1);
     const double page = state.value("page").toDouble(-1);
-    if (!state.value("source").isString() || state.value("source").toString().size() > 8192 || !state.value("paused").isBool() || !state.value("position").isDouble() || !std::isfinite(position) || position < 0 || position > 31536000 || !state.value("page").isDouble() || !std::isfinite(page) || page < 0 || page > 2 || std::floor(page) != page || !validPlaylist(state.toVariantMap())) { m_error = "原生界面恢复字段无效"; return; }
+    if (!state.value("source").isString() || state.value("source").toString().size() > 8192 || !state.value("paused").isBool() || !state.value("position").isDouble() || !std::isfinite(position) || position < 0 || position > 31536000 || !state.value("page").isDouble() || !std::isfinite(page) || page < 0 || page > 3 || std::floor(page) != page || !validPlaylist(state.toVariantMap())) { m_error = "原生界面恢复字段无效"; return; }
     m_restored = document.object().toVariantMap();
 }
 
@@ -64,7 +64,7 @@ bool NativeLifecycle::yieldToGame(const QString &sessionId, const QVariantMap &s
     const QString source = state.value("source").toString();
     const double position = state.value("position").toDouble();
     const int page = state.value("page").toInt();
-    if (!validSession(sessionId) || source.size() > 8192 || !std::isfinite(position) || position < 0 || position > 31536000 || page < 0 || page > 2 || !validPlaylist(state)) return fail("游戏或恢复状态无效");
+    if (!validSession(sessionId) || source.size() > 8192 || !std::isfinite(position) || position < 0 || position > 31536000 || page < 0 || page > 3 || !validPlaylist(state)) return fail("游戏或恢复状态无效");
     const QString directory = BackendApi::configurationDirectory();
     if (!QDir().mkpath(directory)) return fail("无法准备界面状态目录");
     auto lock = std::make_unique<QLockFile>(QDir(directory).filePath("native-yield.lock"));

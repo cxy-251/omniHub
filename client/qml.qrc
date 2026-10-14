@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/">
         <file>qml/Main.qml</file>
+        <file>qml/TextLibraryView.qml</file>
         <file>qml/ExternalPlayerWindow.qml</file>
         <file>qml/PlayerView.qml</file>
         <file>qml/GameLauncherView.qml</file>

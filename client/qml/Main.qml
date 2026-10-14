@@ -10,7 +10,10 @@ Window {
     visible: true
     title: "omniHub Native Client"
     color: "#0d1117"
-    onClosing: { if (typeof nativeResume !== "undefined") nativeResume.flush() }
+    onClosing: {
+        if (typeof nativeResume !== "undefined") nativeResume.flush()
+        if (textLoader.item) textLoader.item.flush()
+    }
     property var lifecycle: typeof nativeLifecycle === "undefined" ? null : nativeLifecycle
     property var restoredUI: lifecycle ? lifecycle.restored : ({})
     property string savedMediaSource: restoredUI.source || initialExternalFile
@@ -111,6 +114,7 @@ Window {
                     highlighted: stack.currentIndex === 2
                     onClicked: { mainWindow.selectPage(2); backendApi.refreshLibraries() }
                 }
+                Button { text: "文本阅读"; highlighted: stack.currentIndex === 3; onClicked: mainWindow.selectPage(3) }
             }
         }
 
@@ -140,6 +144,7 @@ Window {
                 active: stack.currentIndex === 2
                 sourceComponent: Component { LibraryView { } }
             }
+            Loader { id: textLoader; active: stack.currentIndex === 3; sourceComponent: Component { TextLibraryView { } } }
         }
     }
 }

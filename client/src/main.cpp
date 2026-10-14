@@ -14,6 +14,7 @@
 #include "player/media_queue.h"
 #include "player/native_resume.h"
 #include "host/external_router.h"
+#include "readers/text_reader.h"
 
 int main(int argc, char *argv[])
 {
@@ -46,6 +47,7 @@ int main(int argc, char *argv[])
     qmlRegisterType<MpvItem>("omniHub.Media", 1, 0, "MpvItem");
     qmlRegisterType<GameLauncher>("omniHub.Games", 1, 0, "GameLauncher");
     qmlRegisterType<MediaQueue>("omniHub.Media", 1, 0, "MediaQueue");
+    qmlRegisterType<TextReader>("omniHub.Readers", 1, 0, "TextReader");
 
     int result = 0;
     {

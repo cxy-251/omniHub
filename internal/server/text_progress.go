@@ -88,5 +88,5 @@ func (r *Router) handleTextProgress(w http.ResponseWriter, req *http.Request) {
 	if p != nil && (p.FileVersion != version || p.ByteOffset > info.Size()) {
 		p = nil
 	}
-	writeJSON(w, 200, map[string]any{"position": p, "can_save": true, "file_version": version})
+	writeJSON(w, 200, map[string]any{"position": p, "can_save": true, "file_version": version, "account_id": user.ID})
 }

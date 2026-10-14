@@ -229,3 +229,9 @@ Flash/Retro 运行器入口也改为独立 TypeScript/Vite 构建，嵌入 dist�
 主/外部各用独立 MPRIS 名称，避免覆盖主播放控制；窗口仍复用有界列表与账号断点组件。提供 Linux omnihub.desktop/MIME 模板及安装 wrapper，包中生成 omnihub-client 入口，wrapper 解析自身文件链接，支持用户 PATH 链接而不误定位依赖目录。未自动安装到系统目录或改变默认播放器，实际桌面关联/窗口置顶/Windows/macOS 文件事件仍待验收；默认用户配置下一外部窗口，隔离测试配置使用各自命名空间，不宣称跨用户共享播放器。
 
 必要验证实际完整主界面正在解码，另启外部窗口，下一调用转发后退出，主界面 owner/轨道/Playing 全保持，外部 owner 不变且读到新源；无效路径拒绝且原外部窗口存活，正常分别关闭。私有 dbus-run-session 输出 EXTERNAL_SINGLE_WINDOW_ROUTING_AND_HUB_ISOLATION_OK，外部实际 MPRIS 控制回归通过；Linux Qt Release 与 desktop-file-validate 通过。本阶段没有浏览器或插件，不重复无关联 Go 全套。剩余原生媒体模块、内存/平台/引擎/存档/下载等完整目标继续实现。
+
+2026-10-15 原生文本首阶段：Qt 第四页接入多库书架（24 项）、TXT/Markdown/RST 源文本分块阅读（80 行/2MiB，布局最多 16Ki UTF-16 字符）、256 块历史和从头阅读。连续空行按原顺序保留，布局边界避免切开代理对；退出/切页取消在途读取并释放模型，迟到响应先判断代次再读取，避免取消后的设备访问。正文/字段容量校验与 GUI 请求禁止重定向沿用同一边界。
+
+分块进度按账号/文件版本保存，GET 返回账号标识，Qt POST 附账号保护头防止迟到写入其他账号；500ms 合并一次在途/一份待写快照，空闲无扫描/写入，关闭主窗口在事件循环退出前最多排空一秒。保存游标是物理块开头，长行屏内位置/滚动尚不持久化；故障明确显示，不宣称离线写入成功。重开后只有当前会话导航历史，从头按钮提供返回书首。EPUB 与结构化文本排版仍在后续范围，不能把源文本主链路称为整个统一阅读器完成。
+
+必要验证：Linux Qt Release；真实服务/只读库、26 项分页、真实 QML 窗口宽度/图像与文本、空行与跨 16Ki emoji、第二个独立 Qt 进程恢复第 81 行，输出 TEXT_PAGES_UNICODE_AND_SAVE_OK / TEXT_CURSOR_RESTORED；完整 Main.qml 切入文本/切出销毁检查 TEXT_LOADER_CREATE_AND_RELEASE_OK。未使用浏览器或插件。整体架构目标继续实现。

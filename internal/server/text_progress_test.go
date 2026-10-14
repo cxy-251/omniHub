@@ -75,12 +75,13 @@ func TestTextPositionReadOnlyAccountAndRevisionBoundaries(t *testing.T) {
 		return request("GET", "/api/media/text/progress?document_id="+url.QueryEscape(key), nil, other)
 	}
 	var response struct {
-		Position *userstate.TextPosition `json:"position"`
-		Version  string                  `json:"file_version"`
-		CanSave  bool                    `json:"can_save"`
+		Position  *userstate.TextPosition `json:"position"`
+		Version   string                  `json:"file_version"`
+		AccountID int64                   `json:"account_id"`
+		CanSave   bool                    `json:"can_save"`
 	}
 	w := get(false)
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || !response.CanSave || response.Version == "" || response.Position != nil {
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || !response.CanSave || response.AccountID != owner.ID || response.Version == "" || response.Position != nil {
 		t.Fatalf("initial position: %d %s", w.Code, w.Body.String())
 	}
 	position := userstate.TextPosition{DocumentID: key, StartLine: 2, ByteOffset: 4, FileVersion: response.Version}

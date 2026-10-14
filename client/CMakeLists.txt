@@ -42,6 +42,8 @@ endif()
 
 set(SOURCES
     src/main.cpp
+    src/readers/text_reader.cpp
+    src/readers/text_reader.h
     src/host/external_router.cpp
     src/host/external_router.h
     src/backend_api.cpp
@@ -123,4 +125,12 @@ if(OMNIHUB_BUILD_PLAYER_CHECK)
     target_link_libraries(omnihub_player_check PRIVATE
         Qt6::Core Qt6::Gui Qt6::Quick Qt6::OpenGL ${MPV_TARGET}
     )
+endif()
+
+option(OMNIHUB_BUILD_TEXT_CHECK "Build the real service-backed text reader check" OFF)
+if(OMNIHUB_BUILD_TEXT_CHECK)
+    qt_add_executable(omnihub_text_check tests/text_check.cpp qml.qrc
+        src/readers/text_reader.cpp src/readers/text_reader.h src/backend_api.cpp src/backend_api.h)
+    target_include_directories(omnihub_text_check PRIVATE src)
+    target_link_libraries(omnihub_text_check PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network)
 endif()

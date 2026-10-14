@@ -118,3 +118,15 @@ dbus-run-session -- node scripts/check-external-player.mjs "$TAGGED_VIDEO" "$SEC
 ```
 
 在项目内使用带 Fixture title 标签的八秒媒体及另一个文件，提供 SDK 环境。检查真实主界面从隔离快照开始播放、另一个外部窗口播放，第二次命令行调用成功转发并退出；外部 D-Bus owner 不变、主 owner/轨道/Playing 不变，无效文件拒绝且不破坏原实例，正常关闭两窗口。输出 EXTERNAL_SINGLE_WINDOW_ROUTING_AND_HUB_ISOLATION_OK 才通过。独立私有总线，不接用户桌面、不使用浏览器或插件。MPRIS 检查现定位 org.mpris.MediaPlayer2.omnihub.external，主界面仍使用标准基础名称。
+
+## 原生文本阅读检查
+
+配置 `-DOMNIHUB_BUILD_TEXT_CHECK=ON` 并构建 `omnihub_text_check`。使用现有 Qt/QML 运行环境（可设置 QT_QPA_PLATFORM=offscreen、QT_QUICK_BACKEND=software），运行：
+
+```sh
+TMPDIR="$PWD/.test-tmp" \
+OMNIHUB_QT_TEXT_CHECK="$PWD/.build/qt-native/omnihub_text_check" \
+go test ./internal/server -run '^(TestNativeTextAcrossQtProcesses|TestTextPositionReadOnlyAccountAndRevisionBoundaries)$' -v -count=1
+```
+
+该可选检查在项目隔离目录创建 26 本书、只读挂载与实际服务，加载真正 TextLibraryView 到 Qt 窗口，验证分页/有界布局、连续空行、跨界 emoji、真实 QML 内容/窗口图像和两次独立进程之间的分块断点。普通 Go 测试没有 Qt 前置要求。
