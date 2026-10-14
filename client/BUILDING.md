@@ -30,3 +30,18 @@ cmake --build .build/client --target omnihub_player_check --parallel 2
 ```
 
 测试视频需至少八秒，含有不同颜色的真实画面；测试目录与截图路径均应在项目内。测试创建一个 320×240 窗口，检查有效像素、进度及渲染器重建，并正常释放资源。无显示窗口验证可使用 Qt 的 `offscreen` 平台，但它默认的软件后端不支持 FBO：需要同时指定 `QT_QUICK_BACKEND=rhi`、`QSG_RHI_BACKEND=opengl` 和 `QT_QPA_PLATFORM=offscreen`，以及本机 Qt 插件/运行库路径。软件后端应显示明确错误并退出测试，而非空指针崩溃。
+
+## 原生游戏服务联调
+
+可选检查使用真实 Qt 网络控制器与 Go 测试在项目临时目录生成的资源库/子进程，不需要浏览器、插件或 QtTest：
+
+```sh
+cmake -S client -B .build/client -DOMNIHUB_BUILD_GAME_CHECK=ON
+cmake --build .build/client --target omnihub_game_check --parallel 2
+mkdir -p .test-tmp
+OMNIHUB_QT_GAME_CHECK="$PWD/.build/client/omnihub_game_check" \
+  TMPDIR="$PWD/.test-tmp" \
+  go test ./internal/server -run '^TestIndexedLaunchUsesOwningLibraryAndHostMetadata$' -count=1 -v
+```
+
+动态 SDK 的运行库路径由本机环境提供。检查验证两页清单、库/游戏标识、真实子进程启动及准备文件、会话停止和实际退出；只有输出 `GAME_CHECK_OK` 且 Go 端确认准备文件/无活动游戏才通过。普通 Go 全套测试不依赖 Qt。该检查不代表商业游戏、Wine/Proton、完整游戏期间内存让出或跨系统 Qt 运行已完成。

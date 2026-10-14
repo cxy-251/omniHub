@@ -58,7 +58,6 @@ type Router struct {
 	metaDB    map[string]*gallery.MetaDB
 	svStorage map[string]*shortvideo.Storage
 	mangaDB   map[string]*manga.DB
-	gamesDB   map[string]*games.DB
 }
 
 // NewRouter 创建路由分发器实例。
@@ -82,7 +81,6 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		metaDB:        make(map[string]*gallery.MetaDB),
 		svStorage:     make(map[string]*shortvideo.Storage),
 		mangaDB:       make(map[string]*manga.DB),
-		gamesDB:       make(map[string]*games.DB),
 		libMgr:        libMgr,
 		authDB:        authDB,
 		authMid:       auth.NewMiddleware(authDB, localToken),
@@ -191,35 +189,7 @@ func (r *Router) getMangaDBMode(root string, readOnly bool) (*manga.DB, error) {
 	return mDB, nil
 }
 
-func (r *Router) getGamesDB(root string) (*games.DB, error) {
-	r.dbMu.Lock()
-	defer r.dbMu.Unlock()
-	if r.closed {
-		return nil, errors.New("router is closed")
-	}
-	readOnly := r.libMgr.IsReadOnly(root)
-	key := fmt.Sprintf("%s:%t", root, readOnly)
-	if db := r.gamesDB[key]; db != nil {
-		return db, nil
-	}
-	gamesDir, err := r.gameStorageDirectory(root)
-	if err != nil {
-		return nil, err
-	}
-	open := games.OpenDB
-	if readOnly {
-		open = games.OpenDBReadOnly
-	}
-
-	gdb, err := open(gamesDir)
-	if err != nil {
-		return nil, err
-	}
-	r.gamesDB[key] = gdb
-	return gdb, nil
-}
-
-// CanReconfigure 返回是否没有运行中的资源任务，供生命周期控制器切换配置前检查。
+// CanReconfigure requires all owned task and game processes to have exited.
 func (r *Router) CanReconfigure() bool {
 	return !r.taskMgr.HasRunningTasks() && !r.gameRuns.HasRunning()
 }
@@ -241,9 +211,6 @@ func (r *Router) Close() error {
 		errs = append(errs, db.Close())
 	}
 	for _, db := range r.mangaDB {
-		errs = append(errs, db.Close())
-	}
-	for _, db := range r.gamesDB {
 		errs = append(errs, db.Close())
 	}
 	errs = append(errs, r.progressDB.Close(), r.userState.Close(), r.taskMgr.Close(), r.gameRuns.Close(), r.mangaReaders.Close())
@@ -1045,40 +1012,14 @@ func (r *Router) handleMangaPage(w http.ResponseWriter, req *http.Request) {
 // --- 游戏专区 ---
 
 func (r *Router) handleGamesList(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
 	if !r.checkSectionAccess(w, req, "games", auth.TargetAll) {
 		return
 	}
-
-	primary := r.libMgr.GetPrimary()
-	if primary == nil {
-		writeJSON(w, http.StatusOK, []interface{}{})
-		return
-	}
-	gdb, err := r.getGamesDB(primary.RootPath)
-	if err != nil {
-		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
-		return
-	}
-
-	// 双端物理隔离（第 4.2 节、第 5.2.2 节）：基于客户端标头强制约束，禁止客户端 query 篡改
-	clientTarget := auth.ClientFromContext(req.Context())
-	target := "web_only"
-	if clientTarget == auth.TargetGUI {
-		target = "gui_only"
-	}
-
-	list, err := gdb.ListGames(target)
-	if err != nil {
-		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	visible := make([]*games.Game, 0, len(list))
-	for _, game := range list {
-		if !r.libMgr.IsCategoryDisabled("standalone_games/" + game.Category + "_games") {
-			visible = append(visible, game)
-		}
-	}
-	writeJSON(w, http.StatusOK, visible)
+	r.listGameLibraries(w, req)
 }
 
 // --- 任务调试台 ---

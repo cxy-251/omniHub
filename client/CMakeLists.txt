@@ -11,6 +11,16 @@ find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Quick Qml Network OpenGL)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Qt6 6.6 REQUIRED COMPONENTS DBus)
 endif()
+
+option(OMNIHUB_BUILD_GAME_CHECK "Build the native game service integration check" OFF)
+if(OMNIHUB_BUILD_GAME_CHECK)
+    qt_add_executable(omnihub_game_check
+        tests/game_check.cpp src/games/game_launcher.cpp src/games/game_launcher.h
+        src/backend_api.cpp src/backend_api.h
+    )
+    target_include_directories(omnihub_game_check PRIVATE src src/games)
+    target_link_libraries(omnihub_game_check PRIVATE Qt6::Core Qt6::Network)
+endif()
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(MPV QUIET IMPORTED_TARGET mpv)

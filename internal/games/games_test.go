@@ -1,6 +1,7 @@
 package games
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +13,11 @@ func TestGamesDBAndFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open games db: %v", err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 
 	// 1. 插入独立大作 (gui_only)
 	gameGUI := &Game{
@@ -39,7 +44,7 @@ func TestGamesDBAndFiltering(t *testing.T) {
 	}
 
 	// 3. 过滤查询 gui_only 游戏
-	guiList, err := db.ListGames("gui_only")
+	guiList, err := db.ListCatalogPage(context.Background(), "gui_only", "", "", 100)
 	if err != nil {
 		t.Fatalf("failed to list gui games: %v", err)
 	}
@@ -48,7 +53,7 @@ func TestGamesDBAndFiltering(t *testing.T) {
 	}
 
 	// 4. 过滤查询 web_only 游戏
-	webList, err := db.ListGames("web_only")
+	webList, err := db.ListCatalogPage(context.Background(), "web_only", "", "", 100)
 	if err != nil {
 		t.Fatalf("failed to list web games: %v", err)
 	}
@@ -60,7 +65,10 @@ func TestGamesDBAndFiltering(t *testing.T) {
 	if err := db.UpdateHardwareProfile("001", 1024, 50, 3600); err != nil {
 		t.Fatalf("failed to update hardware profile: %v", err)
 	}
-	games, _ := db.ListGames("gui_only")
+	games, err := db.ListCatalogPage(context.Background(), "gui_only", "", "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if games[0].PeakRSSMB != 1024 || games[0].PlayTimeSec != 3600 {
 		t.Errorf("unexpected updated profile: %+v", games[0])
 	}

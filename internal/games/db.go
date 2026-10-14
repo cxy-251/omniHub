@@ -155,7 +155,7 @@ func ValidateIndexGame(g *Game) error {
 	if g == nil || g.ID == "" || g.Name == "" || len(g.ID) > 512 || len(g.Name) > 4096 {
 		return errors.New("game id and name cannot be empty")
 	}
-	if !validCategory(g.Category) || (g.Target != "gui_only" && g.Target != "web_only") {
+	if !ValidCategory(g.Category) || (g.Target != "gui_only" && g.Target != "web_only") {
 		return errors.New("invalid game category or target")
 	}
 	if len(g.RelDir) > 4096 || len(g.Exe) > 4096 || len(g.Icon) > 4096 || len(g.ProtonAppID) > 128 || len(g.Args)+len(g.Env) > 32<<10 {
@@ -235,44 +235,6 @@ func (d *DB) RecordUserPlayTime(userID int64, gameID string, durationSec int64) 
 		userID, gameID, durationSec, nowStr,
 	)
 	return err
-}
-
-// ListGames 按照端目标（gui_only / web_only）过滤查询游戏清单（第 4.2 节）。
-func (d *DB) ListGames(target string) (result []*Game, resultErr error) {
-	relDir := "''"
-	if d.hasRelDir {
-		relDir = "rel_dir"
-	}
-	query := "SELECT id, name, category, target, icon, exe, args, env, proton_appid, peak_rss_mb, peak_io_mbps, play_time_sec, " + relDir + " FROM games"
-	var rows *sql.Rows
-	var err error
-
-	if target != "" {
-		query += " WHERE target = ? ORDER BY id ASC"
-		rows, err = d.db.Query(query, target)
-	} else {
-		query += " ORDER BY id ASC"
-		rows, err = d.db.Query(query)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
-
-	var games []*Game
-	for rows.Next() {
-		var g Game
-		if err := rows.Scan(
-			&g.ID, &g.Name, &g.Category, &g.Target, &g.Icon, &g.Exe, &g.Args,
-			&g.Env, &g.ProtonAppID, &g.PeakRSSMB, &g.PeakIOMBps, &g.PlayTimeSec, &g.RelDir,
-		); err != nil {
-			return nil, err
-		}
-		games = append(games, &g)
-	}
-
-	return games, rows.Err()
 }
 
 // GetGame reads one index record without loading the full catalog. Legacy

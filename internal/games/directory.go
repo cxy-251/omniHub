@@ -13,7 +13,8 @@ import (
 
 var gameFolderPrefix = regexp.MustCompile(`^(\d+)[\s\-_]+(.*)$`)
 
-func validCategory(category string) bool {
+// ValidCategory checks a bounded portable category identifier, including 3ds.
+func ValidCategory(category string) bool {
 	if category == "" || len(category) > 32 {
 		return false
 	}
@@ -39,7 +40,7 @@ func FolderIdentity(name string) (string, string) {
 // 20,000 immediate category entries for an old prefix ID. It never guesses from
 // a display title, follows category/game links, or updates the database.
 func ResolveIndexedDirectory(ctx context.Context, gamesDir string, game *Game) (result string, resultErr error) {
-	if game == nil || game.ID == "" || len(game.ID) > 512 || !validCategory(game.Category) {
+	if game == nil || game.ID == "" || len(game.ID) > 512 || !ValidCategory(game.Category) {
 		return "", errors.New("invalid game directory identity")
 	}
 	if err := ctx.Err(); err != nil {

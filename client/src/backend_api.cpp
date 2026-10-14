@@ -28,7 +28,12 @@ QNetworkRequest BackendApi::localRequest(const QString &path) {
     // A changed local file must never forward the privileged token to a remote URL.
     if (url.scheme() != "http" || (url.host() != "127.0.0.1" && url.host() != "::1") ||
         !path.startsWith("/api/")) return QNetworkRequest();
-    url.setPath(path);
+    // Keep query parameters separate: setPath("/api/list?offset=24") would
+    // encode '?' into the path and silently break pagination/session lookup.
+    const QUrl relative(path);
+    url.setPath(relative.path());
+    url.setQuery(relative.query(QUrl::FullyEncoded));
+    url.setFragment(QString());
     QNetworkRequest request(url);
     request.setRawHeader("X-Omni-Local-Token", info.value("token").toString().toUtf8());
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");

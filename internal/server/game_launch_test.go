@@ -167,6 +167,7 @@ func TestIndexedLaunchUsesOwningLibraryAndHostMetadata(t *testing.T) {
 	if err != nil || finished.State != "exited" {
 		t.Fatalf("managed cleanup failed: %+v %v", finished, err)
 	}
+	checkQtGameController(t, router, lib.ID, root, observedPath)
 	manager.SetCategoryDisabled("standalone_games/godot_games", true)
 	if w := request("/api/games/launch", payload, "native-token"); w.Code != 403 {
 		t.Fatalf("disabled category launched: %d %s", w.Code, w.Body.String())
