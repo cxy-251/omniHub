@@ -79,6 +79,7 @@ Rectangle {
             }
         }
         GridView {
+            WheelScroll { }
             id: mapGrid
             Layout.fillWidth: true
             Layout.fillHeight: true

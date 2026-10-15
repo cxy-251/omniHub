@@ -100,6 +100,7 @@ Item {
         }
         // 第二行：博主（横向滚动）
         ListView {
+            WheelScroll { horizontal: true }
             Layout.fillWidth: true
             Layout.preferredHeight: 28
             orientation: ListView.Horizontal
@@ -115,6 +116,7 @@ Item {
         }
 
         GridView {
+            WheelScroll { }
             id: grid
             Layout.fillWidth: true
             Layout.fillHeight: true

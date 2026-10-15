@@ -140,6 +140,7 @@ Item {
             Layout.fillHeight: true
             spacing: 8
             GridView {
+                WheelScroll { }
                 id: grid
                 Layout.fillWidth: true
                 Layout.fillHeight: true

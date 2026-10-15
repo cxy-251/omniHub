@@ -83,6 +83,7 @@ Item {
         // 瀑布流：每张照片放进当前最矮的一列，纵坐标随序号单调不减，可二分查找可视范围。
         // 只创建可视区上下各一屏内的格子；pool 个格子按 序号 mod pool 复用，滚动时只换进出边界的那几张。
         Flickable {
+            WheelScroll { }
             id: masonry
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -204,14 +205,14 @@ Item {
                 }
                 // 先显示缩略图，原图到达后覆盖，翻页不会出现空白。
                 Image {
-                    anchors.fill: parent; anchors.bottomMargin: 56
+                    anchors.fill: parent
                     fillMode: Image.PreserveAspectFit
                     source: viewer.photo ? view.apiQuery("/api/media/gallery/thumbnail", viewer.photo) : ""
                     visible: original.status !== Image.Ready
                 }
                 Image {
                     id: original
-                    anchors.fill: parent; anchors.bottomMargin: 56
+                    anchors.fill: parent
                     fillMode: Image.PreserveAspectFit
                     asynchronous: true
                     cache: false
@@ -220,16 +221,30 @@ Item {
                     source: viewer.originalSource
                 }
                 TapHandler { onTapped: function (point) { viewer.step(point.position.x < viewer.width / 3 ? -1 : 1) } }
-                RowLayout {
-                    anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 8
-                    Button { text: "返回"; onClicked: view.openIndex = -1 }
-                    Button { text: "上一张"; enabled: view.openIndex > 0; onClicked: viewer.step(-1) }
-                    Button { text: "下一张"; enabled: view.openIndex < paged.total - 1; onClicked: viewer.step(1) }
-                    Label {
-                        Layout.fillWidth: true; color: "white"; elide: Text.ElideRight
-                        text: (view.openIndex + 1) + " / " + paged.total + (viewer.photo ? "  ·  " + viewer.photo.filename + "  " + viewer.photo.width + "×" + viewer.photo.height : "")
+                // 底部渐变控件条（与短视频图集查看器一致）
+                Item {
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                    height: 64
+                    Rectangle {
+                        anchors.fill: parent
+                        gradient: Gradient {
+                            GradientStop { position: 0; color: "#00000000" }
+                            GradientStop { position: 1; color: "#dd000000" }
+                        }
                     }
-                    BusyIndicator { running: original.status === Image.Loading; implicitHeight: 32; implicitWidth: 32 }
+                    RowLayout {
+                        anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; anchors.topMargin: 16; anchors.bottomMargin: 6
+                        spacing: 2
+                        IconButton { glyph: "back"; onClicked: view.openIndex = -1; ToolTip.text: "返回（Esc）" }
+                        IconButton { glyph: "chevron_left"; enabled: view.openIndex > 0; onClicked: viewer.step(-1); ToolTip.text: "上一张（←）" }
+                        Label { color: "white"; font.pixelSize: 13; text: (view.openIndex + 1) + " / " + paged.total }
+                        IconButton { glyph: "chevron_right"; enabled: view.openIndex < paged.total - 1; onClicked: viewer.step(1); ToolTip.text: "下一张（→）" }
+                        Label {
+                            Layout.fillWidth: true; Layout.leftMargin: 8; color: "#adbac7"; font.pixelSize: 12; elide: Text.ElideMiddle
+                            text: viewer.photo ? viewer.photo.filename + "  ·  " + viewer.photo.width + "×" + viewer.photo.height : ""
+                        }
+                        BusyIndicator { running: original.status === Image.Loading || viewer.originalSource === ""; visible: running; implicitHeight: 28; implicitWidth: 28 }
+                    }
                 }
             }
         }

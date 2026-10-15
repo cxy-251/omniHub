@@ -166,6 +166,14 @@ void MpvItem::setError(const QString &error)
     emit errorChanged();
 }
 
+// Linux 只用 VA-API（Deck 的 AMD 显卡）；auto 会逐个尝试 CUDA 等接口并打印 "Cannot load libcuda.so.1"。
+// 硬解结果拷回内存（*-copy），不需要渲染层的硬解互通；关掉 gpu-hwdec-interop，否则它也会去探测 CUDA。
+#ifdef Q_OS_LINUX
+static const char *kHwdec = "vaapi-copy";
+#else
+static const char *kHwdec = "auto-copy-safe";
+#endif
+
 void MpvItem::initMpv()
 {
     m_core = std::shared_ptr<MpvCore>(new MpvCore(this), [](MpvCore *core) {
@@ -179,7 +187,7 @@ void MpvItem::initMpv()
     // 硬解后拷回（auto-copy-safe，Linux 为 vaapi-copy）+ 软解回退限 2 线程 + 少预留硬解帧，三屏实测约 300MB，CPU 减半。
     const char *options[][2] = {{"config", "no"}, {"load-scripts", "no"},
         {"terminal", "no"}, {"vo", "libmpv"}, {"keep-open", "yes"},
-        {"hwdec", "auto-copy-safe"}, {"vd-lavc-threads", "2"}, {"hwdec-extra-frames", "2"}, {"video-latency-hacks", "yes"}};
+        {"hwdec", kHwdec}, {"gpu-hwdec-interop", "no"}, {"vd-lavc-threads", "2"}, {"hwdec-extra-frames", "2"}, {"video-latency-hacks", "yes"}};
     for (const auto &option : options) {
         const int status = mpv_set_option_string(core->handle, option[0], option[1]);
         if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); m_core.reset(); return; }

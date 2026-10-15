@@ -124,6 +124,7 @@ Rectangle {
     }
 
     Flickable {
+        WheelScroll { }
         id: flick
         anchors.top: bar.bottom; anchors.bottom: parent.bottom
         anchors.left: parent.left; anchors.right: parent.right
@@ -171,6 +172,7 @@ Rectangle {
         color: "#f2161b22"
         z: 2
         ListView {
+            WheelScroll { }
             id: tocList
             anchors.fill: parent
             clip: true

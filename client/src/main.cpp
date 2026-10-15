@@ -34,6 +34,9 @@ int main(int argc, char *argv[])
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     // 统一控件风格：Fusion + 深色调色板（默认 Basic 样式在深色界面里是浅灰按钮，文字也看不清）。
     if (qEnvironmentVariableIsEmpty("QT_QUICK_CONTROLS_STYLE")) qputenv("QT_QUICK_CONTROLS_STYLE", "Fusion");
+    // 不使用 X11 会话管理（XSMP）。经 XWayland 运行时 Wayland 桌面没有会话管理服务，
+    // Qt 会报 "Session management error: Could not open network socket"。
+    qunsetenv("SESSION_MANAGER");
     QGuiApplication app(argc, argv);
     {
         QPalette dark;

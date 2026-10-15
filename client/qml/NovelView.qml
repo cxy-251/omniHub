@@ -68,6 +68,7 @@ Item {
 
         // 分类列
         ListView {
+            WheelScroll { }
             id: categoryList
             Layout.preferredWidth: 200
             Layout.fillHeight: true
@@ -110,6 +111,7 @@ Item {
                 color: view.error || paged.error ? "#f85149" : "#8b949e"; font.pixelSize: 12
             }
             GridView {
+                WheelScroll { }
                 id: grid
                 Layout.fillWidth: true
                 Layout.fillHeight: true

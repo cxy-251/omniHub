@@ -193,6 +193,7 @@ Item {
         modal: true
         standardButtons: Dialog.Close
         ListView {
+            WheelScroll { }
             anchors.fill: parent
             clip: true
             model: queue.entries
