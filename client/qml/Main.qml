@@ -112,7 +112,7 @@ DarkWindow {
             Item { }
             Loader {
                 active: mainWindow.pagesReady && stack.currentIndex === 1
-                sourceComponent: Component { GameLauncherView { onGameStarted: function(sessionId) { mainWindow.yieldForGame(sessionId) } } }
+                sourceComponent: Component { GamesView { onGameStarted: function(sessionId) { mainWindow.yieldForGame(sessionId) } } }
             }
             Loader {
                 active: mainWindow.pagesReady && stack.currentIndex === 2

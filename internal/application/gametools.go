@@ -1,0 +1,36 @@
+package application
+
+import (
+	"os"
+	"path/filepath"
+
+	"omnihub/internal/config"
+	"omnihub/internal/games"
+)
+
+// resolveGameTools 用配置覆盖项，其余按 Steam Deck 上的常见位置查找；找不到的项留空（对应类型启动时报错）。
+// Wine 容器优先沿用 omni-deck 的容器，Wine 游戏的存档在里面。
+func resolveGameTools(override config.GameTools, configDir string) games.Tools {
+	home, _ := os.UserHomeDir()
+	first := func(set string, candidates ...string) string {
+		if set != "" {
+			return set
+		}
+		for _, c := range candidates {
+			if matches, _ := filepath.Glob(c); len(matches) > 0 {
+				return matches[len(matches)-1]
+			}
+		}
+		return ""
+	}
+	tools := games.Tools{
+		SteamRoot: first(override.SteamRoot, filepath.Join(home, ".local/share/Steam"), filepath.Join(home, ".steam/steam")),
+		Lime3DS:   first(override.Lime3DS, filepath.Join(home, "Applications/Lime3DS/Lime3DS.AppImage")),
+		RenpySDK:  first(override.RenpySDK, filepath.Join(home, "Applications/renpy-*-sdk/renpy.sh")),
+	}
+	tools.ProtonPrefix = first(override.ProtonPrefix, filepath.Join(home, ".local/share/omni_deck_pfx"))
+	if tools.ProtonPrefix == "" {
+		tools.ProtonPrefix = filepath.Join(configDir, "proton-prefix")
+	}
+	return tools
+}

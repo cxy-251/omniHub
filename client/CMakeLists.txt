@@ -48,8 +48,6 @@ set(SOURCES
     src/player/media_address.h
     src/player/native_resume.cpp
     src/player/native_resume.h
-    src/games/game_launcher.cpp
-    src/games/game_launcher.h
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

@@ -50,6 +50,16 @@ type Config struct {
 	DisabledCategories []string `json:"disabled_categories,omitempty"`
 	// ShortVideoThumbnails 控制后台是否用 ffmpeg 生成短视频缩略图；关闭时只显示已有缩略图。
 	ShortVideoThumbnails bool `json:"shortvideo_thumbnails"`
+	// GameTools 覆盖非原生游戏运行时位置；留空的项按常见位置自动查找。
+	GameTools GameTools `json:"game_tools,omitzero"`
+}
+
+// GameTools 是 Proton、Wine 容器、Lime3DS、Ren'Py SDK 的位置。
+type GameTools struct {
+	SteamRoot    string `json:"steam_root,omitempty"`
+	ProtonPrefix string `json:"proton_prefix,omitempty"`
+	Lime3DS      string `json:"lime3ds,omitempty"`
+	RenpySDK     string `json:"renpy_sdk,omitempty"`
 }
 
 var saveMu sync.Mutex

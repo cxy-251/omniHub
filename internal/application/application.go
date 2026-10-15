@@ -163,6 +163,7 @@ func (a *Application) build() *generation {
 		return g
 	}
 	router.ConfigureShortVideo(a.cfg.ShortVideoThumbnails, a.saveShortVideoThumbnails)
+	router.ConfigureGames(resolveGameTools(a.cfg.GameTools, a.configDir))
 	if !a.cfg.StateInitialized {
 		a.cfg.StateInitialized = true
 		if err := config.Save(a.cfg); err != nil {

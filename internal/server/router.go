@@ -22,7 +22,6 @@ import (
 	"omnihub/internal/library"
 	"omnihub/internal/manga"
 	"omnihub/internal/mega"
-	"omnihub/internal/sc2"
 	"omnihub/internal/scanner"
 	"omnihub/internal/shortvideo"
 	"omnihub/internal/tasks"
@@ -42,6 +41,8 @@ type Router struct {
 	taskMgr        *tasks.Manager
 	taskRegistry   *tasks.Registry
 	gameRuns       *games.Manager
+	gameTools      games.Tools
+	stateDir       string
 	gameDiscovery  *scanner.GameDiscovery
 	webGames       *webGameGrants
 	webGameReads   chan struct{}
@@ -104,6 +105,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		taskMgr:        tasks.NewManager(),
 		taskRegistry:   registry,
 		gameRuns:       games.NewManagerWithRecorder(gamePlayRecorder(readingDB)),
+		stateDir:       stateDir,
 		gameDiscovery:  scanner.NewGameDiscovery(),
 		webGames:       newWebGameGrants(),
 		webGameReads:   make(chan struct{}, 16),
@@ -290,7 +292,7 @@ func (r *Router) registerRoutes() {
 
 	// 游戏中心接口（双端过滤）
 	r.mux.HandleFunc("/api/games/list", r.handleGamesList)
-	r.mux.HandleFunc("/api/games/index", r.handleGameIndex)
+	r.mux.HandleFunc("/api/games/icon", r.handleGameIcon)
 	r.mux.HandleFunc("/api/games/web/open", r.handleWebGameOpen)
 	r.mux.HandleFunc("/game-content/", r.handleWebGameAsset)
 	r.mux.HandleFunc("/api/games/launch", r.handleGameLaunch)
@@ -323,9 +325,6 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/tools/speed", r.handleToolsSpeed)
 	r.mux.HandleFunc("/api/tools/webshell", r.handleToolsWebShell)
 
-	// 星际争霸 2 定制接口 (第 10.1 节)
-	r.mux.HandleFunc("/api/sc2/maps", r.handleSC2Maps)
-	r.mux.HandleFunc("/api/sc2/launch", r.handleSC2Launch)
 
 	// MEGA 客户端接口 (第 10.2 节)
 	r.mux.HandleFunc("/api/mega/status", r.handleMegaStatus)
@@ -884,7 +883,7 @@ func (r *Router) handleGamesList(w http.ResponseWriter, req *http.Request) {
 	if !r.checkSectionAccess(w, req, "games", auth.TargetAll) {
 		return
 	}
-	r.listGameLibraries(w, req)
+	r.handleGameList(w, req)
 }
 
 // --- 任务调试台 ---
@@ -1173,94 +1172,6 @@ func (r *Router) handleToolsSpeed(w http.ResponseWriter, req *http.Request) {
 // handleToolsWebShell 暂时停用：旧实现没有超时、输出上限和进程组清理，待按 11.4 重做后再开放。
 func (r *Router) handleToolsWebShell(w http.ResponseWriter, req *http.Request) {
 	http.Error(w, "web shell is disabled", http.StatusServiceUnavailable)
-}
-
-// --- 星际争霸 2 定制接口 (第 10.1 节) ---
-
-func (r *Router) handleSC2Maps(w http.ResponseWriter, req *http.Request) {
-	primary := r.libMgr.GetPrimary()
-	if primary == nil {
-		writeJSON(w, http.StatusOK, []sc2.MapItem{})
-		return
-	}
-	mapsDir := filepath.Join(primary.RootPath, "standalone_games", "wine_games", "StarCraft II", "Maps")
-	maps, err := sc2.ListMaps(mapsDir)
-	if err != nil {
-		writeJSON(w, http.StatusOK, []sc2.MapItem{})
-		return
-	}
-	writeJSON(w, http.StatusOK, maps)
-}
-
-func (r *Router) handleSC2Launch(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var opt sc2.MatchOptions
-	if err := json.NewDecoder(req.Body).Decode(&opt); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-
-	primary := r.libMgr.GetPrimary()
-	sc2Dir := ""
-	if primary != nil {
-		var err error
-		sc2Dir, err = r.libMgr.ResolveCategoryPath(primary.ID+":standalone_games/wine_games/StarCraft II", "standalone_games/wine_games")
-		if err != nil {
-			http.Error(w, "SC2 storage boundary unavailable", 503)
-			return
-		}
-	}
-
-	args, err := sc2.BuildMatchArgs(opt, sc2Dir)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if opt.Launch && primary != nil {
-		if !r.runtimeMu.TryRLock() {
-			http.Error(w, "game indexing is busy", 409)
-			return
-		}
-		defer r.runtimeMu.RUnlock()
-		if primary.ReadOnly {
-			http.Error(w, "game library is read-only", 403)
-			return
-		}
-		gamesDir, err := r.gameStorageDirectory(primary.RootPath)
-		if err != nil {
-			http.Error(w, "game log boundary unavailable", 503)
-			return
-		}
-		user := auth.UserFromContext(req.Context())
-		launched, err := r.gameRuns.Start(req.Context(), primary.ID+":sc2", games.LaunchOptions{
-			GameDir: sc2Dir,
-			ExePath: filepath.Join("Support64", "SC2Switcher_x64.exe"),
-			Args:    args,
-			LogsDir: filepath.Join(gamesDir, "logs"),
-			IsAdmin: true,
-			UserID:  user.ID,
-		})
-		if err != nil {
-			http.Error(w, fmt.Sprintf("launch failed: %v", err), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"status":     "launched",
-			"pid":        launched.PID,
-			"session_id": launched.ID,
-			"args":       args,
-		})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "ready",
-		"args":   args,
-	})
 }
 
 // --- MEGA 客户端接口 (第 10.2 节) ---

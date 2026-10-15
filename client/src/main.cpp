@@ -15,7 +15,6 @@
 #ifdef Q_OS_LINUX
 #include "player/mpris.h"
 #endif
-#include "games/game_launcher.h"
 #include "backend_api.h"
 #include "local_network.h"
 #include "native_lifecycle.h"
@@ -86,7 +85,6 @@ int main(int argc, char *argv[])
 
     // 注册 QML 原生类型
     qmlRegisterType<MpvItem>("omniHub.Media", 1, 0, "MpvItem");
-    qmlRegisterType<GameLauncher>("omniHub.Games", 1, 0, "GameLauncher");
     qmlRegisterType<MediaQueue>("omniHub.Media", 1, 0, "MediaQueue");
 
     int result = 0;
