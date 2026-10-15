@@ -83,7 +83,8 @@ public:
         }
         mpv_render_context_update(m_context);
         mpv_opengl_fbo target{static_cast<int>(fbo->handle()), fbo->width(), fbo->height(), 0};
-        int flip = 1;
+        // QQuickFramebufferObject 已按 Qt 场景图方向处理 FBO，mpv 不能再翻转，否则画面上下颠倒。
+        int flip = 0;
         mpv_render_param params[] = {
             {MPV_RENDER_PARAM_OPENGL_FBO, &target},
             {MPV_RENDER_PARAM_FLIP_Y, &flip},
