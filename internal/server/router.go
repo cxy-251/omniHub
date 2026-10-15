@@ -49,7 +49,6 @@ type Router struct {
 	progressDB     *audio.ProgressDB
 	userState      *userstate.DB
 	megaClient     *mega.Client
-	videoCatalog   *shortvideo.VideoCatalog
 	textCatalog    *catalog.Catalog
 	audioCatalog   *catalog.Catalog
 	audioMetadata  *audio.MetadataCache
@@ -111,7 +110,6 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		progressDB:     progDB,
 		userState:      readingDB,
 		megaClient:     mega.NewClient("", 5*time.Minute),
-		videoCatalog:   shortvideo.NewVideoCatalog(),
 		textCatalog:    catalog.New(".txt", ".epub", ".md", ".rst"),
 		audioCatalog:   catalog.New(audio.FileExtensions()...),
 		audioMetadata:  audio.NewMetadataCache(),
@@ -252,11 +250,10 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/shortvideo/stream", r.handleShortVideoStream)
 	r.mux.HandleFunc("/api/media/shortvideo/posts", r.handleShortVideoPosts)
 	r.mux.HandleFunc("/api/media/shortvideo/creators", r.handleShortVideoCreators)
+	r.mux.HandleFunc("/api/media/shortvideo/sequence", r.handleShortVideoSequence)
 	r.mux.HandleFunc("/api/media/shortvideo/admin/", r.handleShortVideoAdmin)
 	r.mux.HandleFunc("/api/media/shortvideo/album/image", r.handleShortVideoAlbumImage)
 	r.mux.HandleFunc("/api/media/shortvideo/thumbnail", r.handleShortVideoThumbnail)
-	r.mux.HandleFunc("/api/media/shortvideo/channels", r.handleShortVideoChannels)
-	r.mux.HandleFunc("/api/media/shortvideo/random", r.handleShortVideoRandom)
 
 	// 文本业务接口
 	r.mux.HandleFunc("/api/media/text/list", r.handleTextList)
@@ -565,14 +562,6 @@ func (r *Router) handleGalleryTrash(w http.ResponseWriter, req *http.Request) {
 }
 
 // --- 短视频与图集 ---
-
-func (r *Router) handleShortVideoChannels(w http.ResponseWriter, req *http.Request) {
-	r.listVideoChannels(w, req)
-}
-
-func (r *Router) handleShortVideoRandom(w http.ResponseWriter, req *http.Request) {
-	r.randomVideoLibrary(w, req)
-}
 
 // --- 文本 ---
 

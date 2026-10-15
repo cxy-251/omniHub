@@ -8,5 +8,6 @@
         <file>qml/TouchControls.qml</file>
         <file>qml/LibraryView.qml</file>
         <file>qml/ShortVideoView.qml</file>
+        <file>qml/MatrixView.qml</file>
     </qresource>
 </RCC>

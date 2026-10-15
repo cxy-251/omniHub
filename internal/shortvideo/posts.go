@@ -277,3 +277,29 @@ func (s *Store) replaceCreators(creators map[string]Creator) error {
 	}
 	return tx.Commit()
 }
+
+// VideoKey 是排序用的最小视频信息。
+type VideoKey struct {
+	ID        string
+	Published string
+}
+
+// VideoKeys 返回符合筛选的全部视频（不含图集），按发布日期倒序。多联放映据此构造播放序列。
+func (s *Store) VideoKeys(f Filter) ([]VideoKey, error) {
+	f.Kind = KindVideo
+	where, args := f.clause()
+	rows, err := s.index.Query("SELECT id, published FROM posts"+where+" ORDER BY published DESC, id DESC", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []VideoKey
+	for rows.Next() {
+		var k VideoKey
+		if err := rows.Scan(&k.ID, &k.Published); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
+}

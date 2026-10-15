@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"path"
@@ -190,19 +191,7 @@ func (r *Router) handleShortVideoThumbnail(w http.ResponseWriter, req *http.Requ
 }
 
 // handleShortVideoStream 流式播放视频或图集背景音乐（id 为图集时 music=1 选择其 mp3）。
-// 兼容多联放映使用的 path=<库ID>:media_library/shortvideo/... 逻辑路径。
 func (r *Router) handleShortVideoStream(w http.ResponseWriter, req *http.Request) {
-	if logical := req.URL.Query().Get("path"); logical != "" {
-		full, err := r.libMgr.ResolveCategoryPath(logical, shortVideoCategory)
-		if err != nil || strings.ToLower(path.Ext(full)) != ".mp4" {
-			http.NotFound(w, req)
-			return
-		}
-		if err := shortvideo.StreamVideo(w, req, full, "video/mp4"); err != nil {
-			http.Error(w, "video file unavailable", http.StatusServiceUnavailable)
-		}
-		return
-	}
 	_, dir, post, ok := r.svPostFromRequest(w, req)
 	if !ok {
 		return
@@ -253,4 +242,64 @@ func (r *Router) handleShortVideoAlbumImage(w http.ResponseWriter, req *http.Req
 	}
 	w.Header().Set("Content-Type", http.DetectContentType(data))
 	_, _ = w.Write(data)
+}
+
+// handleShortVideoSequence 返回某频道播放序列中的第 index 条视频（多联放映用）。
+// order=shuffle 时按 seed 做确定性洗牌，同一 seed 的序列稳定，客户端可前后切换。
+// index 超出范围时按总数取模，便于循环播放。
+func (r *Router) handleShortVideoSequence(w http.ResponseWriter, req *http.Request) {
+	q := req.URL.Query()
+	index, err := strconv.Atoi(q.Get("index"))
+	if err != nil || index < 0 {
+		http.Error(w, "invalid index", http.StatusBadRequest)
+		return
+	}
+	seed, _ := strconv.ParseInt(q.Get("seed"), 10, 64)
+	filter := shortvideo.Filter{Platform: q.Get("platform"), CreatorID: q.Get("creator")}
+	libs, ok := r.queryLibraries(w, req)
+	if !ok {
+		return
+	}
+	type entry struct {
+		shortvideo.VideoKey
+		store *shortvideo.Store
+		lib   string
+	}
+	var all []entry
+	for _, lib := range libs {
+		store, _, err := r.svStore(lib)
+		if err != nil {
+			continue
+		}
+		keys, err := store.VideoKeys(filter)
+		if err != nil {
+			http.Error(w, "short video index unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		for _, k := range keys {
+			all = append(all, entry{k, store, lib.ID})
+		}
+	}
+	if len(all) == 0 {
+		http.Error(w, "no videos in channel", http.StatusNotFound)
+		return
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].Published != all[j].Published {
+			return all[i].Published > all[j].Published
+		}
+		return all[i].ID > all[j].ID
+	})
+	if q.Get("order") == "shuffle" {
+		rng := rand.New(rand.NewPCG(uint64(seed), 0x5eed))
+		rng.Shuffle(len(all), func(i, j int) { all[i], all[j] = all[j], all[i] })
+	}
+	index %= len(all)
+	e := all[index]
+	post, found, err := e.store.Post(e.ID)
+	if err != nil || !found {
+		http.Error(w, "video unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"total": len(all), "index": index, "post": svPost{Post: post, LibraryID: e.lib}})
 }

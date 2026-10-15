@@ -16,6 +16,7 @@ Item {
     property bool loading: false
     property string error: ""
     property int openIndex: -1
+    property string mode: "browse"   // browse | matrix
 
     readonly property var platforms: creators.map(function (c) { return c.platform }).filter(function (p, i, a) { return a.indexOf(p) === i })
     readonly property var shownCreators: creators.filter(function (c) { return !platform || c.platform === platform })
@@ -78,8 +79,12 @@ Item {
         anchors.fill: parent
         anchors.margins: 12
         spacing: 8
-        visible: view.openIndex < 0
+        visible: view.openIndex < 0 && view.mode === "browse"
 
+        RowLayout {
+            Chip { text: "浏览"; selected: true }
+            Chip { text: "多联放映"; onClicked: view.mode = "matrix" }
+        }
         ListView {
             Layout.fillWidth: true
             Layout.preferredHeight: 40
@@ -170,6 +175,13 @@ Item {
             }
         }
         BusyIndicator { running: view.loading; visible: running; Layout.alignment: Qt.AlignHCenter }
+    }
+
+    Loader {
+        anchors.fill: parent
+        active: view.mode === "matrix" && view.creators.length > 0
+        sourceComponent: Component { MatrixView { creators: view.creators; shortVideo: view; onExitRequested: view.mode = "browse" } }
+        onLoaded: item.forceActiveFocus()
     }
 
     Loader {
