@@ -4,19 +4,25 @@ import QtQuick.Layouts
 import QtCore
 import omniHub.Media 1.0
 
-// 多联放映：2/3 屏并排，每屏独立频道（平台或博主）、顺序/随机、静音。
+// 多联放映：2/3 屏并排，每屏独立频道（我的点赞、平台或博主）、顺序/随机、静音。
 // 顶栏只有一套控件，操作焦点屏；点屏或按 1/2/3 切换焦点。
 // 「焦点出声」开启时只有焦点屏出声；手动静音的屏始终无声。
-// 键盘：空格 暂停/继续，←/→ 上/下一条，M 静音，Tab 显示/收起顶栏，Esc 返回浏览。
+// 每屏记住当前视频与播放位置，下次打开接着放。可以在主窗口里放，也可以弹出成独立窗口（detached）。
+// 键盘：空格 暂停/继续，←/→ 上/下一条，L 点赞，M 静音，Tab 固定/收起顶栏，F 全屏（独立窗口），Esc 返回/关闭。
 FocusScope {
     id: matrix
-    required property var creators     // [{id, platform, name, posts}]
-    required property var shortVideo    // ShortVideoView，提供 getJSON / localFile
+    property bool detached: false
+    property bool fullscreen: false
     signal exitRequested()
+    signal detachRequested()
+    signal fullscreenToggled()
 
+    property var creators: []
     property int focused: 0
     // 打开时默认暂停：各屏加载后停在第一帧，按「全部播放」或单屏播放开始。
     property bool playing: false
+    // 设置读出并补齐各屏配置后才开始加载；否则各屏会先按默认值加载同一条视频，再换成记住的那条。
+    property bool ready: false
     // 顶栏：进入后显示 3 秒；之后鼠标移到顶边出现，离开 1.5 秒收起；📌 固定后常显。
     property bool barPinned: false
     property bool barShown: true
@@ -28,18 +34,30 @@ FocusScope {
         for (var i = 0; i < repeater.count; i++) { var item = repeater.itemAt(i); if (item) item.setPaused(!on) }
     }
 
+    ShortVideoApi { id: api }
+
+    // 开发验证：OMNIHUB_DEV_MATRIX=<秒> 自动全部播放，并按这个间隔打印各屏丢帧统计。
+    Timer {
+        interval: typeof devMatrix !== "undefined" && devMatrix > 0 ? devMatrix * 1000 : 5000; repeat: true
+        running: typeof devMatrix !== "undefined" && devMatrix > 0
+        onTriggered: {
+            if (!matrix.playing) matrix.setAllPlaying(true)
+            for (var i = 0; i < repeater.count; i++) { var item = repeater.itemAt(i); if (item) console.log("matrix-stats", i, JSON.stringify(item.stats())) }
+        }
+    }
+
     Settings {
         id: prefs
         category: "matrix"
         property int screens: 3
         property bool focusAudio: true
-        // 每屏：{channel: "抖音" | "抖音/博主" | "", shuffle, muted, seed, index}
+        // 每屏：{channel: "liked" | "抖音" | "抖音/博主" | "", shuffle, muted, seed, index, postId, pos}
         property var slots: []
     }
 
-    // 频道选项：全部、各平台、各博主（博主 ID 带 "/"）。
+    // 频道选项：全部、我的点赞、各平台、各博主（博主 ID 带 "/"）。
     readonly property var channels: {
-        var list = [{value: "", label: "全部"}]
+        var list = [{value: "", label: "全部"}, {value: "liked", label: "♥ 我的点赞"}]
         var seen = {}
         creators.forEach(function (c) {
             if (!seen[c.platform]) { seen[c.platform] = true; list.push({value: c.platform, label: c.platform}) }
@@ -48,33 +66,42 @@ FocusScope {
         return list
     }
 
-    function newSlot() { return {channel: "", shuffle: true, muted: false, seed: Math.floor(Math.random() * 1e9), index: 0} }
-    // 调用前 prefs.slots 已补齐 3 屏（见 Component.onCompleted），这里不能生成随机值，否则绑定每次重算都会换片。
-    function slotConfig(i) { return prefs.slots[i] || {channel: "", shuffle: true, muted: false, seed: 0, index: 0} }
+    function newSlot() { return {channel: "", shuffle: true, muted: false, seed: Math.floor(Math.random() * 1e9), index: 0, postId: "", pos: 0} }
+    function slotConfig(i) { return prefs.slots[i] || {channel: "", shuffle: true, muted: false, seed: 0, index: 0, postId: "", pos: 0} }
     Component.onCompleted: {
-        if (prefs.slots.length >= 3) return
-        var all = prefs.slots.slice()
-        while (all.length < 3) all.push(newSlot())
-        prefs.slots = all
+        if (prefs.slots.length < 3) {
+            var all = prefs.slots.slice()
+            while (all.length < 3) all.push(newSlot())
+            prefs.slots = all
+        }
+        ready = true
+        api.getJSON("/api/media/shortvideo/creators", function (list) { matrix.creators = list })
     }
     function setSlot(i, changes) {
         var all = prefs.slots.slice()
         while (all.length <= i) all.push(newSlot())
-        var s = Object.assign({}, slotConfig(i), changes)
-        all[i] = s
+        all[i] = Object.assign({}, slotConfig(i), changes)
         prefs.slots = all
     }
+    // 关闭前记下各屏位置。
+    function savePositions() {
+        for (var i = 0; i < repeater.count; i++) { var item = repeater.itemAt(i); if (item) item.savePosition() }
+    }
+    Component.onDestruction: savePositions()
+    Timer { interval: 10000; repeat: true; running: matrix.playing; onTriggered: matrix.savePositions() }
 
     focus: true
     Keys.onPressed: function (event) {
         var slot = repeater.itemAt(focused)
-        if (event.key === Qt.Key_Escape) matrix.exitRequested()
+        if (event.key === Qt.Key_Escape) { if (matrix.fullscreen) matrix.fullscreenToggled(); else matrix.exitRequested() }
         else if (event.key === Qt.Key_Tab) barPinned = !barPinned
+        else if (event.key === Qt.Key_F && matrix.detached) matrix.fullscreenToggled()
         else if (event.key >= Qt.Key_1 && event.key < Qt.Key_1 + prefs.screens) focused = event.key - Qt.Key_1
         else if (!slot) return
         else if (event.key === Qt.Key_Space) slot.togglePause()
         else if (event.key === Qt.Key_Right) slot.step(1)
         else if (event.key === Qt.Key_Left) slot.step(-1)
+        else if (event.key === Qt.Key_L) slot.toggleLike()
         else if (event.key === Qt.Key_M) setSlot(focused, {muted: !slotConfig(focused).muted})
         else return
         event.accepted = true
@@ -98,8 +125,9 @@ FocusScope {
                 property var cfg: matrix.slotConfig(matrix.focused)
                 // itemAt() 不发通知；读 count 让格子创建后重新求值。
                 property var slotItem: { repeater.count; return repeater.itemAt(matrix.focused) }
-                Chip { text: "浏览"; onClicked: matrix.exitRequested() }
-                Chip { text: "多联放映"; selected: true }
+                Chip { text: matrix.detached ? "关闭窗口" : "浏览"; onClicked: matrix.exitRequested() }
+                Chip { text: "弹出窗口"; visible: !matrix.detached; onClicked: matrix.detachRequested() }
+                Chip { text: matrix.fullscreen ? "退出全屏" : "全屏"; visible: matrix.detached; onClicked: matrix.fullscreenToggled() }
                 Rectangle { width: 1; height: 20; color: "#30363d" }
                 Chip { text: "2 屏"; selected: prefs.screens === 2; onClicked: { prefs.screens = 2; matrix.focused = Math.min(matrix.focused, 1) } }
                 Chip { text: "3 屏"; selected: prefs.screens === 3; onClicked: prefs.screens = 3 }
@@ -109,20 +137,35 @@ FocusScope {
                 Label { text: "屏 " + (matrix.focused + 1); color: "#58a6ff"; font.pixelSize: 13 }
                 ComboBox {
                     Layout.fillWidth: true
-                    Layout.maximumWidth: 320
-                    Layout.minimumWidth: 140
+                    Layout.maximumWidth: 300
+                    Layout.minimumWidth: 130
                     implicitHeight: 28
                     font.pixelSize: 13
                     textRole: "label"; valueRole: "value"
                     model: matrix.channels
                     currentIndex: Math.max(0, indexOfValue(bar.cfg.channel))
-                    onActivated: matrix.setSlot(matrix.focused, {channel: currentValue, index: 0, seed: Math.floor(Math.random() * 1e9)})
+                    onActivated: matrix.setSlot(matrix.focused, {channel: currentValue, index: 0, postId: "", pos: 0, seed: Math.floor(Math.random() * 1e9)})
                 }
-                Chip { text: bar.cfg.shuffle ? "随机" : "顺序"; onClicked: matrix.setSlot(matrix.focused, {shuffle: !bar.cfg.shuffle, index: 0}) }
-                Chip { text: "◀ 上一条"; onClicked: if (bar.slotItem) bar.slotItem.step(-1) }
-                Chip { text: bar.slotItem && bar.slotItem.paused ? "▶ 播放" : "⏸ 暂停"; onClicked: if (bar.slotItem) bar.slotItem.togglePause() }
-                Chip { text: "下一条 ▶"; onClicked: if (bar.slotItem) bar.slotItem.step(1) }
-                Chip { text: bar.cfg.muted ? "🔇 已静音" : "🔊 声音"; selected: bar.cfg.muted; onClicked: matrix.setSlot(matrix.focused, {muted: !bar.cfg.muted}) }
+                Chip { text: bar.cfg.shuffle ? "随机" : "顺序"; onClicked: matrix.setSlot(matrix.focused, {shuffle: !bar.cfg.shuffle, index: 0, postId: "", pos: 0}) }
+                Chip { text: "◀"; onClicked: if (bar.slotItem) bar.slotItem.step(-1) }
+                Chip { text: bar.slotItem && bar.slotItem.paused ? "▶" : "⏸"; onClicked: if (bar.slotItem) bar.slotItem.togglePause() }
+                Chip { text: "▶▶"; onClicked: if (bar.slotItem) bar.slotItem.step(1) }
+                Chip { text: bar.cfg.muted ? "🔇" : "🔊"; selected: bar.cfg.muted; onClicked: matrix.setSlot(matrix.focused, {muted: !bar.cfg.muted}) }
+                Chip {
+                    readonly property bool liked: !!(bar.slotItem && bar.slotItem.post && bar.slotItem.post.liked)
+                    text: liked ? "♥ 已赞" : "♡ 点赞"; selected: liked
+                    enabled: !!(bar.slotItem && bar.slotItem.post)
+                    onClicked: bar.slotItem.toggleLike()
+                }
+                Chip {
+                    // 连点两次才移到回收站（3 秒内）；文件进系统回收站，可以找回。
+                    id: trashChip
+                    property bool armed: false
+                    text: armed ? "再点一次确认" : "🗑 回收站"; selected: armed
+                    enabled: !!(bar.slotItem && bar.slotItem.post)
+                    onClicked: { if (armed) { armed = false; bar.slotItem.trash() } else { armed = true; disarm.restart() } }
+                    Timer { id: disarm; interval: 3000; onTriggered: trashChip.armed = false }
+                }
                 Item { Layout.fillWidth: true }
                 Chip { text: "📌"; selected: matrix.barPinned; onClicked: matrix.barPinned = !matrix.barPinned }
             }
@@ -135,7 +178,6 @@ FocusScope {
             HoverHandler { id: topEdge; onHoveredChanged: if (hovered) matrix.revealBar() }
             TapHandler { onTapped: matrix.revealBar() }
         }
-
 
         RowLayout {
             anchors.fill: parent
@@ -160,29 +202,62 @@ FocusScope {
                     border.width: 2
 
                     function load() {
+                        if (!matrix.ready) return
                         var q = "/api/media/shortvideo/sequence?portrait=1&index=" + cfg.index + "&seed=" + cfg.seed + "&order=" + (cfg.shuffle ? "shuffle" : "sequential")
-                        if (cfg.channel.indexOf("/") >= 0) q += "&creator=" + encodeURIComponent(cfg.channel)
+                        if (cfg.channel === "liked") q += "&liked=1"
+                        else if (cfg.channel.indexOf("/") >= 0) q += "&creator=" + encodeURIComponent(cfg.channel)
                         else if (cfg.channel) q += "&platform=" + encodeURIComponent(cfg.channel)
                         error = ""
-                        matrix.shortVideo.getJSON(q, function (result) {
+                        post = null   // 新视频到达前不保存位置，免得把上一条的 ID 记到新序号下
+                        if (typeof devMatrix !== "undefined" && devMatrix > 0) console.log("matrix-load", index, q, cfg.postId, cfg.pos)
+                        var resume = cfg.postId && cfg.pos > 1 ? {id: cfg.postId, pos: cfg.pos} : null
+                        slotApi.send("GET", q, null, function (result) {
                             total = result.total
                             post = result.post
-                            video.source = matrix.shortVideo.localFile(post, post.id)
+                            video.source = slotApi.localFile(post, post.id)
+                            // 同一条视频才接着上次的位置放；序列变了（比如有视频移进回收站）就从头放。
+                            if (resume && resume.id === post.id) video.position = resume.pos
                             if (slot.paused) video.pause()   // 默认暂停：停在第一帧
                         })
                     }
                     function step(delta) {
                         var n = Math.max(1, total)
-                        matrix.setSlot(index, {index: (cfg.index + delta + n) % n})
+                        matrix.setSlot(index, {index: (cfg.index + delta + n) % n, postId: "", pos: 0})
                     }
                     function setPaused(p) {
                         paused = p
                         if (p) video.pause(); else video.play()
                     }
                     function togglePause() { setPaused(!paused) }
-                    // 频道、顺序、序号或种子变化时重新取片；静音变化不重新加载。
+                    function stats() { return video.stats() }
+                    function savePosition() {
+                        if (!post || !video.mediaLoaded) return
+                        if (typeof devMatrix !== "undefined" && devMatrix > 0) console.log("matrix-save", index, Math.floor(video.position))
+                        matrix.setSlot(index, {postId: post.id, pos: Math.floor(video.position)})
+                    }
+                    function toggleLike() {
+                        if (!post) return
+                        var target = post, liked = !post.liked
+                        slotApi.send("POST", "/api/media/shortvideo/like", {id: target.id, liked: liked}, function () {
+                            if (slot.post === target) slot.post = Object.assign({}, target, {liked: liked})
+                        })
+                    }
+                    function trash() {
+                        if (!post) return
+                        var target = post
+                        video.source = ""   // 先放开文件
+                        slotApi.send("POST", "/api/media/shortvideo/admin/trash?library_id=" + encodeURIComponent(target.library_id) + "&id=" + encodeURIComponent(target.id), null, function () {
+                            // 序列少了这一条，同一序号就是下一条。
+                            matrix.setSlot(index, {postId: "", pos: 0})
+                            slot.load()
+                        })
+                    }
+                    ShortVideoApi { id: slotApi; onErrorChanged: slot.error = error }
+                    Component.onDestruction: savePosition()
+                    // 频道、顺序、序号或种子变化时重新取片；静音和位置变化不重新加载。
                     readonly property string sequenceKey: cfg.channel + "|" + cfg.shuffle + "|" + cfg.seed + "|" + cfg.index
                     onSequenceKeyChanged: load()
+                    Connections { target: matrix; function onReadyChanged() { slot.load() } }
                     Component.onCompleted: load()
 
                     MpvItem {
@@ -193,19 +268,24 @@ FocusScope {
                         onPlaybackEnded: slot.step(1)
                     }
                     TapHandler { onTapped: { matrix.focused = slot.index; matrix.forceActiveFocus() } }
-                    // 底部标题条：静音标记 + 博主 · 日期 · 标题（序号/总数）
+                    // 底部：进度细条 + 标题条（静音、点赞标记 + 博主 · 日期 · 标题（序号/总数））
                     Rectangle {
                         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                         anchors.margins: 2
                         height: 22
                         color: "#99000000"
+                        Rectangle {
+                            anchors.left: parent.left; anchors.top: parent.top
+                            height: 2; color: "#58a6ff"
+                            width: video.duration > 0 ? parent.width * Math.min(1, video.position / video.duration) : 0
+                        }
                         Label {
                             anchors.fill: parent; anchors.leftMargin: 6; anchors.rightMargin: 6
                             verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideRight
                             font.pixelSize: 12
                             color: slot.error ? "#f85149" : "#e6edf3"
-                            text: (slot.audible ? "" : "🔇 ") + slot.caption
+                            text: (slot.audible ? "" : "🔇 ") + (slot.post && slot.post.liked ? "♥ " : "") + slot.caption
                         }
                     }
                 }

@@ -37,6 +37,11 @@ int main(int argc, char *argv[])
     // 不使用 X11 会话管理（XSMP）。经 XWayland 运行时 Wayland 桌面没有会话管理服务，
     // Qt 会报 "Session management error: Could not open network socket"。
     qunsetenv("SESSION_MANAGER");
+#ifdef Q_OS_LINUX
+    // xcb 默认用 GLX；mpv 的 VA-API 显卡直出（解码帧不拷回内存）只能在 EGL 上做。
+    // 实测三路 4K HEVC：拷回方式每路只有约 24 帧/秒（卡顿），直出约 41 帧/秒且几乎不占 CPU。
+    if (qEnvironmentVariableIsEmpty("QT_XCB_GL_INTEGRATION")) qputenv("QT_XCB_GL_INTEGRATION", "xcb_egl");
+#endif
     QGuiApplication app(argc, argv);
     {
         QPalette dark;
@@ -101,6 +106,8 @@ int main(int argc, char *argv[])
         engine.rootContext()->setContextProperty("nativeResume", &resume);
         // 开发验证用：OMNIHUB_DEV_SCROLL=<像素> 让列表每 100ms 自动下滚，用于测量滚动时的内存。
         engine.rootContext()->setContextProperty("devScroll", qEnvironmentVariableIntValue("OMNIHUB_DEV_SCROLL"));
+        // 开发验证：OMNIHUB_DEV_MATRIX=<秒> 打开多联放映并全部播放，每隔这么多秒打印各屏丢帧统计。
+        engine.rootContext()->setContextProperty("devMatrix", qEnvironmentVariableIntValue("OMNIHUB_DEV_MATRIX"));
 
         // 注册 Linux MPRIS 媒体控制服务
 #ifdef Q_OS_LINUX

@@ -11,6 +11,8 @@
         <file>qml/LibraryView.qml</file>
         <file>qml/ShortVideoView.qml</file>
         <file>qml/MatrixView.qml</file>
+        <file>qml/MatrixWindow.qml</file>
+        <file>qml/ShortVideoApi.qml</file>
         <file>qml/PagedModel.qml</file>
         <file>qml/Chip.qml</file>
         <file>qml/WheelScroll.qml</file>

@@ -321,6 +321,9 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	switch action {
+	case "trash":
+		r.svTrash(w, req)
+		return
 	case "scan", "import", "clean":
 		select {
 		case jobs.requests <- action:

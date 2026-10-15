@@ -15,38 +15,21 @@ Item {
     property string error: ""
     property int openIndex: -1
     property alias mode: viewPrefs.mode   // browse | matrix，记住上次的模式
+    // 多联放映已在独立窗口中：本页不再内嵌一份，点「多联放映」只把窗口提到前面。
+    property bool matrixWindowOpen: false
+    signal matrixWindowRequested()
     Settings { id: viewPrefs; category: "shortvideo"; property string mode: "browse" }
 
     readonly property var platforms: creators.map(function (c) { return c.platform }).filter(function (p, i, a) { return a.indexOf(p) === i })
     readonly property var shownCreators: creators.filter(function (c) { return !platform || c.platform === platform })
 
-    function getJSON(path, done) {
-        var url = backendApi.apiUrl(path)
-        if (!url) { view.error = "无法连接 omniHub 服务"; return }
-        var xhr = new XMLHttpRequest()
-        xhr.onreadystatechange = function () {
-            if (xhr.readyState !== XMLHttpRequest.DONE || !view) return   // 页面已销毁
-            if (xhr.status !== 200) { view.error = "请求失败（" + xhr.status + "）：" + xhr.responseText; return }
-            view.error = ""
-            done(JSON.parse(xhr.responseText), xhr)
-        }
-        xhr.open("GET", url)
-        xhr.send()
-    }
+    ShortVideoApi { id: api; onErrorChanged: view.error = error }
+    function getJSON(path, done) { api.getJSON(path, done) }
     function apiQuery(path, post, extra) {
         var q = "library_id=" + encodeURIComponent(post.library_id) + "&id=" + encodeURIComponent(post.id)
         return backendApi.apiUrl(path + "?" + q + (extra || ""))
     }
-    function libraryRoot(id) {
-        var libs = backendApi.libraries
-        for (var i = 0; i < libs.length; i++) if (libs[i].id === id) return libs[i].root_path
-        return ""
-    }
-    // 磁盘文件的绝对路径：资源库根目录 + 分类目录 + 作品相对路径。
-    function localFile(post, rel) {
-        var root = libraryRoot(post.library_id)
-        return root ? root + "/media_library/shortvideo/" + rel : ""
-    }
+    function localFile(post, rel) { return api.localFile(post, rel) }
     function postsEndpoint() {
         if (creator) return "/api/media/shortvideo/posts?creator=" + encodeURIComponent(creator)
         if (platform) return "/api/media/shortvideo/posts?platform=" + encodeURIComponent(platform)
@@ -80,7 +63,7 @@ Item {
             Layout.fillWidth: true
             spacing: 4
             Chip { text: "浏览"; selected: true }
-            Chip { text: "多联放映"; onClicked: view.mode = "matrix" }
+            Chip { text: view.matrixWindowOpen ? "多联放映（窗口）" : "多联放映"; onClicked: if (view.matrixWindowOpen) view.matrixWindowRequested(); else view.mode = "matrix" }
             Rectangle { width: 1; height: 20; color: "#30363d"; Layout.leftMargin: 4; Layout.rightMargin: 4 }
             Repeater {
                 model: [""].concat(view.platforms)
@@ -175,8 +158,14 @@ Item {
 
     Loader {
         anchors.fill: parent
-        active: view.mode === "matrix" && view.creators.length > 0
-        sourceComponent: Component { MatrixView { creators: view.creators; shortVideo: view; onExitRequested: view.mode = "browse" } }
+        active: view.mode === "matrix" && !view.matrixWindowOpen
+        sourceComponent: Component {
+            MatrixView {
+                onExitRequested: view.mode = "browse"
+                // 先销毁内嵌的这份（记下位置），再由主窗口打开独立窗口。
+                onDetachRequested: { view.mode = "browse"; Qt.callLater(view.matrixWindowRequested) }
+            }
+        }
         onLoaded: item.forceActiveFocus()
     }
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"math/rand/v2"
 	"net/http"
@@ -10,7 +11,9 @@ import (
 	"strconv"
 	"strings"
 
+	"omnihub/internal/auth"
 	"omnihub/internal/library"
+	"omnihub/internal/platform"
 	"omnihub/internal/shortvideo"
 )
 
@@ -64,6 +67,28 @@ func validPostID(id string) bool {
 type svPost struct {
 	shortvideo.Post
 	LibraryID string `json:"library_id"`
+	Liked     bool   `json:"liked"`
+}
+
+// svLikes 返回当前账号的点赞集合；未登录（游客）为空。
+func (r *Router) svLikes(req *http.Request) map[string]bool {
+	user := auth.UserFromContext(req.Context())
+	likes, err := r.userState.ShortVideoLikes(req.Context(), user.ID)
+	if err != nil {
+		return map[string]bool{}
+	}
+	return likes
+}
+
+// onlyLiked 保留点赞过的作品键（liked=1 时用，多联放映的「我的点赞」频道）。
+func onlyLiked(keys []svKey, likes map[string]bool) []svKey {
+	out := keys[:0]
+	for _, k := range keys {
+		if likes[k.ID] {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // svKey 是跨库合并后的作品键。
@@ -115,6 +140,10 @@ func (r *Router) handleShortVideoPosts(w http.ResponseWriter, req *http.Request)
 	if !ok {
 		return
 	}
+	likes := r.svLikes(req)
+	if q.Get("liked") == "1" {
+		keys = onlyLiked(keys, likes)
+	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(len(keys)))
 	page := keys[min(offset, len(keys)):min(offset+limit, len(keys))]
 	// 按库分组读取详情，再按合并后的顺序输出。
@@ -136,7 +165,7 @@ func (r *Router) handleShortVideoPosts(w http.ResponseWriter, req *http.Request)
 	out := make([]svPost, 0, len(page))
 	for _, k := range page {
 		if p, ok := found[k.ID]; ok {
-			out = append(out, svPost{Post: p, LibraryID: k.lib})
+			out = append(out, svPost{Post: p, LibraryID: k.lib, Liked: likes[k.ID]})
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -296,6 +325,10 @@ func (r *Router) handleShortVideoSequence(w http.ResponseWriter, req *http.Reque
 	if !ok {
 		return
 	}
+	likes := r.svLikes(req)
+	if q.Get("liked") == "1" {
+		all = onlyLiked(all, likes)
+	}
 	if len(all) == 0 {
 		http.Error(w, "no videos in channel", http.StatusNotFound)
 		return
@@ -311,5 +344,45 @@ func (r *Router) handleShortVideoSequence(w http.ResponseWriter, req *http.Reque
 		http.Error(w, "video unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"total": len(all), "index": index, "post": svPost{Post: post, LibraryID: e.lib}})
+	writeJSON(w, http.StatusOK, map[string]any{"total": len(all), "index": index, "post": svPost{Post: post, LibraryID: e.lib, Liked: likes[e.ID]}})
+}
+
+// handleShortVideoLike 点赞或取消：POST {"id": 作品ID, "liked": true|false}，需要登录账号。
+func (r *Router) handleShortVideoLike(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := auth.UserFromContext(req.Context())
+	if user.ID <= 0 {
+		http.Error(w, "login required", http.StatusForbidden)
+		return
+	}
+	var in struct {
+		ID    string `json:"id"`
+		Liked bool   `json:"liked"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&in); err != nil || !validPostID(in.ID) {
+		http.Error(w, "invalid like", http.StatusBadRequest)
+		return
+	}
+	if err := r.userState.SetShortVideoLike(req.Context(), user.ID, in.ID, in.Liked); err != nil {
+		http.Error(w, "like store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"liked": in.Liked})
+}
+
+// svTrash 把一条视频移到系统回收站并从索引中去掉（管理员接口 admin/trash?library_id=&id=）。
+func (r *Router) svTrash(w http.ResponseWriter, req *http.Request) {
+	store, dir, post, ok := r.svPostFromRequest(w, req)
+	if !ok {
+		return
+	}
+	if err := store.TrashPost(dir, post, platform.Trash); err != nil {
+		http.Error(w, "move to trash failed: "+err.Error(), http.StatusConflict)
+		return
+	}
+	_ = r.userState.RemoveShortVideoLikes(req.Context(), post.ID)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "trashed"})
 }

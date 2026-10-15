@@ -3,6 +3,8 @@
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
 #include <QOpenGLContext>
+#include <QtGui/qopenglcontext_platform.h>
+#include <QGuiApplication>
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLFunctions>
 #include <QQuickOpenGLUtils>
@@ -85,9 +87,12 @@ public:
         mpv_opengl_fbo target{static_cast<int>(fbo->handle()), fbo->width(), fbo->height(), 0};
         // QQuickFramebufferObject 已按 Qt 场景图方向处理 FBO，mpv 不能再翻转，否则画面上下颠倒。
         int flip = 0;
+        // 不在渲染线程里等这一帧的显示时刻：多联放映的几个屏共用 Qt 一个渲染线程，逐个等待会叠加成丢帧。
+        int block = 0;
         mpv_render_param params[] = {
             {MPV_RENDER_PARAM_OPENGL_FBO, &target},
             {MPV_RENDER_PARAM_FLIP_Y, &flip},
+            {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block},
             {MPV_RENDER_PARAM_INVALID, nullptr}
         };
         const int status = mpv_render_context_render(m_context, params);
@@ -111,20 +116,27 @@ private:
         m_attempted = true;
         if (!m_core || !m_core->handle || !QOpenGLContext::currentContext()) return;
         mpv_opengl_init_params gl{getProcAddress, nullptr};
+        // VA-API 直出需要知道显示连接（xcb 下是 X11 Display）；不传时 mpv 打不开 VA 显示，只能软解。
+        void *x11 = nullptr;
+#ifdef Q_OS_LINUX
+        if (auto *native = qGuiApp->nativeInterface<QNativeInterface::QX11Application>()) x11 = native->display();
+#endif
         mpv_render_param params[] = {
             {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(MPV_RENDER_API_TYPE_OPENGL)},
             {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl},
+            {x11 ? MPV_RENDER_PARAM_X11_DISPLAY : MPV_RENDER_PARAM_INVALID, x11},
             {MPV_RENDER_PARAM_INVALID, nullptr}
         };
         const int status = mpv_render_context_create(&m_context, m_core->handle, params);
         if (status < 0) { reportError(status); return; }
         m_core->renderAvailable.store(true);
+        const bool egl = QOpenGLContext::currentContext()->nativeInterface<QNativeInterface::QEGLContext>() != nullptr;
         mpv_render_context_set_update_callback(m_context, [](void *data) {
             static_cast<MpvCore *>(data)->post(true);
         }, m_core.get());
         auto *core = m_core.get();
-        QMetaObject::invokeMethod(core, [core] {
-            if (core->owner) core->owner->rendererReady();
+        QMetaObject::invokeMethod(core, [core, egl] {
+            if (core->owner) core->owner->rendererReady(egl);
         }, Qt::QueuedConnection);
     }
     std::shared_ptr<MpvCore> m_core;
@@ -167,11 +179,16 @@ void MpvItem::setError(const QString &error)
 }
 
 // Linux 只用 VA-API（Deck 的 AMD 显卡）；auto 会逐个尝试 CUDA 等接口并打印 "Cannot load libcuda.so.1"。
-// 硬解结果拷回内存（*-copy），不需要渲染层的硬解互通；关掉 gpu-hwdec-interop，否则它也会去探测 CUDA。
+// 先以拷回方式（*-copy）起步；渲染环境是 EGL 时，rendererReady 改成 vaapi 直出：解码帧留在显存里直接贴图，
+// 不经内存拷贝（三路 4K HEVC 实测从每路约 24 帧/秒提到约 41 帧/秒）。互通层只加载 vaapi，避免探测 CUDA。
 #ifdef Q_OS_LINUX
 static const char *kHwdec = "vaapi-copy";
+static const char *kHwdecDirect = "vaapi";
+static const char *kInterop = "vaapi";
 #else
 static const char *kHwdec = "auto-copy-safe";
+static const char *kHwdecDirect = nullptr;
+static const char *kInterop = "no";
 #endif
 
 void MpvItem::initMpv()
@@ -187,7 +204,7 @@ void MpvItem::initMpv()
     // 硬解后拷回（auto-copy-safe，Linux 为 vaapi-copy）+ 软解回退限 2 线程 + 少预留硬解帧，三屏实测约 300MB，CPU 减半。
     const char *options[][2] = {{"config", "no"}, {"load-scripts", "no"},
         {"terminal", "no"}, {"vo", "libmpv"}, {"keep-open", "yes"},
-        {"hwdec", kHwdec}, {"gpu-hwdec-interop", "no"}, {"vd-lavc-threads", "2"}, {"hwdec-extra-frames", "2"}, {"video-latency-hacks", "yes"}};
+        {"hwdec", kHwdec}, {"gpu-hwdec-interop", kInterop}, {"vd-lavc-threads", "2"}, {"hwdec-extra-frames", "2"}, {"video-latency-hacks", "yes"}};
     for (const auto &option : options) {
         const int status = mpv_set_option_string(core->handle, option[0], option[1]);
         if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); m_core.reset(); return; }
@@ -211,9 +228,11 @@ void MpvItem::initMpv()
     mpv_set_wakeup_callback(core->handle, [](void *data) { static_cast<MpvCore *>(data)->post(false); }, core);
 }
 
-void MpvItem::rendererReady()
+void MpvItem::rendererReady(bool egl)
 {
     m_rendererReady = true;
+    if (egl && kHwdecDirect && m_core && qEnvironmentVariable("OMNIHUB_MPV_OPTS").indexOf("hwdec=") < 0)
+        mpv_set_property_string(m_core->handle, "hwdec", kHwdecDirect);
     setError({});
     loadSource();
 }
@@ -495,4 +514,21 @@ void MpvItem::addSubtitle(const QString &path) {
     const char *command[] = {"sub-add", name.constData(), "select", nullptr};
     const int status = mpv_command_async(m_core->handle, 0, command);
     if (status < 0) setError(QString::fromUtf8(mpv_error_string(status)));
+}
+
+QVariantMap MpvItem::stats() const {
+    QVariantMap out;
+    if (!m_core || !m_core->handle) return out;
+    for (const char *name : {"frame-drop-count", "decoder-frame-drop-count", "vo-delayed-frame-count", "width", "height"}) {
+        int64_t value = 0;
+        if (mpv_get_property(m_core->handle, name, MPV_FORMAT_INT64, &value) >= 0) out.insert(QString::fromLatin1(name), static_cast<qlonglong>(value));
+    }
+    for (const char *name : {"estimated-vf-fps", "container-fps", "avsync"}) {
+        double value = 0;
+        if (mpv_get_property(m_core->handle, name, MPV_FORMAT_DOUBLE, &value) >= 0) out.insert(QString::fromLatin1(name), value);
+    }
+    for (const char *name : {"hwdec-current", "video-codec"}) {
+        if (char *value = mpv_get_property_string(m_core->handle, name)) { out.insert(QString::fromLatin1(name), QString::fromUtf8(value)); mpv_free(value); }
+    }
+    return out;
 }

@@ -78,6 +78,8 @@ public:
     Q_INVOKABLE void selectSubtitleTrack(int id);
     // Load a local SRT/ASS/SSA/VTT file, limited to 8MiB, without shell commands.
     Q_INVOKABLE void addSubtitle(const QString &path);
+    // 播放统计（丢帧、解码方式、分辨率），用于排查卡顿；同步读取，只在需要时调用。
+    Q_INVOKABLE QVariantMap stats() const;
 
     // Resumes playback, loading the current source again after a stop.
     Q_INVOKABLE void play();
@@ -119,7 +121,7 @@ private:
     void initMpv();
     void onMpvEvents();
     void setError(const QString &error);
-    void rendererReady();
+    void rendererReady(bool egl);
     void rendererUnavailable();
     void loadSource();
     void seek(double seconds, const char *mode);

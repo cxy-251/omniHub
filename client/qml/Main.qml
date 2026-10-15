@@ -57,6 +57,13 @@ DarkWindow {
         }
     }
 
+    // 多联放映独立窗口：独立于页面切换，关闭窗口即释放解码器。
+    Loader {
+        id: matrixWindow
+        active: false
+        sourceComponent: Component { MatrixWindow { onClosing: Qt.callLater(function () { matrixWindow.active = false }) } }
+    }
+
     Column {
         anchors.fill: parent
 
@@ -104,7 +111,18 @@ DarkWindow {
                 sourceComponent: Component { LibraryView { } }
             }
             Loader { id: textLoader; active: mainWindow.pagesReady && stack.currentIndex === 3; sourceComponent: Component { NovelView { } } }
-            Loader { active: mainWindow.pagesReady && stack.currentIndex === 4; sourceComponent: Component { ShortVideoView { } } }
+            Loader {
+                active: mainWindow.pagesReady && stack.currentIndex === 4
+                sourceComponent: Component {
+                    ShortVideoView {
+                        matrixWindowOpen: matrixWindow.active
+                        onMatrixWindowRequested: {
+                            if (matrixWindow.item) { matrixWindow.item.raise(); matrixWindow.item.requestActivate() }
+                            else matrixWindow.active = true
+                        }
+                    }
+                }
+            }
             Loader { active: mainWindow.pagesReady && stack.currentIndex === 5; sourceComponent: Component { GalleryView { } } }
         }
     }

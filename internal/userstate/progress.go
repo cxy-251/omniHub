@@ -49,6 +49,10 @@ func Open(path string) (*DB, error) {
 		user_id INTEGER NOT NULL, game_id TEXT NOT NULL, created_at TEXT NOT NULL,
 		PRIMARY KEY(user_id, game_id)
 	);
+	CREATE TABLE IF NOT EXISTS shortvideo_likes (
+		user_id INTEGER NOT NULL, post_id TEXT NOT NULL, created_at TEXT NOT NULL,
+		PRIMARY KEY(user_id, post_id)
+	);
 	CREATE TABLE IF NOT EXISTS native_progress (
 		user_id INTEGER NOT NULL,media_id TEXT NOT NULL,file_version TEXT NOT NULL,
 		position REAL NOT NULL,duration REAL NOT NULL,paused INTEGER NOT NULL,

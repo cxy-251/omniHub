@@ -2,6 +2,7 @@ package shortvideo
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 )
 
@@ -338,4 +339,22 @@ func (s *Store) PostsByID(ids []string) ([]Post, error) {
 		}
 	}
 	return posts, s.markThumbnails(posts)
+}
+
+// TrashPost 把一条视频移到系统回收站（不会永久删除），成功后从索引与缩略图库中去掉。
+func (s *Store) TrashPost(dir string, post Post, trash func(string) error) error {
+	if s.readOnly {
+		return errors.New("library is read-only")
+	}
+	if post.Kind != KindVideo {
+		return errors.New("only videos can be trashed here")
+	}
+	full, err := ResolveFile(dir, post.ID)
+	if err != nil {
+		return err
+	}
+	if err := trash(full); err != nil {
+		return err
+	}
+	return s.removePosts([]string{post.ID})
 }
