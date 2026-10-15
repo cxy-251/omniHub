@@ -115,6 +115,7 @@ Window {
                     onClicked: { mainWindow.selectPage(2); backendApi.refreshLibraries() }
                 }
                 Button { text: "文本阅读"; highlighted: stack.currentIndex === 3; onClicked: mainWindow.selectPage(3) }
+                Button { text: "短视频"; highlighted: stack.currentIndex === 4; onClicked: mainWindow.selectPage(4) }
             }
         }
 
@@ -123,7 +124,7 @@ Window {
             id: stack
             width: parent.width
             height: parent.height - 48
-            currentIndex: mainWindow.restoredUI.page !== undefined ? mainWindow.restoredUI.page : (initialExternalFile !== "" ? 0 : 1)
+            currentIndex: mainWindow.restoredUI.page !== undefined ? mainWindow.restoredUI.page : (initialExternalFile !== "" ? 0 : 4)
 
             Loader {
                 id: playerLoader
@@ -145,6 +146,7 @@ Window {
                 sourceComponent: Component { LibraryView { } }
             }
             Loader { id: textLoader; active: stack.currentIndex === 3; sourceComponent: Component { TextLibraryView { } } }
+            Loader { active: stack.currentIndex === 4; sourceComponent: Component { ShortVideoView { } } }
         }
     }
 }

@@ -10,6 +10,7 @@
 #endif
 #include "games/game_launcher.h"
 #include "backend_api.h"
+#include "local_network.h"
 #include "native_lifecycle.h"
 #include "player/media_queue.h"
 #include "player/native_resume.h"
@@ -59,7 +60,9 @@ int main(int argc, char *argv[])
 #ifdef Q_OS_LINUX
         MprisService mprisService(nullptr,externalFiles.isEmpty()?"org.mpris.MediaPlayer2.omnihub":"org.mpris.MediaPlayer2.omnihub.external");
 #endif
+        LocalNetworkFactory networkFactory; // 必须比 engine 活得久
         QQmlApplicationEngine engine;
+        engine.setNetworkAccessManagerFactory(&networkFactory);
         engine.rootContext()->setContextProperty("backendApi", &backend);
         engine.rootContext()->setContextProperty("nativeLifecycle", &lifecycle);
         engine.rootContext()->setContextProperty("nativeResume", &resume);

@@ -35,6 +35,8 @@ public:
     QStringList categoryDirectories() const { return m_categoryDirectories; }
     QStringList disabledCategories() const { return m_disabledCategories; }
     Q_INVOKABLE void refresh();
+    // apiUrl 返回本机服务上某个 /api/ 路径的完整地址（QML 请求经 LocalNetworkFactory 自动带凭证）；服务未知时返回空串。
+    Q_INVOKABLE QString apiUrl(const QString &path) const { return localRequest(path).url().toString(QUrl::FullyEncoded); }
     Q_INVOKABLE void setupAdmin(const QString &username, const QString &password);
     // 管理入口使用本机保护凭证；busy 时拒绝重入，回复完成后释放请求对象。
     Q_INVOKABLE void refreshLibraries();

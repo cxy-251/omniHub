@@ -7,5 +7,6 @@
         <file>qml/GameLauncherView.qml</file>
         <file>qml/TouchControls.qml</file>
         <file>qml/LibraryView.qml</file>
+        <file>qml/ShortVideoView.qml</file>
     </qresource>
 </RCC>
