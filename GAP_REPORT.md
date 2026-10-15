@@ -1,80 +1,160 @@
-# omniHub 规格 vs 实现差距报告（HEAD `a82e20c`）
+# omniHub 当前代码审查与规格差距
 
-核查方式：逐节对照 `ARCHITECTURE.md` / `DEV_RULES.md`，grep 代码 + 局部实测。标「未核实」的条目没有逐行审读。
+审查日期：2026-10-15。代码基线：`2ec5a14`（账号功能提交 `6fbfae7`）。本文件替换针对 `a82e20c` 的旧报告；旧内容仍在 Git 历史。
 
-## 一、P0：功能实际不可用或存在安全漏洞
+结论：当前是有实际主流程的开发预览，不是完整实现或可公开部署的成品。旧报告的多项阻断已修复，但本次发现工具模块仍有权限、文件边界和资源耗尽问题，之前的完成度说明过于乐观。
 
-| # | 问题 | 位置 | 依据 |
-|---|---|---|---|
-| 1 | `go:embed` 只嵌入 `index.html css js`，**`vendor/` 没嵌入**，marked/katex/mermaid/xterm 运行时全部 404 | [web.go:8](file:///home/deck/Games/claude/omniHub/web/web.go#L8) | 读源码确认 |
-| 2 | `web/players/` 目录**不存在**；RPG 走 `/standalone_games/...` 也没有对应路由，Web 游戏运行器点开全是 404 | [games.js:131-137](file:///home/deck/Games/claude/omniHub/web/js/games.js#L131-L137) | `ls web` |
-| 3 | 登录 Token 为 `token_<id>_<level>`，**可直接伪造** `token_1_99` 拿到 Admin | [router.go:221](file:///home/deck/Games/claude/omniHub/internal/server/router.go#L221)、setup 同样 | 读源码 |
-| 4 | `/api/tasks/run` **无鉴权**，且脚本路径直接取自请求体 → 局域网任意命令执行 | [router.go:704-722](file:///home/deck/Games/claude/omniHub/internal/server/router.go#L704-L722) | 读源码 |
-| 5 | 分权矩阵只存不用：`CheckAccess` 在 server 层零调用，5.2 等级准入/403 **未生效** | `internal/server/` | grep |
-| 6 | 端目标由 query 参数 `target=` 决定，Web 端改参数即可拿到 `gui_only` 列表（5.2.2 可绕过） | [router.go:693](file:///home/deck/Games/claude/omniHub/internal/server/router.go#L693) | 读源码 |
-| 7 | 回环=Admin；cloudflared 隧道流量来源也是 127.0.0.1，一旦启用隧道，**公网请求即 Admin**；8.1.3 WAN 熔断不存在 | [middleware.go](file:///home/deck/Games/claude/omniHub/internal/auth/middleware.go) | 读源码（隧道目前未接入 main，暂未触发） |
-| 8 | 游戏启动 `Setpgid+Setsid` 同时为 true，**fork 必然 EPERM** | [launcher.go:95-96](file:///home/deck/Games/claude/omniHub/internal/games/launcher.go#L95-L96) | 实测：`fork/exec /usr/bin/true: operation not permitted` |
-| 9 | **向只读资产库写入了数据库**：`standalone_games/games.db`、`media_library/manga/manga.db`、`shortvideo/{meta,thumbnails,albums}.db`(+wal/shm)、`.omni_data/users.db` | `/home/deck/Games/omni_library` | `find -newer ARCHITECTURE.md` |
+## 审查方法与证据边界
 
-> [!WARNING]
-> 第 9 条违反了你给的「omni_library 严格只读」铁律，但 ARCHITECTURE 1.3 / 2.1 / 4.1 / 7.1 又要求数据库放在资源库内。两者冲突，需要你定（见末尾）。我没有擅自删除这些文件。
+- 重新检查架构、交付状态、路由鉴权、资源文件操作、游戏启动、MEGA、Web 适配层和 Qt 页面入口。
+- 使用项目内隔离目录运行真实 Router/SQLite 请求，验证工具分类权限、共享上传大小和符号链接写入。没有读取或修改外部参考库。
+- 使用 Node VM 加载实际 `web/js/tools.js`，注入无破坏性的剪贴板哨兵并执行生成的 onclick，确认代码注入；没有启动浏览器或插件。完整浏览器攻击链未实测。
+- 本次证据：`.test-tmp/audit-2026-10-15/http-evidence.txt`、`js-evidence.txt` 和隔离复现源码 `reproduction_test.go`。这些是本地证据，不作为正式通过测试提交。
+- 前一阶段已执行 Go 全套及后续账号相关测试、pnpm build、Windows/macOS 服务交叉编译；Linux 包检查输出 `LINUX_PREVIEW_OK`，证据 `.test-tmp/release-check-rDAcpr`。这些检查未覆盖本次发现的全部工具漏洞。
+- 没有做全代码逐行安全审计、完整浏览器回归、全平台实机验证或超大真实库压力测试。未发现其他问题不代表不存在。
 
-## 二、按章节的规格缺口
+## 一、当前优先问题
 
-| 章节 | 规格 | 现状 |
+### P1-01 工具分类权限可绕过（隔离 HTTP 已复现）
+
+位置：`internal/server/access.go:38–66`、`internal/server/router.go:1199–1316`。
+
+媒体和游戏有统一分类检查，但普通 `/api/tools/` 请求没有 `checkSectionAccess("tools")`。共享接口只检查目录软停用。把 tools 门槛设为 99 后，未登录 LAN 请求仍可 POST 剪贴板、上传文件和 GET 共享 ZIP，均返回 200；界面隐藏工具入口并不能保护 API。公网 Guest 也没有一般工具的 WAN 拦截，是否可达取决于监听和外部转发配置。
+
+影响：权限矩阵不能保护共享资产与剪贴板；WOL、设备信息等入口也缺少统一工具准入。修复须覆盖所有工具子路由及二进制/读写接口，而非只隐藏界面。tasks 等管理路径另有 Role/WAN 检查，不等于其分类等级已统一实现。
+
+### P1-02 共享文件跟随符号链接，可越界读取/覆盖（写入已复现）
+
+位置：`internal/tools/files.go:48`、`:84`，`internal/server/router.go:1277`。
+
+WriteChunk 只取 basename 后用 os.OpenFile，StreamZipArchive 使用 os.Stat/os.Open；二者均跟随符号链接。共享根自身也没有可信目录边界校验。若共享目录中预先存在指向其他文件的链接，上传第 0 块会截断并覆盖链接目标。隔离测试中 Guest 覆盖了共享目录外、仍位于测试目录内的哨兵文件。ZIP 路径同样跟随链接。
+
+限制：普通上传 API 本身不能创建符号链接；利用越界需要现有链接或其他途径植入链接。没有任意目标路径即可直接越界的结论。
+
+另外，共享列表/上传绕过模块目录解析及只读检查：列表主动 MkdirAll，写入未检查 primary.ReadOnly；没有统一维护已配置目录布局的语义。此项只读场景本次为源码确认，未实际向只读用户库尝试写入。
+
+### P1-03 剪贴板复制按钮可注入脚本（实际 JS 生成及执行已复现）
+
+位置：`web/js/tools.js:229–234`、`escapeHTML`。
+
+内容经过只处理 &、<、> 的 escapeHTML 后，被拼进 `onclick="ToolsHub.copyText('内容')"`。单引号及双引号未做对应上下文保护。Node VM 使用实际 loadClipboard 生成的处理器确认哨兵可执行；不是凭关键词猜测。
+
+影响：攻击者可借 P1-01 放入剪贴板内容。用户点击被注入的复制按钮后，脚本以该页面身份运行。若点击者是 LAN 管理员，脚本可能调用同源 WebShell 执行宿主命令；这是根据接口权限推导的组合风险，未在浏览器执行宿主攻击。最高应按宿主安全阻断处理。
+
+应移除不可信字符串的 HTML/事件代码拼接，使用文本节点和事件绑定。仅转义显示文本不足以修复事件代码上下文。
+
+### P1-04 共享上传未设上限、整包读入内存（源码确认，128KiB 请求已接受）
+
+位置：`internal/server/access.go:24–27`、`internal/server/router.go:1287`。
+
+注释声称上传有自己的块大小上限，实际共享上传被排除在 MaxBytesReader 外，处理器直接 io.ReadAll，WriteChunk 也无大小限制。128KiB 请求已验证返回 200；本次没有为证明无上限而实际制造 OOM。
+
+影响：少量并发大请求即可拉高 RSS，持续上传可消耗磁盘；同名分块没有完整顺序/重复/并发写入协议，chunk_index 解析失败还会按 0 截断已有文件。需要有界流式接收、容量/并发限制和明确的不覆盖或覆盖确认语义。
+
+### P1-05 WebShell 无超时、无输出预算、无进程树清理（源码确认）
+
+位置：`internal/server/router.go:1334–1367`。
+
+LAN Admin 限制已经存在，但实现仍是 `sh -c` + 无界 bytes.Buffer + cmd.Run；忽略执行错误，不绑定请求取消，不使用受管进程组。长命令或大量输出会长期占用资源，断开页面不能保证停止。它也不是架构要求的交互式 PTY，Windows 上硬依赖 sh。
+
+有管理员权限不意味着可以忽略生命周期和资源预算；应复用已有受管进程能力，明确终端协议及退出语义。
+
+### P2-01 MEGA 返回 downloading，但没有下载（源码确认）
+
+位置：`internal/mega/client.go:121–143`、`internal/server/router.go:1459–1508`。
+
+EnqueueDownload 只把任务放到 map，未发出传输命令、未写文件、未推进进度。EnsureServerRunning/配额恢复/空闲关闭未接到应用主流程。任务 map 无容量和淘汰。该功能不能列为可用下载器；返回 downloading 会误导用户。现有测试主要证明内存状态变化，不证明真实 MEGA。
+
+### P2-02 原生游戏驱动与存档隔离未完成（源码确认）
+
+位置：`internal/games/launcher.go:142`、`:223–261`、`internal/server/router.go:1421`。
+
+Linux 原生可执行文件已接通托管进程，但 .exe 明确拒绝，Wine/Proton/Steam 驱动未实现；SC2 指向 Windows EXE，在 Linux 同样不能真正启动。PrepareSaveDir 和 OMNI_SAVE_DIR 只准备目录/变量，不能使任意引擎自动重定向存档。源码注释也明确普通用户启动在驱动未完成前受限制，不能宣传已实现多用户隔离。
+
+硬件画像字段存在，但没有完成进程树 RSS/I/O/CPU 采集及退出回填。当前系统可用内存熔断不能代替硬件画像。
+
+### P2-03 旧工具前端仍在使用，存在接口契约错误（源码确认）
+
+位置：`web/src/ModulePage.tsx`、`web/js/tools.js:262–270`、`:425–429`。
+
+React 主壳仍通过适配器加载 tools.js 和部分 media.js，不是全部迁移到 TypeScript。共享列表后端返回 name/size_bytes，旧 UI 读取 filename/size；MEGA 配额后端是对象，旧 UI 当字符串比较。工具界面“显示出来”不代表功能闭环。吞错和 innerHTML 仍较多。
+
+## 二、当前功能清单
+
+下列“已接通”指有业务实现和入口，不等于所有格式、设备和极端场景已验收。
+
+| 范围 | 已接通 | 缺口/边界 |
 |---|---|---|
-| 0.3.3 | 开发态挂载磁盘目录热重载 | 无 |
-| 1.1.3 | 资源库增删即时生效 | 只有 `/api/library/list`，无增删接口 |
-| 1.2 | 目录骨架集中配置、软停用 | 未见实现（未逐行核实） |
-| 1.3.1 | 索引库统一放 `.omni_data/` | 只有 users.db 在 `.omni_data/`，其余散落在各模块目录（且规格 1.3 与 2.1/4.1/7.1 自相矛盾） |
-| 1.3.2 | DB 内路径为 `{lib_id}:相对路径` | manga 只存文件名 [cbz.go:153](file:///home/deck/Games/claude/omniHub/internal/manga/cbz.go#L153)；shortvideo 存相对 shortvideo 目录的路径，无 lib_id |
-| 1.3.3 | 主库切换 + `.omni_data` 原子迁移 | 无 |
-| 2.3 | ATTACH + SHA-256 主键合并 | `MergeFromExternal` 用 `Sprintf` 拼 SQL（注入风险）、无哈希主键、无调用入口 |
-| 3.1 | `ai_faces.db` | 无 |
-| 3.3 | 增量写入第 8 卷 / 4GB 封卷 | `VolumeManager` 写路径存在，无任何入库入口 |
-| 4.3 | 看门狗两级熔断、日志落盘、孤儿清理 | `watchdog.go`/`launcher.go` 未被任何路由调用；且 #8 导致启动必败 |
-| 4.4 | 存档导入导出、用户时长统计 | 只有建表，无接口 |
-| 5.3.2 | 改等级即时吊销会话 | 未核实是否在 `UpdateUserLevel` 路由里调用 `RevokeUserSessions` |
-| 6.1 | 文本专区（txt/epub/md/rst） | 无文本列表接口，前端只能手输路径 |
-| 6.2 | 音频专辑/分集 | 无音频库列表接口，前端无浏览入口 |
-| 6.3 | 脚本就近存放、任务互斥锁、凭证 env 注入 | 均无；脚本路径任意（#4） |
-| 6.4 | 级别过滤/Delta Time/堆栈折叠 | 未核实 `tasks.js` |
-| 7.2 | 封面回退、「设为封面」 | `SetCustomCover` 有，无路由无 UI |
-| 7.3 | 条漫阅读 | 前端写死 `page_001.jpg…page_020.jpg` [media.js:440](file:///home/deck/Games/claude/omniHub/web/js/media.js#L440)，真实 CBZ 打不开；无书架 |
-| 8.1.2 | LAN 信任设备 | 只有建表 |
-| 8.2 | 网卡变动刷新、二维码 | 无 |
-| 8.3 | cloudflared 托管 | `CloudflareSupervisor` 存在，未接入 `main.go` |
-| 9.x | Qt 客户端 | **从未编译**（本机无 cmake）；无 `.desktop`；无字幕/音轨/倍速；手势只有音量 [TouchControls.qml:36](file:///home/deck/Games/claude/omniHub/client/qml/TouchControls.qml#L36)；`client/launcher.py` 是 PyQt6 占位，与「C++ 客户端」矛盾 |
-| 10.1 | SC2 地图列表 + 种族难度 | QML 弹窗**没有地图列表**；直接 `ionice` 执行 Windows `.exe`，没走 Wine/Proton；`/api/sc2/launch` 只返回参数不启动 |
-| 10.2 | MEGA 限本地 Admin、保存路径弹窗、倒计时 | 下载接口无鉴权；路径写死 `~/Downloads`；前端只拉一次状态，无倒计时刷新 |
-| 11.1 | 槽位独立暂停、音频伴听 | 无单槽暂停按钮；音频条是全局隐藏条，矩阵内无音源入口 |
-| 11.3 | lanscan | 无 |
-| 11.4 | WebShell 仅受信任环境 | 只判 Admin（结合 #3/#7 等于没限制）；是 POST 执行而非 pty |
+| 初始化与账号 | 本机专用凭证引导、bcrypt 登录/退出、用户创建/分页/停用恢复/密码重置/自行改密、旧会话及设备撤销、凭证版本防并发复活 | 工具准入漏洞；全站权限仍须回归 |
+| 访问分级 | 媒体/游戏 API 门槛、真实客户端目标、受保护本机入口、LAN 信任设备登记/撤销、任务/宿主接口 WAN 拦截 | 不可概括为所有接口都完成；真实代理/浏览器/设备验收未全做 |
+| 资源库 | 多库挂载/移除/持久身份、只读挂载、配置目录骨架/软停用、离线恢复、主库全局状态确认迁移 | 超大库持续增量和全模块读写边界未完整验收，共享工具存在旁路 |
+| Web 文本 | 多库列表、TXT/MD/RST 分块、Markdown 基础渲染及消毒、EPUB 章节/资产、账号位置 | RST 仍源文本；数学/图表渲染链未接通；跨块 Markdown/EPUB 章内位置不完整 |
+| Web 音频 | 专辑/分集、自然序、播放和账号进度、ID3/MP4/FLAC/WAVE/Ogg 元数据及封面 | 浏览器解码能力相关；完整播放/账号切换/后台体验仍需统一验收 |
+| Web 漫画 | 多库分页、索引及无索引只读发现、CBZ 流式阅读、条漫/单双页与相对位置、封面回退/指定封面、JSON/ComicInfo 合并 | 全字段筛选/规模与格式验收未完整完成；坏包有诊断不代表可修复 |
+| Web 视频/相册 | 多库浏览、视频矩阵基础控制/音频伴听、分页图片/原图、相册软删除 | 完整图库收藏/导入/去重融合/人脸功能、冷卷封存入库未形成主流程 |
+| Web 游戏 | 真实目录定位、有界临时资源授权、隔离 iframe、离线 EmulatorJS/Ruffle；过去自编 NES/SWF 已有实测记录 | 其余核心/复杂游戏未全验收，账号存档和 Web 时长未完成 |
+| 原生游戏 | 扫描/索引/真实目录、分页多库大厅、受管进程/日志、内存熔断、停止/后代清理、GUI 让出恢复、退出一次写账号时长 | 见 P2-02，不能称 Windows 游戏已可用 |
+| Qt | 实际 C++/QML 构建；libmpv 选文件/多选/列表/音轨字幕/延迟/倍速/画面亮度、MPRIS、本地账号断点、独立外部单实例窗口；文本书架/分块断点、资源库管理 | 无原生漫画/音频书架/图库；EPUB 和文档排版未完成；实际触控/锁屏及 Windows/macOS Qt 验收缺失 |
+| 任务 | 私有注册白名单、参数、凭证 env 注入、进程生命周期、目录锁、有界 SSE 和 React 日志过滤/上下文；漫画 uv 封箱及索引任务 | 业务爬虫、章节下载续传、文本构建等未实现；调试台未完整浏览器验收 |
+| 网络 | 监听端口顺延、mDNS 启动已有主流程 | 动态 IP 事件、二维码、离线节能隧道托管未完成；注册服务不保证所有平台可解析 omnihub.local |
+| 工具 | 剪贴板/共享上传 ZIP/测速/指标/WOL/ARP 邻居读取/一次性命令接口有代码 | 本次列出的安全缺陷；ARP 读取不等于主动跨平台 LAN 扫描，反查无超时；真实 MEGA 未实现 |
+| 交付 | 包含运行依赖的 Linux Qt 开发预览，Go Windows/macOS 服务可交叉编译 | Windows/macOS Qt 安装包、Android、安装更新/默认关联和完整平台验收未完成 |
 
-## 三、DEV_RULES 违反项
+## 三、性能、稳定性与规范
 
-| 规则 | 问题 | 例 |
-|---|---|---|
-| 2.2 禁止吞错 | 大量 `_ =`、`x, _ :=`；列表接口出错一律返回 `[]` | [router.go:590](file:///home/deck/Games/claude/omniHub/internal/server/router.go#L590)、scanner 中所有 `Upsert` |
-| 1.1 SRP | `router.go` 1110 行，HTTP、路径拼接、开库混在一起 | 全文件 |
-| 性能/SRP | **每个请求都 `OpenDB` + migrate**，包括 4.5GB 的 `gallery.db` | [router.go:256](file:///home/deck/Games/claude/omniHub/internal/server/router.go#L256) 等 |
-| 性能 | 中间件每个请求都查一次 `HasAdmin()` | [middleware.go:53](file:///home/deck/Games/claude/omniHub/internal/auth/middleware.go#L53) |
-| 1.2 DRY | `"media_library","manga"` 等路径段在 router 里重复拼接十余处 | router.go |
-| 1.4 YAGNI | 未接线代码：watchdog、launcher、VolumeManager 写入、MergeFromExternal、CloudflareSupervisor、launcher.py | 见上 |
-| 2.1 输入校验 | tasks 脚本路径、MEGA source、SC2 参数无校验 | 见上 |
-| 2.3 最小权限 | 扫描/读取接口以读写模式打开库内 DB，非 `mode=ro` | manga/games/shortvideo/gallery meta |
-| 3.1 快速验证 | 前端从未在浏览器里实际跑过，vendor 404 一直没被发现 | — |
+已实施：有界媒体读取并发、分页目录/索引快照、音频/ZIP/漫画缓存预算、日志截断、隐藏 Qt 页释放、游戏时完整 GUI 退出、账号状态分离、低频合并断点保存、退出写游戏时长。它们解决具体路径，不是全局峰值证明。
 
-## 四、对我此前汇报的更正
+仍未达标：
 
-- 引用过的 `client/src/games/gamelauncher.cpp` 不存在，实际是 `game_launcher.cpp`。
-- 说过「Qt 客户端 SC2 地图列表」：弹窗里没有地图列表。
-- 说过「marked / xterm 已集成」：文件复制了，但没嵌入二进制，运行时不可用。
-- 说过「Web 游戏运行器容器」：容器有，运行器页面不存在。
-- 「端到端验证」只用 curl 测了 JSON 接口，没有在浏览器验证页面，也没有编译 Qt 客户端。
-- `ScanShortVideos(..., readOnly=true)` 只是不 trash 散图，仍会在 omni_library 里建库写库。
+1. 当前环境历史实测 Qt 空闲 RSS 约 280–320MiB，架构目标 40–80MB 未达到；Core 游戏观察器约 26MiB 是另一运行状态，不应拿来替代 GUI 指标。本次未重新采样。
+2. 工具上传/WebShell 绕过预算，网络与共享列表仍可能整量读取；缺乏统一并发/请求/磁盘容量预算及全服务压力验收。
+3. router.go 仍有 1,530 行，混合 HTTP、模块路径、任务和工具业务，未满足充分分层；工具和网络部分仍有吞错，错误被返回为空列表或成功状态。
+4. 相册 VolumeManager/跨库 Merge 等底层代码不等于业务入库完成；封卷持久化、SHA 合并冲突与用户收藏规则须在实际流程中验收。
+5. Linux 实测多，Windows/macOS 服务编译多而原生客户端实机证据不足；CGO 禁用的测试不能代表 race 已运行。
 
-## 五、需要你决定
+## 四、旧 GAP 报告条目的当前结论
 
-1. **数据库放哪**：(a) 全部改到 `~/.config/omnihub/data/`（守住只读铁律，偏离 ARCHITECTURE 1.3）；(b) 按 ARCHITECTURE 放库内（需解除只读铁律）。已写入 omni_library 的那些 db 文件是否用 `gio trash` 移走，也需要你点头。
-2. **修复顺序**：建议先 P0（#1–#9），再补功能缺口。
+| 旧条目 | 当前结论 |
+|---|---|
+| vendor 未嵌入 | 已修复：web.go embed dist/vendor；但嵌入库文件不代表 KaTeX/Mermaid 已接通 |
+| Web 游戏运行器/目录路由缺失 | 已重做为隔离资源授权及离线运行器，不再直接公开游戏根目录 |
+| 可伪造 token_id_level | 已替换随机 Token、哈希持久会话与当前账号校验 |
+| 任意脚本路径、任务无鉴权 | 已替换私有注册任务/参数及 Admin/WAN 保护，不接受任意脚本路径 |
+| 分权矩阵完全未用 | 媒体/游戏已使用；工具仍有旁路，不能标“全站已修复” |
+| target query 决定身份 | 已从受保护本机身份决定端目标，普通 query 不提升权限 |
+| 回环直接 Admin | 已修复为本机专用秘密凭证+直接回环，转发头拒绝本机直通 |
+| Setpgid+Setsid 导致 EPERM | 已替换平台受管进程并有真实进程测试；这不包含 Wine 驱动 |
+| 曾向外部只读库写 DB | 属旧提交历史，本次未再次扫描或删除用户资产；当前参考库只读约束保留，共享旁路须另修 |
+| 资源库管理、迁移、文本音频漫画书架、设备信任缺失 | 已新增相应主流程，限制见功能清单 |
+| Qt 从未编译/为 PyQt 占位 | 已是实际 C++/QML/libmpv Linux 构建和包内启动，有系统关联模板；跨平台仍未完成 |
+| 存档、画像、人脸、爬虫、隧道、真实 MEGA | 仍未完整交付，不因代码文件或表存在而消除缺口 |
+
+旧报告关于数据库归属的争议已在现架构明确：全局状态随主库迁移，模块索引留在所属库；未配置主库可用配置目录初始化，只读挂载禁止补建。无需重新让用户在旧报告 a/b 两种方案中选择。
+
+## 五、额度用途与执行效率复盘
+
+可核实的任务统计在暂停时为 5,762,288 tokens、49,233 秒（约 13.7 小时），来自目标工具累计计数。它不是供应商账单，不能据此推算实际费用、周额度百分比或每项功能的精确 token。没有按工具/思考/输入输出/缓存或子任务分拆的可靠账单，因此不编造百分比。
+
+接手至审查基线有 56 次本地提交，其中包括修复和文档；源码从 12,065 到 34,335 行，累计新增 27,035、删除 4,765 行，含测试/空行/注释，排除构建产物和依赖。按变更路径统计：
+
+| 工作范围 | 新增行 | 删除行 |
+|---|---:|---:|
+| HTTP 接口与联调（含大量测试） | 6,748 | 415 |
+| Qt 客户端 | 3,150 | 416 |
+| Web 前端迁移 | 2,000 | 3,121 |
+| 漫画与封箱 | 2,165 | 83 |
+| 游戏后端 | 1,986 | 199 |
+| 音频解析 | 1,841 | 40 |
+| 账号权限 | 1,081 | 59 |
+| 其他基础设施/状态/平台/脚本与验证 | 8,064 | 432 |
+
+这说明代码工作落在哪里，不代表 token 消耗比例，也不代表价值和完成度。主要工作实际用于修复早期鉴权/路径/进程缺陷、逐媒体补分页和状态、音频多容器解析、Qt/libmpv 渲染与宿主生命周期、打包联调、任务/漫画及账号功能。
+
+执行上的问题由 Codex 承担：阶段过碎；反复读取上下文/文档、推敲边界和重复构建/打包消耗多；音频解析和播放器细节推进过深，Wine/存档、工具安全、真实下载和完整主流程收尾落后。测试偏重已重构模块，旧工具适配层被遗漏。这些投入没有换来完整交付，不能用“做了很多测试/提交”解释成效率合理。
+
+## 六、后续顺序（仅审查建议，本次未继续开发）
+
+1. 先修工具权限、剪贴板注入、共享路径/上传预算和 WebShell 生命周期；在此之前不将预览作为可信公网服务。
+2. 按用户最常用的真实资源库跑一个完整使用闭环，优先原生游戏 Wine/Proton/Steam 与存档，再补剩余原生媒体页。
+3. 明确关闭/标记尚未实现的 MEGA 等入口，逐项真实实现，而不是返回成功状态。
+4. 最后统一验收性能和平台交付；不要再把局部测试、编译或新增行数当成功能完成证明。
