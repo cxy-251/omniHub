@@ -151,13 +151,17 @@ def run_files(entries, args, auth):
     ok, failed = 0, []
     for n, (url, title, idx) in enumerate(entries, 1):
         name = safe_name(args.names.get(url) or args.name.format(title=title, index=idx, album=args.album))
-        if any(existing(args, name + ext) for ext in AUDIO_EXTS):
+        found = next((p for p in (existing(args, name + ext) for ext in AUDIO_EXTS) if p), None)
+        if found:
+            args.found_dir = args.found_dir or os.path.dirname(found)
             log(f"[{n}/{len(entries)}] 已存在，跳过：{name}")
             progress(n, len(entries), "已存在：" + name)
             ok += 1
             continue
         log(f"[{n}/{len(entries)}] 下载 {name}")
         progress(n - 1, len(entries), "下载：" + name)
+        os.makedirs(args.dest, exist_ok=True)
+        args.downloaded = True
         t0 = time.time()
         try:
             path = download(url, os.path.join(args.dest, name), args.format, auth)
@@ -174,9 +178,13 @@ def run_m4b(entries, args, auth):
     out_name = safe_name(args.output or f"{args.album}.m4b")
     if not out_name.endswith(".m4b"):
         out_name += ".m4b"
-    if existing(args, out_name):
+    found = existing(args, out_name)
+    if found:
         log(f"已存在，跳过：{out_name}")
+        args.found_dir = os.path.dirname(found)
         return True
+    os.makedirs(args.dest, exist_ok=True)
+    args.downloaded = True
     if not shutil.which("ffmpeg"):
         raise SystemExit("合成 m4b 需要 ffmpeg")
     with tempfile.TemporaryDirectory(prefix=".omnihub-m4b-", dir=args.dest) as tmp:
@@ -252,12 +260,13 @@ def main():
         raise SystemExit("没有可下载的条目（链接解析失败，见上面的日志）")
     args.album = safe_name(args.album or first_title or entries[0][1] or "未命名专辑", 80)
     args.dest = os.path.join(args.root, args.album)
-    os.makedirs(args.dest, exist_ok=True)
+    args.found_dir, args.downloaded = None, False   # 目录只在真正要下载时才建
     log(f"《{args.album}》共 {len(entries)} 个条目 → {args.dest}")
     progress(0, len(entries), "开始下载")
     ok = run_m4b(entries, args, auth) if args.mode == "m4b" else run_files(entries, args, auth)
     progress(len(entries), len(entries), "完成" if ok else "部分失败")
-    result(album=args.album, path=args.dest, ok=ok)
+    # 全部已存在时，结果指向文件实际所在的目录（可能在别的资源库）。
+    result(album=args.album, path=args.dest if args.downloaded or not args.found_dir else args.found_dir, ok=ok)
     raise SystemExit(0 if ok else 1)
 
 

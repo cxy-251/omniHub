@@ -104,7 +104,29 @@ func (r *Router) ConfigureDownloads(settings config.DownloadSettings, configDir 
 	}
 }
 
-// writableLibraryChoice 列出在线可写库供选择；默认选该分类目录里条目最多的库（通常就是平时存这类内容的库）。
+// countFiles 统计目录下（最多 3 层）的文件数，最多数到 limit。
+func countFiles(dir string, depth, limit int) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if n >= limit {
+			break
+		}
+		if e.IsDir() {
+			if depth > 0 {
+				n += countFiles(filepath.Join(dir, e.Name()), depth-1, limit-n)
+			}
+		} else {
+			n++
+		}
+	}
+	return n
+}
+
+// writableLibraryChoice 列出在线可写库供选择；默认选该分类下文件最多的库（通常就是平时存这类内容的库）。
 func (r *Router) writableLibraryChoice(category string) ([]dlOption, string) {
 	var opts []dlOption
 	def, most := "", -1
@@ -113,8 +135,8 @@ func (r *Router) writableLibraryChoice(category string) ([]dlOption, string) {
 			continue
 		}
 		opts = append(opts, dlOption{Value: lib.ID, Label: lib.Name})
-		if entries, err := os.ReadDir(filepath.Join(lib.RootPath, category)); err == nil && len(entries) > most {
-			def, most = lib.ID, len(entries)
+		if n := countFiles(filepath.Join(lib.RootPath, category), 3, 5000); n > most {
+			def, most = lib.ID, n
 		}
 	}
 	if def == "" && len(opts) > 0 {
