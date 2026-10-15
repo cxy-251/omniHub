@@ -34,6 +34,8 @@ type Post struct {
 	Music      string `json:"music,omitempty"`
 	OnDisk     bool   `json:"on_disk"`
 	Imported   bool   `json:"imported"`
+	// HasThumbnail 表示 thumbnails.db 里有可用封面；客户端据此决定是否请求缩略图。
+	HasThumbnail bool `json:"has_thumbnail"`
 }
 
 // Filter 选择作品列表；空字段表示不限。
@@ -67,7 +69,38 @@ func (s *Store) Posts(f Filter, limit, offset int) ([]Post, error) {
 		}
 		posts = append(posts, p)
 	}
-	return posts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return posts, s.markThumbnails(posts)
+}
+
+// markThumbnails 为一页作品填写 HasThumbnail。
+func (s *Store) markThumbnails(posts []Post) error {
+	if len(posts) == 0 {
+		return nil
+	}
+	args := make([]any, len(posts))
+	for i, p := range posts {
+		args[i] = p.ID
+	}
+	rows, err := s.thumbs.Query("SELECT post_id FROM thumbnails WHERE failed=0 AND post_id IN (?"+strings.Repeat(",?", len(posts)-1)+")", args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	have := make(map[string]bool, len(posts))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		have[id] = true
+	}
+	for i := range posts {
+		posts[i].HasThumbnail = have[posts[i].ID]
+	}
+	return rows.Err()
 }
 
 // Post 返回单个作品；不存在时 ok 为 false。

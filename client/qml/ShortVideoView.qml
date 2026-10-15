@@ -145,7 +145,13 @@ Item {
                         fillMode: Image.PreserveAspectCrop
                         asynchronous: true
                         sourceSize.width: 360
-                        source: view.apiQuery("/api/media/shortvideo/thumbnail", modelData)
+                        source: modelData.has_thumbnail ? view.apiQuery("/api/media/shortvideo/thumbnail", modelData) : ""
+                    }
+                    Label {
+                        anchors.centerIn: thumb
+                        visible: !modelData.has_thumbnail
+                        text: modelData.kind === "album" ? "🖼" : "▶"
+                        font.pixelSize: 40; color: "#30363d"
                     }
                     Label {
                         anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4

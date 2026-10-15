@@ -4,7 +4,7 @@ import { api, request } from './api';
 const VideoMatrix = lazy(() => import('./VideoMatrix'));
 
 type Creator = { id: string; platform: string; name: string; posts: number };
-type Post = { id: string; creator_id: string; kind: 'video' | 'album'; title: string; published: string; image_count?: number; music?: string; library_id: string };
+type Post = { id: string; creator_id: string; kind: 'video' | 'album'; title: string; published: string; image_count?: number; music?: string; library_id: string; has_thumbnail: boolean };
 
 const PAGE = 60;
 const chip = (on: boolean) => `shrink-0 rounded-full border px-3 py-1 text-sm ${on ? 'border-primary text-primary' : 'border-line text-muted hover:text-foreground'}`;
@@ -75,7 +75,9 @@ export default function ShortVideoLibrary({ active, onAccompany }: { active: boo
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-6">
         {posts.map((post, index) => <button key={post.library_id + post.id} className="group overflow-hidden rounded-lg border border-line bg-panel text-left hover:border-primary" onClick={() => setOpen(index)}>
           <div className="relative aspect-[9/16] bg-background">
-            <img className="h-full w-full object-cover" loading="lazy" src={`/api/media/shortvideo/thumbnail?${query(post)}`} alt="" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
+            {post.has_thumbnail
+              ? <img className="h-full w-full object-cover" loading="lazy" src={`/api/media/shortvideo/thumbnail?${query(post)}`} alt="" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
+              : <span className="flex h-full items-center justify-center text-4xl text-line">{post.kind === 'album' ? '🖼' : '▶'}</span>}
             <span className="absolute right-1 top-1 rounded bg-black/60 px-1.5 text-xs text-white">{post.kind === 'album' ? `图集 ${post.image_count}` : '视频'}</span>
           </div>
           <div className="p-2"><p className="line-clamp-2 text-sm">{post.title}</p><p className="mt-1 text-xs text-muted">{post.creator_id.split('/')[1]} · {post.published}</p></div>

@@ -9,4 +9,6 @@ if ! pgrep -x omnihub-server > /dev/null; then
     setsid nohup build/omnihub-server >> build/logs/server.log 2>&1 &
     sleep 1.5
 fi
+# 本机 Qt 没带 wayland 平台插件，直接用 xcb（XWayland），避免启动时的回退警告。
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
 exec build/client/omnihub_client "$@"

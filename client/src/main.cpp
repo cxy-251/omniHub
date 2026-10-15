@@ -1,4 +1,5 @@
 #include <QGuiApplication>
+#include <clocale>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
@@ -25,6 +26,8 @@ int main(int argc, char *argv[])
     qputenv("QT_QUICK_CONTROLS_STYLE", "Basic");
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     QGuiApplication app(argc, argv);
+    // libmpv 要求 LC_NUMERIC 为 "C"，否则 mpv_create 失败；QGuiApplication 会按系统区域改写它。
+    std::setlocale(LC_NUMERIC, "C");
     app.setOrganizationName("omniHub");
     app.setApplicationName("omnihub_client");
     QStringList externalFiles;
