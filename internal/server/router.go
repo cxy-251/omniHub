@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"net/http"
 	"os"
 
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1159,39 +1157,9 @@ func (r *Router) handleToolsSpeed(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// handleToolsWebShell 暂时停用：旧实现没有超时、输出上限和进程组清理，待按 11.4 重做后再开放。
 func (r *Router) handleToolsWebShell(w http.ResponseWriter, req *http.Request) {
-	if auth.IsWANFromContext(req.Context()) {
-		http.Error(w, "forbidden: host-level operation blocked from WAN", http.StatusForbidden)
-		return
-	}
-	user := auth.UserFromContext(req.Context())
-	if user.Role != auth.RoleAdmin {
-		http.Error(w, "forbidden: admin only", http.StatusForbidden)
-		return
-	}
-
-	if req.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var p struct {
-		Command string `json:"command"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&p); err != nil || p.Command == "" {
-		http.Error(w, "invalid command", http.StatusBadRequest)
-		return
-	}
-
-	cmd := exec.Command("sh", "-c", p.Command)
-	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &outBuf
-	_ = cmd.Run()
-
-	writeJSON(w, http.StatusOK, map[string]string{
-		"output": outBuf.String(),
-	})
+	http.Error(w, "web shell is disabled", http.StatusServiceUnavailable)
 }
 
 // --- 星际争霸 2 定制接口 (第 10.1 节) ---
