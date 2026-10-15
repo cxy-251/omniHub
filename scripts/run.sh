@@ -1,5 +1,6 @@
 #!/bin/bash
 # 本机运行：服务未运行时在后台启动（日志 build/logs/server.log），然后打开 Qt 客户端。
+# 带文件参数（文件管理器「打开方式 → omniHub」）时打开独立外部播放窗口；已有外部窗口时交给它切播。
 # 关闭客户端不会停止服务；停止服务：pkill -x omnihub-server
 #
 # 进程放在 systemd 用户 scope「app-omnihub-<pid>.scope」里，并安装 omnihub.desktop，
@@ -11,13 +12,16 @@ DESKTOP_CONTENT="[Desktop Entry]
 Type=Application
 Name=omniHub
 Comment=游戏与媒体中心
-Exec=\"$ROOT/scripts/run.sh\"
+Exec=\"$ROOT/scripts/run.sh\" %F
 Icon=applications-multimedia
-Categories=AudioVideo;Game;
-Terminal=false"
+Categories=AudioVideo;
+Terminal=false
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/x-flv;video/mpeg;audio/mpeg;audio/flac;audio/ogg;audio/x-wav;audio/mp4;audio/aac;audio/opus;"
 if [ "$(cat "$DESKTOP_FILE" 2>/dev/null)" != "$DESKTOP_CONTENT" ]; then
     mkdir -p "$(dirname "$DESKTOP_FILE")"
     printf '%s\n' "$DESKTOP_CONTENT" > "$DESKTOP_FILE" 2>/dev/null || true
+    # 刷新 MIME 关联缓存，文件管理器「打开方式」里才会出现 omniHub。
+    command -v update-desktop-database >/dev/null && update-desktop-database "$(dirname "$DESKTOP_FILE")" 2>/dev/null
 fi
 if [ -z "$OMNIHUB_SCOPED" ] && command -v systemd-run >/dev/null 2>&1 \
         && systemd-run --user --scope --quiet true >/dev/null 2>&1; then

@@ -4,29 +4,12 @@ import QtQuick.Window
 import QtQuick.Layouts
 import QtCore
 
-Window {
+DarkWindow {
     id: mainWindow
     width: 1280
     height: 800
     visible: true
     title: "omniHub Native Client"
-    color: "#0d1117"
-    // 深色调色板（Fusion 控件按调色板着色）。
-    palette.window: "#0d1117"
-    palette.windowText: "#c9d1d9"
-    palette.base: "#161b22"
-    palette.alternateBase: "#0d1117"
-    palette.text: "#c9d1d9"
-    palette.button: "#21262d"
-    palette.buttonText: "#c9d1d9"
-    palette.highlight: "#58a6ff"
-    palette.highlightedText: "#0d1117"
-    palette.placeholderText: "#8b949e"
-    palette.mid: "#30363d"
-    palette.light: "#30363d"
-    palette.dark: "#0b0e13"
-    palette.toolTipBase: "#161b22"
-    palette.toolTipText: "#c9d1d9"
     onClosing: {
         if (typeof nativeResume !== "undefined") nativeResume.flush()
         if (textLoader.item) textLoader.item.flush()
@@ -35,35 +18,16 @@ Window {
     Settings { id: uiPrefs; category: "main"; property int page: 4 }
     property var lifecycle: typeof nativeLifecycle === "undefined" ? null : nativeLifecycle
     property var restoredUI: lifecycle ? lifecycle.restored : ({})
-    property string savedMediaSource: restoredUI.source || initialExternalFile
-    property real savedMediaPosition: restoredUI.position || 0
-    property bool savedMediaPaused: !!restoredUI.paused
-    property var savedPlaylistEntries: restoredUI.entries || []
-    property int savedPlaylistIndex: restoredUI.index !== undefined ? restoredUI.index : -1
 
     function yieldForGame(sessionId) {
         if (!lifecycle) return
-        if (playerLoader.item) {
-            savedMediaSource = playerLoader.item.source
-            savedMediaPosition = playerLoader.item.position
-            savedMediaPaused = playerLoader.item.pauseRequested
-            savedPlaylistEntries = playerLoader.item.playlistEntries.slice()
-            savedPlaylistIndex = playerLoader.item.playlistIndex
-        }
-        lifecycle.yieldToGame(sessionId, {source: savedMediaSource, position: savedMediaPosition, paused: savedMediaPaused, page: stack.currentIndex, entries: savedPlaylistEntries, index: savedPlaylistIndex})
+        lifecycle.yieldToGame(sessionId, {page: stack.currentIndex})
     }
 
     function selectPage(index) {
         if (stack.currentIndex === index) return
         // Capture before Loader destroys the item; hidden pages must not
         // retain decoders, GPU buffers or request objects.
-        if (playerLoader.item) {
-            savedMediaSource = playerLoader.item.source
-            savedMediaPosition = playerLoader.item.position
-            savedMediaPaused = playerLoader.item.pauseRequested
-            savedPlaylistEntries = playerLoader.item.playlistEntries.slice()
-            savedPlaylistIndex = playerLoader.item.playlistIndex
-        }
         stack.currentIndex = index
         uiPrefs.page = index
     }
@@ -82,7 +46,7 @@ Window {
             // A standalone local file must keep playing when the service is
             // absent/offline; recovery navigation cannot destroy its decoder.
             // 只在资源库请求完成且确认状态离线时跳转；请求进行中 stateReady 尚未更新。不写入记住的页面。
-            if (!backendApi.libraryBusy && backendApi.connected && !backendApi.stateReady && !(playerLoader.item && playerLoader.item.source.length > 0)) stack.currentIndex = 2
+            if (!backendApi.libraryBusy && backendApi.connected && !backendApi.stateReady) stack.currentIndex = 2
         }
     }
     Dialog {
@@ -121,7 +85,7 @@ Window {
                 x: 8
                 spacing: 4
                 Repeater {
-                    model: [{page: 4, label: "短视频"}, {page: 5, label: "相册"}, {page: 0, label: "播放器"},
+                    model: [{page: 4, label: "短视频"}, {page: 5, label: "相册"},
                             {page: 1, label: "游戏"}, {page: 3, label: "文本"}, {page: 2, label: "资源库"}]
                     delegate: Chip {
                         required property var modelData
@@ -142,19 +106,10 @@ Window {
             id: stack
             width: parent.width
             height: parent.height - 40
-            currentIndex: mainWindow.restoredUI.page !== undefined ? mainWindow.restoredUI.page : (initialExternalFile !== "" ? 0 : uiPrefs.page)
+            currentIndex: Math.max(1, mainWindow.restoredUI.page !== undefined ? mainWindow.restoredUI.page : uiPrefs.page)
 
-            Loader {
-                id: playerLoader
-                active: mainWindow.pagesReady && stack.currentIndex === 0
-                sourceComponent: Component { PlayerView { } }
-                onLoaded: {
-                    item.restorePlayback(mainWindow.savedMediaSource, mainWindow.savedMediaPosition, mainWindow.savedMediaPaused, mainWindow.savedPlaylistEntries, mainWindow.savedPlaylistIndex)
-                    if (typeof mprisService !== "undefined") mprisService.bind(item)
-                    if (typeof nativeResume !== "undefined") nativeResume.bind(item, mainWindow.savedMediaPosition === 0)
-                }
-            }
-
+            // 页 0 原为内嵌播放器。播放器改为系统「打开方式」调用的独立外部窗口（规格 9.2/9.3），这里留空占位以保持页码。
+            Item { }
             Loader {
                 active: mainWindow.pagesReady && stack.currentIndex === 1
                 sourceComponent: Component { GameLauncherView { onGameStarted: function(sessionId) { mainWindow.yieldForGame(sessionId) } } }

@@ -82,7 +82,3 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 install(TARGETS omnihub_client DESTINATION bin)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    install(PROGRAMS desktop/omnihub-client DESTINATION bin)
-    install(FILES desktop/omnihub-player.desktop DESTINATION share/applications)
-endif()

@@ -134,6 +134,17 @@ Item {
                 }
                 function itemHeight(i) { return masonry.colWidth * Math.min(2.5, Math.max(0.4, ratios[i] / 1000)) }
             }
+            // 开发验证：devScroll < 0 时打开原图，每 -devScroll 毫秒翻一张（-100 模拟按住方向键）。
+            Timer {
+                interval: typeof devScroll !== "undefined" && devScroll < 0 ? -devScroll : 100; repeat: true
+                running: typeof devScroll !== "undefined" && devScroll < 0 && paged.total > 0
+                onTriggered: view.openIndex = (view.openIndex + 1) % paged.total
+            }
+            Timer {
+                interval: 100; repeat: true
+                running: typeof devScroll !== "undefined" && devScroll > 0
+                onTriggered: masonry.contentY = Math.min(masonry.contentHeight - masonry.height, masonry.contentY + devScroll)
+            }
             onColumnsChanged: layout.rebuild()
             onColWidthChanged: layout.rebuild()
 
@@ -176,6 +187,10 @@ Item {
             Rectangle {
                 id: viewer
                 readonly property var photo: { paged.revision; return paged.item(view.openIndex) }
+                // 翻页时先只显示缩略图；停下 250ms 后才加载原图，按住方向键快速翻时不会逐张解码原图。
+                property string originalSource: ""
+                onPhotoChanged: { originalSource = ""; originalTimer.restart() }
+                Timer { id: originalTimer; interval: 250; onTriggered: viewer.originalSource = viewer.photo ? view.apiQuery("/api/media/gallery/original", viewer.photo) : "" }
                 color: "black"
                 focus: true
                 Component.onCompleted: forceActiveFocus()
@@ -202,7 +217,7 @@ Item {
                     cache: false
                     sourceSize.width: viewer.width
                     sourceSize.height: viewer.height
-                    source: viewer.photo ? view.apiQuery("/api/media/gallery/original", viewer.photo) : ""
+                    source: viewer.originalSource
                 }
                 TapHandler { onTapped: function (point) { viewer.step(point.position.x < viewer.width / 3 ? -1 : 1) } }
                 RowLayout {

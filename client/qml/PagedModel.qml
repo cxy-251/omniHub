@@ -43,7 +43,8 @@ QtObject {
         if (index < 0) return null
         var p = Math.floor(index / pageSize)
         var rows = pages[p]
-        if (!rows) { fetch(p); return null }
+        // 绑定求值中不能有副作用（会触发绑定循环）：缺页时推迟到本轮求值之后再请求。
+        if (!rows) { Qt.callLater(fetch, p); return null }
         touch(p)
         return rows[index - p * pageSize] || null
     }

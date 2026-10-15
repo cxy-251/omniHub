@@ -2,12 +2,11 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Window {
+DarkWindow {
     id: externalWindow
     width: 960; height: 600
     visible: true
     title: "omniHub 外部播放器"
-    color: "#0d1117"
     onClosing: nativeResume.flush()
     function openFiles(files) {
         if (player.openFiles(files)) {

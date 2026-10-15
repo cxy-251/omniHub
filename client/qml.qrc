@@ -11,6 +11,7 @@
         <file>qml/MatrixView.qml</file>
         <file>qml/PagedModel.qml</file>
         <file>qml/Chip.qml</file>
+        <file>qml/DarkWindow.qml</file>
         <file>qml/GalleryView.qml</file>
     </qresource>
 </RCC>

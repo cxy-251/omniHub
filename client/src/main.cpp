@@ -1,4 +1,7 @@
 #include <QGuiApplication>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include <clocale>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -23,6 +26,13 @@
 
 int main(int argc, char *argv[])
 {
+#ifdef __GLIBC__
+    // 图片解码/视频帧会反复分配大小不一的大块内存。glibc 默认的 mmap 阈值会动态上调，
+    // 之后大块改从堆里分配，释放后留在进程里不还给系统，浏览原图时内存只涨不降。
+    // 固定阈值让大块走 mmap、释放即归还；限制 arena 数量减少多线程碎片。
+    mallopt(M_MMAP_THRESHOLD, 256 * 1024);
+    mallopt(M_ARENA_MAX, 2);
+#endif
     if (argc > 1 && QString::fromLocal8Bit(argv[1]) == "--watch-game")
         return NativeLifecycle::watchGame(argc, argv);
     const bool restore = argc > 1 && QString::fromLocal8Bit(argv[1]) == "--resume-ui";
@@ -97,18 +107,15 @@ int main(int argc, char *argv[])
         engine.rootContext()->setContextProperty("backendApi", &backend);
         engine.rootContext()->setContextProperty("nativeLifecycle", &lifecycle);
         engine.rootContext()->setContextProperty("nativeResume", &resume);
+        // 开发验证用：OMNIHUB_DEV_SCROLL=<像素> 让列表每 100ms 自动下滚，用于测量滚动时的内存。
+        engine.rootContext()->setContextProperty("devScroll", qEnvironmentVariableIntValue("OMNIHUB_DEV_SCROLL"));
 
         // 注册 Linux MPRIS 媒体控制服务
 #ifdef Q_OS_LINUX
         engine.rootContext()->setContextProperty("mprisService", &mprisService);
 #endif
 
-        // 处理外部打开文件命令行参数 (第 9.3 节)
-        QString externalFile;
-        if (argc > 1 && !restore) {
-            externalFile = QString::fromLocal8Bit(argv[1]);
-        }
-        engine.rootContext()->setContextProperty("initialExternalFile", externalFile);
+        // 带文件参数时打开外部播放窗口（规格 9.3），文件列表在 externalFiles。
         engine.rootContext()->setContextProperty("initialExternalFiles", externalFiles);
 
         const QUrl url(externalFiles.isEmpty()?QStringLiteral("qrc:/qml/Main.qml"):QStringLiteral("qrc:/qml/ExternalPlayerWindow.qml"));
