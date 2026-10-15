@@ -15,7 +15,18 @@ FocusScope {
     signal exitRequested()
 
     property int focused: 0
-    property bool barVisible: true
+    // 打开时默认暂停：各屏加载后停在第一帧，按「全部播放」或单屏播放开始。
+    property bool playing: false
+    // 顶栏：进入后显示 3 秒；之后鼠标移到顶边出现，离开 1.5 秒收起；📌 固定后常显。
+    property bool barPinned: false
+    property bool barShown: true
+    readonly property bool barVisible: barPinned || barShown || barHover.hovered || topEdge.hovered
+    Timer { id: barTimer; interval: 3000; running: true; onTriggered: matrix.barShown = false }
+    function revealBar() { barShown = true; barTimer.interval = 1500; barTimer.restart() }
+    function setAllPlaying(on) {
+        playing = on
+        for (var i = 0; i < repeater.count; i++) { var item = repeater.itemAt(i); if (item) item.setPaused(!on) }
+    }
 
     Settings {
         id: prefs
@@ -58,7 +69,7 @@ FocusScope {
     Keys.onPressed: function (event) {
         var slot = repeater.itemAt(focused)
         if (event.key === Qt.Key_Escape) matrix.exitRequested()
-        else if (event.key === Qt.Key_Tab) barVisible = !barVisible
+        else if (event.key === Qt.Key_Tab) barPinned = !barPinned
         else if (event.key >= Qt.Key_1 && event.key < Qt.Key_1 + prefs.screens) focused = event.key - Qt.Key_1
         else if (!slot) return
         else if (event.key === Qt.Key_Space) slot.togglePause()
@@ -69,28 +80,31 @@ FocusScope {
         event.accepted = true
     }
 
-    ColumnLayout {
+    Item {
         anchors.fill: parent
-        spacing: 0
-
         // 顶栏：全局设置 + 焦点屏控件（标题显示在各屏底部，顶栏只放控件）
         Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: matrix.barVisible ? 40 : 0
+            id: barBox
+            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+            height: 40
+            z: 2
             visible: matrix.barVisible
-            color: "#161b22"
+            color: "#e6161b22"
+            HoverHandler { id: barHover; onHoveredChanged: if (!hovered) matrix.revealBar() }
             RowLayout {
                 id: bar
                 anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8
                 spacing: 4
                 property var cfg: matrix.slotConfig(matrix.focused)
-                property var slotItem: repeater.itemAt(matrix.focused)
+                // itemAt() 不发通知；读 count 让格子创建后重新求值。
+                property var slotItem: { repeater.count; return repeater.itemAt(matrix.focused) }
                 Chip { text: "浏览"; onClicked: matrix.exitRequested() }
                 Chip { text: "多联放映"; selected: true }
                 Rectangle { width: 1; height: 20; color: "#30363d" }
                 Chip { text: "2 屏"; selected: prefs.screens === 2; onClicked: { prefs.screens = 2; matrix.focused = Math.min(matrix.focused, 1) } }
                 Chip { text: "3 屏"; selected: prefs.screens === 3; onClicked: prefs.screens = 3 }
                 Chip { text: "焦点出声"; selected: prefs.focusAudio; onClicked: prefs.focusAudio = !prefs.focusAudio }
+                Chip { text: matrix.playing ? "⏸ 全部暂停" : "▶ 全部播放"; selected: matrix.playing; onClicked: matrix.setAllPlaying(!matrix.playing) }
                 Rectangle { width: 1; height: 20; color: "#30363d" }
                 Label { text: "屏 " + (matrix.focused + 1); color: "#58a6ff"; font.pixelSize: 13 }
                 ComboBox {
@@ -110,12 +124,21 @@ FocusScope {
                 Chip { text: "下一条 ▶"; onClicked: if (bar.slotItem) bar.slotItem.step(1) }
                 Chip { text: bar.cfg.muted ? "🔇 已静音" : "🔊 声音"; selected: bar.cfg.muted; onClicked: matrix.setSlot(matrix.focused, {muted: !bar.cfg.muted}) }
                 Item { Layout.fillWidth: true }
+                Chip { text: "📌"; selected: matrix.barPinned; onClicked: matrix.barPinned = !matrix.barPinned }
             }
         }
+        // 顶边感应条：鼠标移到最上方时显示顶栏；触屏点顶边同样显示。
+        Item {
+            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+            height: 10
+            z: 3
+            HoverHandler { id: topEdge; onHoveredChanged: if (hovered) matrix.revealBar() }
+            TapHandler { onTapped: matrix.revealBar() }
+        }
+
 
         RowLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
+            anchors.fill: parent
             spacing: 2
             Repeater {
                 id: repeater
@@ -127,7 +150,7 @@ FocusScope {
                     readonly property bool audible: !cfg.muted && (!prefs.focusAudio || matrix.focused === index)
                     property var post: null
                     property int total: 0
-                    property bool paused: false
+                    property bool paused: !matrix.playing
                     property string caption: post ? post.creator_id.split("/")[1] + " · " + post.published + " · " + post.title + "（" + (cfg.index + 1) + "/" + total + "）" : (error || "加载中…")
                     property string error: ""
                     Layout.fillWidth: true
@@ -145,17 +168,18 @@ FocusScope {
                             total = result.total
                             post = result.post
                             video.source = matrix.shortVideo.localFile(post, post.id)
-                            paused = false
+                            if (slot.paused) video.pause()   // 默认暂停：停在第一帧
                         })
                     }
                     function step(delta) {
                         var n = Math.max(1, total)
                         matrix.setSlot(index, {index: (cfg.index + delta + n) % n})
                     }
-                    function togglePause() {
-                        if (paused) video.play(); else video.pause()
-                        paused = !paused
+                    function setPaused(p) {
+                        paused = p
+                        if (p) video.pause(); else video.play()
                     }
+                    function togglePause() { setPaused(!paused) }
                     // 频道、顺序、序号或种子变化时重新取片；静音变化不重新加载。
                     readonly property string sequenceKey: cfg.channel + "|" + cfg.shuffle + "|" + cfg.seed + "|" + cfg.index
                     onSequenceKeyChanged: load()

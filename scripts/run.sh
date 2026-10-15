@@ -1,7 +1,30 @@
 #!/bin/bash
-# 本机开发运行：服务未运行时在后台启动（日志 build/logs/server.log），然后打开 Qt 客户端。
+# 本机运行：服务未运行时在后台启动（日志 build/logs/server.log），然后打开 Qt 客户端。
 # 关闭客户端不会停止服务；停止服务：pkill -x omnihub-server
+#
+# 进程放在 systemd 用户 scope「app-omnihub-<pid>.scope」里，并安装 omnihub.desktop，
+# 这样 KDE 系统监视器的「应用程序」页能把服务和客户端归为 omniHub 一个应用显示（内存合计）。
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/omnihub.desktop"
+DESKTOP_CONTENT="[Desktop Entry]
+Type=Application
+Name=omniHub
+Comment=游戏与媒体中心
+Exec=\"$ROOT/scripts/run.sh\"
+Icon=applications-multimedia
+Categories=AudioVideo;Game;
+Terminal=false"
+if [ "$(cat "$DESKTOP_FILE" 2>/dev/null)" != "$DESKTOP_CONTENT" ]; then
+    mkdir -p "$(dirname "$DESKTOP_FILE")"
+    printf '%s\n' "$DESKTOP_CONTENT" > "$DESKTOP_FILE" 2>/dev/null || true
+fi
+if [ -z "$OMNIHUB_SCOPED" ] && command -v systemd-run >/dev/null 2>&1 \
+        && systemd-run --user --scope --quiet true >/dev/null 2>&1; then
+    export OMNIHUB_SCOPED=1
+    exec systemd-run --user --scope --quiet --collect --unit="app-omnihub-$$" -- "$ROOT/scripts/run.sh" "$@"
+fi
+
 source "$ROOT/scripts/steamdeck-env.sh"
 cd "$ROOT"
 if ! pgrep -x omnihub-server > /dev/null; then

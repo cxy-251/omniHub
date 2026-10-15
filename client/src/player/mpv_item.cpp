@@ -175,11 +175,19 @@ void MpvItem::initMpv()
     auto *core = m_core.get();
     core->handle = mpv_create();
     if (!core->handle) { setError(tr("无法创建播放器")); m_core.reset(); return; }
+    // 内存：短视频里有大量 4K HEVC，软件解码时每个线程各持几帧 4K 画面，三屏多联放映实测 1.2–1.6GB。
+    // 硬解后拷回（auto-copy-safe，Linux 为 vaapi-copy）+ 软解回退限 2 线程 + 少预留硬解帧，三屏实测约 300MB，CPU 减半。
     const char *options[][2] = {{"config", "no"}, {"load-scripts", "no"},
-        {"terminal", "no"}, {"vo", "libmpv"}, {"keep-open", "yes"}};
+        {"terminal", "no"}, {"vo", "libmpv"}, {"keep-open", "yes"},
+        {"hwdec", "auto-copy-safe"}, {"vd-lavc-threads", "2"}, {"hwdec-extra-frames", "2"}, {"video-latency-hacks", "yes"}};
     for (const auto &option : options) {
         const int status = mpv_set_option_string(core->handle, option[0], option[1]);
         if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); m_core.reset(); return; }
+    }
+    // 调试用：OMNIHUB_MPV_OPTS="key=value,key=value" 覆盖上面的选项，用于测试内存/解码参数。
+    for (const QString &pair : qEnvironmentVariable("OMNIHUB_MPV_OPTS").split(',', Qt::SkipEmptyParts)) {
+        const int eq = pair.indexOf('=');
+        if (eq > 0) mpv_set_option_string(core->handle, pair.left(eq).toUtf8().constData(), pair.mid(eq + 1).toUtf8().constData());
     }
     int status = mpv_initialize(core->handle);
     if (status < 0) { setError(QString::fromUtf8(mpv_error_string(status))); m_core.reset(); return; }

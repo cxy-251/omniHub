@@ -32,11 +32,13 @@ function sequenceURL(slot: Slot) {
 
 type SlotState = { post?: Post; total: number; error: string };
 
-function VideoSlot({ active, slot, audible, focused, onFocus, onEnded, onState }: { active: boolean; slot: Slot; audible: boolean; focused: boolean; onFocus(): void; onEnded(): void; onState(s: SlotState): void }) {
+function VideoSlot({ active, playing, slot, audible, focused, onFocus, onEnded, onState }: { active: boolean; playing: boolean; slot: Slot; audible: boolean; focused: boolean; onFocus(): void; onEnded(): void; onState(s: SlotState): void }) {
   const video = useRef<HTMLVideoElement>(null);
   const report = useRef(onState);
   report.current = onState;
   const [state, setState] = useState<SlotState>({ total: 0, error: '' });
+  const autoplay = useRef(playing);
+  autoplay.current = playing;
 
   useEffect(() => {
     const player = video.current;
@@ -46,14 +48,15 @@ function VideoSlot({ active, slot, audible, focused, onFocus, onEnded, onState }
     api<{ total: number; post: Post }>(sequenceURL(slot), { signal: controller.signal }).then(({ total, post }) => {
       player.src = `/api/media/shortvideo/stream?${new URLSearchParams({ library_id: post.library_id, id: post.id })}`;
       update({ post, total, error: '' });
-      player.play().catch(() => undefined); // 自动播放被浏览器拦截时保持暂停，点击继续
+      // 默认暂停停在第一帧；「全部播放」后换片继续播放。浏览器拦截自动播放时保持暂停。
+      if (autoplay.current) player.play().catch(() => undefined);
     }).catch((e: Error) => { if (!controller.signal.aborted) update({ total: 0, error: e.message }); });
     return () => { controller.abort(); player.pause(); player.removeAttribute('src'); player.load(); };
   }, [active, slot.channel, slot.shuffle, slot.seed, slot.index]);
 
   const p = state.post;
   return <div className={`relative overflow-hidden rounded border-2 bg-black ${focused ? 'border-primary' : 'border-transparent'}`} onClick={onFocus}>
-    <video ref={video} muted={!audible} playsInline className="h-[calc(100vh-9.5rem)] w-full object-contain" onEnded={onEnded} />
+    <video ref={video} muted={!audible} playsInline preload="metadata" className="h-[calc(100vh-7rem)] w-full object-contain" onEnded={onEnded} />
     <p className={`absolute inset-x-0 bottom-0 truncate bg-black/60 px-2 py-0.5 text-xs ${state.error ? 'text-danger' : 'text-white'}`}>
       {audible ? '' : '🔇 '}{state.error || (p ? `${p.creator_id.split('/')[1]} · ${p.published} · ${p.title}（${slot.index + 1}/${state.total}）` : '加载中…')}
     </p>
@@ -96,6 +99,13 @@ export default function VideoMatrix({ active }: { active: boolean }) {
   const [focused, setFocused] = useState(0);
   const [accompany, setAccompany] = useState<Album>();
   const [states, setStates] = useState<SlotState[]>([]);
+  const [playing, setPlaying] = useState(false);
+  // 顶栏：进入后显示 3 秒；之后鼠标移到顶边出现，离开 1.5 秒收起；📌 固定后常显。
+  const [barShown, setBarShown] = useState(true);
+  const [pinned, setPinned] = useState(false);
+  const hideTimer = useRef<number | undefined>(undefined);
+  const revealBar = (ms = 1500) => { setBarShown(true); window.clearTimeout(hideTimer.current); hideTimer.current = window.setTimeout(() => setBarShown(false), ms); };
+  useEffect(() => { revealBar(3000); return () => window.clearTimeout(hideTimer.current); }, []);
   const container = useRef<HTMLDivElement>(null);
 
   useEffect(() => { try { localStorage.setItem(STORE, JSON.stringify(prefs)); } catch { /* 忽略 */ } }, [prefs]);
@@ -114,6 +124,10 @@ export default function VideoMatrix({ active }: { active: boolean }) {
   });
   const videoAt = (i: number) => container.current?.querySelectorAll('video')[i];
   const togglePause = (i: number) => { const v = videoAt(i); if (v) { if (v.paused) void v.play(); else v.pause(); } };
+  const setAll = (on: boolean) => {
+    setPlaying(on);
+    container.current?.querySelectorAll('video').forEach(v => { if (on) void v.play().catch(() => undefined); else v.pause(); });
+  };
 
   useEffect(() => {
     if (!active) return;
@@ -133,11 +147,14 @@ export default function VideoMatrix({ active }: { active: boolean }) {
 
   const cfg = prefs.slots[focused];
   const platforms = [...new Set(creators.map(c => c.platform))];
-  return <section className="space-y-1.5">
-    <div className="flex flex-wrap items-center gap-1.5">
+  return <section className="relative">
+    <div className="absolute inset-x-0 top-0 z-20 h-3" onMouseEnter={() => revealBar()} onClick={() => revealBar()} />
+    <div className={`absolute inset-x-0 top-0 z-30 flex flex-wrap items-center gap-1.5 bg-panel/90 px-2 py-1 transition-opacity ${pinned || barShown ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+      onMouseEnter={() => { setBarShown(true); window.clearTimeout(hideTimer.current); }} onMouseLeave={() => revealBar()}>
       <button className={chip(prefs.screens === 2)} onClick={() => { setPrefs(p => ({ ...p, screens: 2 })); setFocused(f => Math.min(f, 1)); }}>2 屏</button>
       <button className={chip(prefs.screens === 3)} onClick={() => setPrefs(p => ({ ...p, screens: 3 }))}>3 屏</button>
       <button className={chip(prefs.focusAudio)} onClick={() => setPrefs(p => ({ ...p, focusAudio: !p.focusAudio }))}>焦点出声</button>
+      <button className={chip(playing)} onClick={() => setAll(!playing)}>{playing ? '⏸ 全部暂停' : '▶ 全部播放'}</button>
       <span className="mx-1 h-4 w-px bg-line" />
       <span className="text-sm text-primary">屏 {focused + 1}</span>
       <select className={`${select} max-w-60`} value={cfg.channel} onChange={e => setSlot(focused, { channel: e.target.value, index: 0, seed: Math.floor(Math.random() * 1e9) })}>
@@ -156,9 +173,10 @@ export default function VideoMatrix({ active }: { active: boolean }) {
         {albums.map(a => <option key={a.id} value={a.id}>伴听：{a.title}（{a.track_count}）</option>)}
       </select>
       <Accompany active={active} album={accompany} />
+      <button className={`${chip(pinned)} ml-auto`} onClick={() => setPinned(p => !p)} title="固定顶栏">📌</button>
     </div>
     <div ref={container} className={`grid gap-1 ${prefs.screens === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
-      {prefs.slots.slice(0, prefs.screens).map((slot, i) => <VideoSlot key={i} active={active} slot={slot} focused={focused === i}
+      {prefs.slots.slice(0, prefs.screens).map((slot, i) => <VideoSlot key={i} active={active} playing={playing} slot={slot} focused={focused === i}
         audible={!accompany && !slot.muted && (!prefs.focusAudio || focused === i)}
         onFocus={() => setFocused(i)} onEnded={() => step(i, 1)}
         onState={s => setStates(old => { const next = [...old]; next[i] = s; return next; })} />)}

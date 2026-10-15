@@ -28,6 +28,8 @@
 - Qt 与 Web 的列表都按页懒加载，只保留最近 8 页数据；Qt 的 GridView、Web 的 VirtualGrid 只创建可视区附近的格子，滚远即销毁，图片随之释放。页面切走时整页销毁并中止进行中的请求。
 - Qt 客户端 2026-10-15 offscreen 实测：RSS 260–310MB，但大部分是共享库与字体的文件映射（Mesa LLVM 55MB 等）；私有脏页 63MB（无图片页）/ 91MB（短视频网格）。
 - 服务端：600 张缩略图 16 路并发 1.3 秒，RSS 稳定约 33MB。
+- 多联放映：短视频中约 18% 是 4K HEVC。mpv 默认软解时三屏私有内存 1.2–1.6GB 且持续上涨；改为硬解拷回（auto-copy-safe）+ 软解回退 2 线程 + 硬解额外帧 2 后约 300MB、稳定，单路 4K CPU 减半。默认暂停时 CPU 为 0。
+- `scripts/run.sh` 把服务和客户端放进 `app-omnihub-<pid>.scope` 并安装 omnihub.desktop，KDE 系统监视器「应用程序」页显示为 omniHub（内存合计）。
 
 ## 调试
 

@@ -54,7 +54,8 @@ Item {
     }
     function postAt(i) { paged.revision; return paged.item(i) }
 
-    PagedModel { id: paged; endpoint: view.postsEndpoint() }
+    // 多联放映时清空浏览数据源，网格格子与缩略图随之释放。
+    PagedModel { id: paged; endpoint: view.mode === "browse" ? view.postsEndpoint() : "" }
 
     Component.onCompleted: {
         backendApi.refreshLibraries()
