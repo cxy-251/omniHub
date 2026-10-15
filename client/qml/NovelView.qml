@@ -142,7 +142,7 @@ Item {
                             sourceSize.width: grid.cellWidth
                             source: cell.book && cell.book.format === "epub" ? backendApi.apiUrl("/api/media/text/epub/cover?path=" + encodeURIComponent(cell.book.id)) : ""
                             z: 1
-                            visible: status === Image.Ready
+                            visible: status === Image.Ready && implicitWidth > 1
                         }
                         Label {
                             anchors.fill: parent; anchors.margins: 12; anchors.leftMargin: 16

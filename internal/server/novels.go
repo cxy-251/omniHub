@@ -132,7 +132,7 @@ func (r *Router) handleNovels(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, all[min(offset, len(all)):min(offset+limit, len(all))])
 }
 
-// handleEpubCover 返回 EPUB 封面图片；没有封面时 404，客户端改用生成式书封。
+// handleEpubCover 返回 EPUB 封面图片；没有封面时返回 1×1 透明图，客户端改用生成式书封。
 func (r *Router) handleEpubCover(w http.ResponseWriter, req *http.Request) {
 	_, physical, ok := r.canonicalTextFor(w, req, req.URL.Query().Get("path"))
 	if !ok {
@@ -144,12 +144,12 @@ func (r *Router) handleEpubCover(w http.ResponseWriter, req *http.Request) {
 	}
 	book, err := text.InspectEpub(req.Context(), physical)
 	if err != nil || book.Cover == "" {
-		http.NotFound(w, req)
+		writeNoArt(w)
 		return
 	}
 	data, err := text.ReadEpubEntryContext(req.Context(), physical, book.Cover)
 	if err != nil {
-		http.NotFound(w, req)
+		writeNoArt(w)
 		return
 	}
 	w.Header().Set("Content-Type", http.DetectContentType(data))

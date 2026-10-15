@@ -167,7 +167,7 @@ Item {
                             color: view.tileColor(cell.modelData.category)
                             Label {
                                 anchors.fill: parent; anchors.margins: 8
-                                visible: icon.status !== Image.Ready
+                                visible: icon.status !== Image.Ready || icon.implicitWidth <= 1
                                 text: view.displayName(cell.modelData)
                                 wrapMode: Text.Wrap; elide: Text.ElideRight
                                 horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
@@ -204,7 +204,7 @@ Item {
                 Layout.fillHeight: true
                 active: !!(view.selected && view.selected.kind === "sc2")
                 visible: active
-                sourceComponent: Component { SC2Panel { request: view.request } }
+                sourceComponent: Component { SC2Panel { request: view.request; game: view.selected; onFavoriteToggled: view.toggleFavorite(view.selected) } }
             }
             // 详情
             Rectangle {

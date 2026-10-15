@@ -1,7 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"image"
+	"image/png"
 	"errors"
 	"fmt"
 	"net/http"
@@ -193,7 +196,7 @@ func (r *Router) gameArtStore(libID string) *games.ArtStore {
 }
 
 // handleGameArt 返回游戏封面：omni.json/图片文件 → Steam 封面缓存 → exe 内嵌图标；结果缓存在 games.db。
-// 没有可用图片时 404（客户端显示生成的卡片）。
+// 没有可用图片时返回 1×1 透明图（客户端显示生成的卡片）。
 func (r *Router) handleGameArt(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
 	libID, id := q.Get("library_id"), q.Get("id")
@@ -233,7 +236,7 @@ func (r *Router) handleGameArt(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	if len(art.Data) == 0 {
-		http.NotFound(w, req)
+		writeNoArt(w)
 		return
 	}
 	w.Header().Set("Content-Type", art.MIME)
@@ -329,4 +332,18 @@ func (r *Router) handleGameLaunch(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, status)
+}
+
+// noArtPNG 是 1×1 透明 PNG。没有封面时返回它而不是 404：客户端按尺寸判断显示名字卡片，
+// 不会把「没有封面」当成请求错误反复记日志。
+var noArtPNG = func() []byte {
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, image.NewNRGBA(image.Rect(0, 0, 1, 1)))
+	return buf.Bytes()
+}()
+
+func writeNoArt(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	_, _ = w.Write(noArtPNG)
 }

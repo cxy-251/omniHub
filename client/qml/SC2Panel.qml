@@ -8,6 +8,8 @@ import QtCore
 Rectangle {
     id: panel
     required property var request         // GamesView.request(method, path, body, done)
+    required property var game            // 大厅里的「星际争霸 II」条目（含 favorite）
+    signal favoriteToggled()
     property var maps: []
     property var mods: []
     property var status: ({})
@@ -60,6 +62,7 @@ Rectangle {
         spacing: 6
         RowLayout {
             Label { text: "星际争霸 II · 对战"; color: "#e6edf3"; font.pixelSize: 17; font.bold: true }
+            Chip { text: panel.game.favorite ? "♥ 已收藏" : "♡ 收藏"; selected: !!panel.game.favorite; onClicked: panel.favoriteToggled() }
             Item { Layout.fillWidth: true }
             Label { text: panel.maps.length ? panel.maps.length + " 张地图" : "正在读取地图（首次约 10 秒）…"; color: "#8b949e"; font.pixelSize: 12 }
         }
