@@ -37,3 +37,16 @@ func resolveGameTools(override config.GameTools, configDir string) games.Tools {
 	}
 	return tools
 }
+
+// resolveMegaCmd 返回 MEGAcmd 安装目录；配置优先，其次 ~/Applications/mega-cmd，都没有时返回空（用 PATH）。
+func resolveMegaCmd(override string) string {
+	if override != "" {
+		return override
+	}
+	home, _ := os.UserHomeDir()
+	dir := filepath.Join(home, "Applications", "mega-cmd")
+	if _, err := os.Stat(filepath.Join(dir, "bin", "mega-exec")); err == nil {
+		return dir
+	}
+	return ""
+}

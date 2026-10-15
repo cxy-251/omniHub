@@ -117,7 +117,6 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		webGameOpens:   make(chan struct{}, 2),
 		progressDB:     progDB,
 		userState:      readingDB,
-		megaClient:     mega.NewClient("", 5*time.Minute),
 		textCatalog:    catalog.New(".txt", ".epub", ".md", ".rst"),
 		novelCatalog:   catalog.New(".epub", ".txt"),
 		audioCatalog:   catalog.New(audio.FileExtensions()...),
@@ -212,6 +211,9 @@ func (r *Router) Close() error {
 	r.mangaDiscovery.Close()
 	r.webGames.close()
 	r.gameDiscovery.Close()
+	if r.megaClient != nil {
+		r.megaClient.Close()
+	}
 	var errs []error
 	for _, db := range r.metaDB {
 		errs = append(errs, db.Close())
@@ -345,8 +347,7 @@ func (r *Router) registerRoutes() {
 
 
 	// MEGA 客户端接口 (第 10.2 节)
-	r.mux.HandleFunc("/api/mega/status", r.handleMegaStatus)
-	r.mux.HandleFunc("/api/mega/download", r.handleMegaDownload)
+	r.mux.HandleFunc("/api/mega/", r.handleMega)
 
 	// Legacy primary-only paths cannot safely host game scripts in the UI origin.
 	r.mux.HandleFunc("/standalone_games/", func(w http.ResponseWriter, req *http.Request) {
@@ -1191,60 +1192,6 @@ func (r *Router) handleToolsSpeed(w http.ResponseWriter, req *http.Request) {
 // handleToolsWebShell 暂时停用：旧实现没有超时、输出上限和进程组清理，待按 11.4 重做后再开放。
 func (r *Router) handleToolsWebShell(w http.ResponseWriter, req *http.Request) {
 	http.Error(w, "web shell is disabled", http.StatusServiceUnavailable)
-}
-
-// --- MEGA 客户端接口 (第 10.2 节) ---
-
-func (r *Router) handleMegaStatus(w http.ResponseWriter, req *http.Request) {
-	user := auth.UserFromContext(req.Context())
-	if user.Role != auth.RoleAdmin || auth.IsWANFromContext(req.Context()) {
-		http.Error(w, "forbidden: local deck admin required", http.StatusForbidden)
-		return
-	}
-	quota, tasks := r.megaClient.GetState()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"quota": quota,
-		"tasks": tasks,
-	})
-}
-
-func (r *Router) handleMegaDownload(w http.ResponseWriter, req *http.Request) {
-	user := auth.UserFromContext(req.Context())
-	if user.Role != auth.RoleAdmin || auth.IsWANFromContext(req.Context()) {
-		http.Error(w, "forbidden: local deck admin required", http.StatusForbidden)
-		return
-	}
-	if req.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var p struct {
-		ID      string `json:"id"`
-		Source  string `json:"source"`
-		DestDir string `json:"dest_dir"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&p); err != nil || p.Source == "" {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if strings.Contains(p.DestDir, "..") {
-		http.Error(w, "invalid dest_dir path", http.StatusBadRequest)
-		return
-	}
-	if p.ID == "" {
-		p.ID = fmt.Sprintf("mega_%d", time.Now().UnixNano())
-	}
-	if p.DestDir == "" {
-		home, _ := os.UserHomeDir()
-		p.DestDir = filepath.Join(home, "Downloads")
-	}
-
-	task, err := r.megaClient.EnqueueDownload(p.ID, p.Source, p.DestDir)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, task)
 }
 
 func (r *Router) checkSectionAccess(w http.ResponseWriter, req *http.Request, sectionID string, target auth.TargetFilter) bool {

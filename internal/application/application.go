@@ -164,6 +164,7 @@ func (a *Application) build() *generation {
 	}
 	router.ConfigureShortVideo(a.cfg.ShortVideoThumbnails, a.saveShortVideoThumbnails)
 	router.ConfigureGames(resolveGameTools(a.cfg.GameTools, a.configDir))
+	router.ConfigureMega(resolveMegaCmd(a.cfg.MegaCmdDir))
 	if !a.cfg.StateInitialized {
 		a.cfg.StateInitialized = true
 		if err := config.Save(a.cfg); err != nil {

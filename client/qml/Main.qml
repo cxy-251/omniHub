@@ -81,7 +81,7 @@ DarkWindow {
                 spacing: 4
                 Repeater {
                     model: [{page: 4, label: "短视频"}, {page: 5, label: "相册"},
-                            {page: 1, label: "游戏"}, {page: 3, label: "小说"}, {page: 6, label: "音声"}, {page: 2, label: "资源库"}]
+                            {page: 1, label: "游戏"}, {page: 3, label: "小说"}, {page: 6, label: "音声"}, {page: 7, label: "下载"}, {page: 2, label: "资源库"}]
                     delegate: Chip {
                         required property var modelData
                         text: modelData.label
@@ -128,6 +128,8 @@ DarkWindow {
             }
             Loader { active: mainWindow.pagesReady && stack.currentIndex === 5; sourceComponent: Component { GalleryView { } } }
             Loader { active: mainWindow.pagesReady && stack.currentIndex === 6; sourceComponent: Component { AudioView { engine: audio } } }
+            // 下载：目前是 MEGA；之后加入有声书（yt-dlp）与漫画下载。
+            Loader { active: mainWindow.pagesReady && stack.currentIndex === 7; sourceComponent: Component { MegaPanel { } } }
         }
         AudioBar {
             id: audioBar

@@ -52,6 +52,8 @@ type Config struct {
 	ShortVideoThumbnails bool `json:"shortvideo_thumbnails"`
 	// GameTools 覆盖非原生游戏运行时位置；留空的项按常见位置自动查找。
 	GameTools GameTools `json:"game_tools,omitzero"`
+	// MegaCmdDir 是 MEGAcmd 安装目录（含 bin/mega-exec）；留空时找 ~/Applications/mega-cmd，再找 PATH。
+	MegaCmdDir string `json:"mega_cmd_dir,omitempty"`
 }
 
 // GameTools 是 Proton、Wine 容器、Lime3DS、Ren'Py SDK 的位置。
