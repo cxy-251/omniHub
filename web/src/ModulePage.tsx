@@ -18,15 +18,15 @@ const loaders = {
 
 const AudioLibrary = lazy(() => import('./AudioLibrary'));
 const GalleryLibrary = lazy(() => import('./GalleryLibrary'));
-const VideoMatrix = lazy(() => import('./VideoMatrix'));
+const ShortVideoLibrary = lazy(() => import('./ShortVideoLibrary'));
 const TextLibrary = lazy(() => import('./TextLibrary'));
 const MangaLibrary = lazy(() => import('./MangaLibrary'));
-const AdminPage = lazy(() => import('./AdminPage'));
+const AdminCenter = lazy(() => import('./AdminCenter'));
 const TaskConsole = lazy(() => import('./TaskConsole'));
 const GameLibrary = lazy(() => import('./GameLibrary'));
 
 // Transitional lifecycle adapter: existing modules remain runnable while each is moved to typed components.
-export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'libraries'>; sections: string[] }) {
+export default function ModulePage({ id, sections }: { id: ModuleID; sections: string[] }) {
   const [error, setError] = useState('');
   const [mediaTab, setMediaTab] = useState('');
   const [visited, setVisited] = useState<string[]>([]);
@@ -64,7 +64,7 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
   return <section className="tab-pane active" id={`pane-${id}`}>
     {error ? <p role="alert" className="mb-4 whitespace-pre-wrap text-danger">{error}</p> : null}
     <div id={`${id}-container`} />
-    {id === 'admin' ? <Suspense fallback={<p role="status">正在加载管理页面…</p>}><AdminPage /></Suspense> : null}
+    {id === 'admin' ? <Suspense fallback={<p role="status">正在加载管理页面…</p>}><AdminCenter /></Suspense> : null}
     {id === 'tasks' ? <Suspense fallback={<p role="status">正在加载任务台…</p>}><TaskConsole /></Suspense> : null}
     {id === 'games' ? <Suspense fallback={<p role="status">正在加载游戏大厅…</p>}><GameLibrary /></Suspense> : null}
     {id === 'media' && sections.includes('manga') && visited.includes('manga') ? <div hidden={mediaTab !== 'manga'} className="mt-4">
@@ -74,7 +74,7 @@ export default function ModulePage({ id, sections }: { id: Exclude<ModuleID, 'li
       <Suspense fallback={<p role="status">正在加载文本阅读器…</p>}><TextLibrary active={textActive} /></Suspense>
     </div> : null}
     {id === 'media' && sections.includes('shortvideo') && videoVisited ? <div hidden={!videoActive} className="mt-4">
-      <Suspense fallback={<p role="status">正在加载视频矩阵…</p>}><VideoMatrix active={videoActive} onAccompany={sections.includes('audio') ? () => moduleRef.current?.showAudioBar?.() : undefined} /></Suspense>
+      <Suspense fallback={<p role="status">正在加载短视频…</p>}><ShortVideoLibrary active={videoActive} onAccompany={sections.includes('audio') ? () => moduleRef.current?.showAudioBar?.() : undefined} /></Suspense>
     </div> : null}
     {id === 'media' && sections.includes('gallery') && galleryVisited ? <div hidden={!galleryActive} className="mt-4">
       <Suspense fallback={<p role="status">正在加载相册…</p>}><GalleryLibrary active={galleryActive} canEdit={sections.includes('admin')} /></Suspense>

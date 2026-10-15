@@ -48,6 +48,8 @@ type Config struct {
 	CategoryDirectories []string `json:"category_directories"`
 	// DisabledCategories 保留已移除的自定义分类，供路径授权与重新启用使用。
 	DisabledCategories []string `json:"disabled_categories,omitempty"`
+	// ShortVideoThumbnails 控制后台是否用 ffmpeg 生成短视频缩略图；关闭时只显示已有缩略图。
+	ShortVideoThumbnails bool `json:"shortvideo_thumbnails"`
 }
 
 var saveMu sync.Mutex

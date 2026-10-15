@@ -55,7 +55,7 @@ func (r *Router) protectRoutes(next http.Handler) http.Handler {
 			http.Error(w, "category disabled", http.StatusNotFound)
 			return
 		}
-		if strings.HasPrefix(path, "/api/tasks/") || path == "/api/tools/webshell" || strings.HasPrefix(path, "/api/sc2/") {
+		if strings.HasPrefix(path, "/api/tasks/") || path == "/api/tools/webshell" || strings.HasPrefix(path, "/api/sc2/") || strings.HasPrefix(path, "/api/media/shortvideo/admin/") {
 			if auth.IsWANFromContext(req.Context()) || auth.UserFromContext(req.Context()).Role != auth.RoleAdmin {
 				http.Error(w, "trusted environment administrator required", http.StatusForbidden)
 				return

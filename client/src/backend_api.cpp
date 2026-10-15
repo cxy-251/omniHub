@@ -94,8 +94,10 @@ void BackendApi::libraryRequest(const QString &path, const QVariantMap &body, bo
             } else {
                 m_libraries = info.value("libraries").toArray().toVariantList();
                 const QStringList directories = info.value("category_directories").toVariant().toStringList();
-                if (directories != m_categoryDirectories) {
+                const QStringList disabled = info.value("disabled_categories").toVariant().toStringList();
+                if (directories != m_categoryDirectories || disabled != m_disabledCategories) {
                     m_categoryDirectories = directories;
+                    m_disabledCategories = disabled;
                     emit categoryDirectoriesChanged();
                 }
                 m_stateReady = info.value("state_ready").toBool();

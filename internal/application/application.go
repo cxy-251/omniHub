@@ -162,6 +162,7 @@ func (a *Application) build() *generation {
 		g.stateError = errors.Join(err, db.Close()).Error()
 		return g
 	}
+	router.ConfigureShortVideo(a.cfg.ShortVideoThumbnails, a.saveShortVideoThumbnails)
 	if !a.cfg.StateInitialized {
 		a.cfg.StateInitialized = true
 		if err := config.Save(a.cfg); err != nil {
@@ -417,4 +418,23 @@ func cloneConfig(cfg *config.Config) (*config.Config, error) {
 		return nil, fmt.Errorf("copy configuration: %w", err)
 	}
 	return &copy, nil
+}
+
+// saveShortVideoThumbnails 持久化缩略图开关。该回调在业务请求内执行，
+// 不能等待正在暂停业务请求的配置切换，因此只尝试获取操作锁。
+func (a *Application) saveShortVideoThumbnails(enabled bool) error {
+	if !a.operation.TryLock() {
+		return errors.New("configuration change in progress; retry later")
+	}
+	defer a.operation.Unlock()
+	next, err := cloneConfig(a.cfg)
+	if err != nil {
+		return err
+	}
+	next.ShortVideoThumbnails = enabled
+	if err := config.Save(next); err != nil && !config.WriteWasCommitted(err) {
+		return err
+	}
+	a.cfg = next
+	return nil
 }

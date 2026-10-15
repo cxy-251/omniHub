@@ -29,13 +29,21 @@ type confirmation struct {
 
 func isManagementPath(path string) bool {
 	switch path {
-	case "/api/library/manage", "/api/library/add", "/api/library/remove", "/api/library/refresh", "/api/library/categories", "/api/library/primary/preview", "/api/library/primary/commit":
+	case "/api/library/manage", "/api/library/browse", "/api/library/add", "/api/library/remove", "/api/library/refresh", "/api/library/categories", "/api/library/primary/preview", "/api/library/primary/commit":
 		return true
 	}
 	return false
 }
 
 func (a *Application) handleManagement(w http.ResponseWriter, req *http.Request) {
+	if req.URL.Path == "/api/library/browse" {
+		if req.Method != http.MethodGet {
+			methodError(w, http.MethodGet)
+			return
+		}
+		browseDirectory(w, req.URL.Query().Get("path"))
+		return
+	}
 	if req.URL.Path == "/api/library/manage" {
 		if req.Method != http.MethodGet {
 			methodError(w, http.MethodGet)

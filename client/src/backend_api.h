@@ -20,6 +20,7 @@ class BackendApi : public QObject {
     Q_PROPERTY(bool libraryBusy READ libraryBusy NOTIFY librariesChanged)
     Q_PROPERTY(QVariantMap migrationPreview READ migrationPreview NOTIFY librariesChanged)
     Q_PROPERTY(QStringList categoryDirectories READ categoryDirectories NOTIFY categoryDirectoriesChanged)
+    Q_PROPERTY(QStringList disabledCategories READ disabledCategories NOTIFY categoryDirectoriesChanged)
 public:
     explicit BackendApi(QObject *parent = nullptr);
     bool hasAdmin() const { return m_hasAdmin; }
@@ -32,6 +33,7 @@ public:
     bool libraryBusy() const { return m_libraryBusy; }
     QVariantMap migrationPreview() const { return m_migrationPreview; }
     QStringList categoryDirectories() const { return m_categoryDirectories; }
+    QStringList disabledCategories() const { return m_disabledCategories; }
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void setupAdmin(const QString &username, const QString &password);
     // 管理入口使用本机保护凭证；busy 时拒绝重入，回复完成后释放请求对象。
@@ -66,4 +68,5 @@ private:
     bool m_stateReady = false;
     bool m_libraryBusy = false;
     QStringList m_categoryDirectories;
+    QStringList m_disabledCategories;
 };

@@ -9,7 +9,7 @@ import (
 )
 
 // StreamVideo 处理短视频的 Range 206 局部内容请求（第 2.1.2 节）。
-func StreamVideo(w http.ResponseWriter, r *http.Request, filePath string) (result error) {
+func StreamVideo(w http.ResponseWriter, r *http.Request, filePath, contentType string) (result error) {
 	cleanPath := filepath.Clean(filePath)
 	info, err := os.Lstat(cleanPath)
 	if err != nil {
@@ -39,7 +39,7 @@ func StreamVideo(w http.ResponseWriter, r *http.Request, filePath string) (resul
 
 	// 设置通用视频响应头
 	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Content-Type", contentType)
 
 	// http.ServeContent 自动处理 Range 206、If-Modified-Since 及内核级传输
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), file)

@@ -65,7 +65,8 @@ type Router struct {
 	runtimeMu sync.RWMutex
 	closed    bool
 	metaDB    map[string]*gallery.MetaDB
-	svStorage map[string]*shortvideo.Storage
+	svStores  map[string]*shortvideo.Store
+	svJobs    *svWorker
 	mangaDB   map[string]*manga.DB
 }
 
@@ -95,7 +96,8 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 	r := &Router{
 		mux:            http.NewServeMux(),
 		metaDB:         make(map[string]*gallery.MetaDB),
-		svStorage:      make(map[string]*shortvideo.Storage),
+		svStores:       make(map[string]*shortvideo.Store),
+		svJobs:         newSVWorker(),
 		mangaDB:        make(map[string]*manga.DB),
 		libMgr:         libMgr,
 		authDB:         authDB,
@@ -121,6 +123,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		mediaReads:     make(chan struct{}, 2),
 	}
 	r.registerRoutes()
+	go r.runShortVideoWorker()
 	return r, nil
 }
 
@@ -150,34 +153,6 @@ func (r *Router) getMetaDB(root string) (*gallery.MetaDB, error) {
 	}
 	r.metaDB[key] = metaDB
 	return metaDB, nil
-}
-
-func (r *Router) getSVStorage(root string) (*shortvideo.Storage, error) {
-	r.dbMu.Lock()
-	defer r.dbMu.Unlock()
-	if r.closed {
-		return nil, errors.New("router is closed")
-	}
-	readOnly := r.libMgr.IsReadOnly(root)
-	key := fmt.Sprintf("%s:%t", root, readOnly)
-	if db := r.svStorage[key]; db != nil {
-		return db, nil
-	}
-	svDir, err := r.moduleDirectory(root, "media_library/shortvideo", "meta.db", "thumbnails.db", "albums.db")
-	if err != nil {
-		return nil, err
-	}
-	open := shortvideo.OpenStorage
-	if readOnly {
-		open = shortvideo.OpenStorageReadOnly
-	}
-
-	storage, err := open(svDir)
-	if err != nil {
-		return nil, err
-	}
-	r.svStorage[key] = storage
-	return storage, nil
 }
 
 func (r *Router) getMangaDB(root string) (*manga.DB, error) {
@@ -223,6 +198,8 @@ func (r *Router) CanReconfigure() bool {
 
 // Close 在 HTTP 服务完成退出后关闭所有模块连接，允许重复调用。
 func (r *Router) Close() error {
+	// 后台工作会获取数据库锁，必须先停止它再关闭连接。
+	r.svJobs.close()
 	r.runtimeMu.Lock()
 	defer r.runtimeMu.Unlock()
 	r.dbMu.Lock()
@@ -239,7 +216,7 @@ func (r *Router) Close() error {
 	for _, db := range r.metaDB {
 		errs = append(errs, db.Close())
 	}
-	for _, db := range r.svStorage {
+	for _, db := range r.svStores {
 		errs = append(errs, db.Close())
 	}
 	for _, db := range r.mangaDB {
@@ -280,7 +257,9 @@ func (r *Router) registerRoutes() {
 
 	// 短视频与图集接口
 	r.mux.HandleFunc("/api/media/shortvideo/stream", r.handleShortVideoStream)
-	r.mux.HandleFunc("/api/media/shortvideo/albums", r.handleShortVideoAlbums)
+	r.mux.HandleFunc("/api/media/shortvideo/posts", r.handleShortVideoPosts)
+	r.mux.HandleFunc("/api/media/shortvideo/creators", r.handleShortVideoCreators)
+	r.mux.HandleFunc("/api/media/shortvideo/admin/", r.handleShortVideoAdmin)
 	r.mux.HandleFunc("/api/media/shortvideo/album/image", r.handleShortVideoAlbumImage)
 	r.mux.HandleFunc("/api/media/shortvideo/thumbnail", r.handleShortVideoThumbnail)
 	r.mux.HandleFunc("/api/media/shortvideo/channels", r.handleShortVideoChannels)
@@ -633,112 +612,6 @@ func (r *Router) handleGalleryTrash(w http.ResponseWriter, req *http.Request) {
 }
 
 // --- 短视频与图集 ---
-
-func (r *Router) handleShortVideoStream(w http.ResponseWriter, req *http.Request) {
-	relPath := req.URL.Query().Get("path")
-	if relPath == "" {
-		http.Error(w, "missing path parameter", http.StatusBadRequest)
-		return
-	}
-
-	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/shortvideo")
-	if err != nil {
-		http.Error(w, "file not found in library", http.StatusNotFound)
-		return
-	}
-
-	if strings.ToLower(filepath.Ext(fullPath)) != ".mp4" {
-		http.Error(w, "unsupported media format", http.StatusBadRequest)
-		return
-	}
-
-	if err := shortvideo.StreamVideo(w, req, fullPath); err != nil {
-		http.Error(w, "video file unavailable", 503)
-	}
-}
-
-func (r *Router) handleShortVideoAlbums(w http.ResponseWriter, req *http.Request) {
-	primary := r.libMgr.GetPrimary()
-	if primary == nil {
-		writeJSON(w, http.StatusOK, map[string]int{})
-		return
-	}
-	storage, err := r.getSVStorage(primary.RootPath)
-	if err != nil {
-		http.Error(w, "module database unavailable", http.StatusServiceUnavailable)
-		return
-	}
-
-	albums, err := storage.ListAlbums()
-	if err != nil {
-		http.Error(w, "album query failed", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, albums)
-}
-
-func (r *Router) handleShortVideoAlbumImage(w http.ResponseWriter, req *http.Request) {
-	postID := req.URL.Query().Get("post_id")
-	idx := 0
-	if value := req.URL.Query().Get("index"); value != "" {
-		var err error
-		idx, err = strconv.Atoi(value)
-		if err != nil || idx < 0 || idx > 20000 {
-			http.Error(w, "invalid image index", 400)
-			return
-		}
-	}
-	primary := r.libMgr.GetPrimary()
-	if primary == nil || postID == "" {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	storage, err := r.getSVStorage(primary.RootPath)
-	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-
-	data, err := storage.GetAlbumImage(postID, idx)
-	if errors.Is(err, shortvideo.ErrImageCapacity) {
-		http.Error(w, "album image exceeds read capacity", 413)
-		return
-	}
-	if err != nil || len(data) == 0 {
-		http.Error(w, "image not found", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "image/jpeg")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
-}
-
-func (r *Router) handleShortVideoThumbnail(w http.ResponseWriter, req *http.Request) {
-	targetID := req.URL.Query().Get("id")
-	primary := r.libMgr.GetPrimary()
-	if primary == nil || targetID == "" {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	storage, err := r.getSVStorage(primary.RootPath)
-	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-
-	data, err := storage.GetThumbnail(targetID)
-	if errors.Is(err, shortvideo.ErrImageCapacity) {
-		http.Error(w, "thumbnail exceeds read capacity", 413)
-		return
-	}
-	if err != nil || len(data) == 0 {
-		http.Error(w, "thumbnail not found", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "image/jpeg")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
-}
 
 func (r *Router) handleShortVideoChannels(w http.ResponseWriter, req *http.Request) {
 	r.listVideoChannels(w, req)

@@ -51,7 +51,6 @@ var StandardDirs = []string{
 	"standalone_games/renpy_games",
 	"standalone_games/retro_games",
 	"standalone_games/slg_games",
-	"standalone_games/flash_games",
 	"standalone_games/steam_games",
 	"standalone_games/unity_games",
 	"standalone_games/godot_games",
@@ -75,6 +74,8 @@ type Marker struct {
 	ID string `json:"id"`
 	// Name 是人类可读的库名称。
 	Name string `json:"name"`
+	// Label 是 omni-deck 标识文件中的名称字段，仅在 Name 缺失时读取。
+	Label string `json:"label,omitempty"`
 }
 
 // ReadMarker 有界读取并验证物理库标识，拒绝超大文件与逻辑路径分隔符。
@@ -95,6 +96,10 @@ func ReadMarker(root string) (marker *Marker, result error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("invalid library marker: %w", err)
 	}
+	if m.Name == "" {
+		m.Name = m.Label
+	}
+	m.Label = ""
 	if m.ID == "" || len(m.ID) > 128 || strings.ContainsAny(m.ID, "/\\:\x00") || len(m.Name) > 256 {
 		return nil, errors.New("invalid library identity or name")
 	}

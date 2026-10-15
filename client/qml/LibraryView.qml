@@ -1,13 +1,17 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 ScrollView {
     id: libraryView
     clip: true
-    Connections {
-        target: backendApi
-        function onCategoryDirectoriesChanged() { categoryInput.text = backendApi.categoryDirectories.join("\n") }
+    // 全部已知分类 = 启用 + 停用，按名称排序，用于开关列表。
+    readonly property var allCategories: backendApi.categoryDirectories.concat(backendApi.disabledCategories).filter(function (d, i, a) { return a.indexOf(d) === i }).sort()
+    FolderDialog {
+        id: folderDialog
+        title: "选择资源库根目录"
+        onAccepted: libraryPath.text = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
     }
     ColumnLayout {
         width: libraryView.availableWidth
@@ -24,7 +28,8 @@ ScrollView {
         Label { text: "配置切换会暂停当前播放；请先停止资源任务。新增库不会自动迁移账号。"; color: "#8b949e"; wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.leftMargin: 16; Layout.rightMargin: 16 }
         RowLayout {
             Layout.fillWidth: true; Layout.margins: 16
-            TextField { id: libraryPath; placeholderText: "服务端物理资源库的绝对路径"; Layout.fillWidth: true; maximumLength: 4096 }
+            TextField { id: libraryPath; placeholderText: "点「浏览」选择资源库根目录"; Layout.fillWidth: true; maximumLength: 4096 }
+            Button { text: "浏览…"; onClicked: folderDialog.open() }
             CheckBox { id: libraryReadOnly; text: "只读" }
             Button { text: "添加"; enabled: !backendApi.libraryBusy && libraryPath.text.length > 0; onClicked: backendApi.addLibrary(libraryPath.text, libraryReadOnly.checked) }
         }
@@ -63,20 +68,25 @@ ScrollView {
             Layout.fillWidth: true; Layout.margins: 16
             ColumnLayout {
                 anchors.fill: parent
-                Label { text: "启用的分类目录"; font.bold: true; color: "#c9d1d9" }
-                Label { text: "每行一个分类，如 media_library/audio。新增目录仅在在线可写库中补建；移除分类会停用访问并保留文件。空清单停用全部分类。"; color: "#8b949e"; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                TextArea {
-                    id: categoryInput
+                Label { text: "分类目录"; font.bold: true; color: "#c9d1d9" }
+                Label { text: "关闭即停用：停止扫描和展示，文件保持原样，随时可重新开启。"; color: "#8b949e"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                GridLayout {
+                    columns: 2
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 220
-                    wrapMode: TextEdit.NoWrap
-                    selectByMouse: true
-                    Component.onCompleted: text = backendApi.categoryDirectories.join("\n")
-                }
-                Button {
-                    text: "保存分类配置"
-                    enabled: !backendApi.libraryBusy
-                    onClicked: backendApi.saveCategories(categoryInput.text.split("\n").map(function (dir) { return dir.trim() }).filter(function (dir) { return dir.length > 0 }))
+                    Repeater {
+                        model: libraryView.allCategories
+                        delegate: Switch {
+                            required property string modelData
+                            text: modelData
+                            enabled: !backendApi.libraryBusy
+                            checked: backendApi.categoryDirectories.indexOf(modelData) >= 0
+                            onToggled: {
+                                var active = backendApi.categoryDirectories.filter(function (d) { return d !== modelData })
+                                if (checked) active.push(modelData)
+                                backendApi.saveCategories(active)
+                            }
+                        }
+                    }
                 }
             }
         }
