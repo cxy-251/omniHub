@@ -1,11 +1,13 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	"omnihub/internal/gallery"
 	"omnihub/internal/library"
@@ -91,13 +93,29 @@ func (r *Router) listGalleryLibraries(w http.ResponseWriter, req *http.Request) 
 }
 
 // handleGalleryRatios 返回与列表同序的全部高宽比（×1000），客户端据此一次算出瀑布流布局。
+// 10 万张约 250ms，结果按「库 + 筛选 + 数据库文件修改时间」缓存最近 4 份（每份约 0.5MB），切回相册时不再重查。
 func (r *Router) handleGalleryRatios(w http.ResponseWriter, req *http.Request) {
 	filter, ok := galleryFilter(w, req)
 	if !ok {
 		return
 	}
-	_, dbs, ok := r.galleryDBs(w, req)
+	libs, dbs, ok := r.galleryDBs(w, req)
 	if !ok {
+		return
+	}
+	key := strconv.Itoa(filter.Color)
+	for _, lib := range libs {
+		dir, _ := r.moduleDirectory(lib.RootPath, "media_library/gallery", "gallery.db")
+		key += "|" + lib.ID
+		for _, name := range []string{"gallery.db", "gallery.db-wal"} {
+			if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				key += ":" + strconv.FormatInt(info.ModTime().UnixNano(), 36) + "/" + strconv.FormatInt(info.Size(), 36)
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if data := r.galleryRatios.get(key); data != nil {
+		_, _ = w.Write(data)
 		return
 	}
 	ratios := []int{}
@@ -109,7 +127,42 @@ func (r *Router) handleGalleryRatios(w http.ResponseWriter, req *http.Request) {
 		}
 		ratios = append(ratios, part...)
 	}
-	writeJSON(w, 200, map[string]any{"ratios": ratios})
+	data, err := json.Marshal(map[string]any{"ratios": ratios})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	r.galleryRatios.put(key, data)
+	_, _ = w.Write(data)
+}
+
+// ratioCache 保存最近几份高宽比响应。
+type ratioCache struct {
+	mu      sync.Mutex
+	keys    []string
+	entries map[string][]byte
+}
+
+func (c *ratioCache) get(key string) []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.entries[key]
+}
+
+func (c *ratioCache) put(key string, data []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[string][]byte{}
+	}
+	if _, ok := c.entries[key]; !ok {
+		c.keys = append(c.keys, key)
+	}
+	c.entries[key] = data
+	for len(c.keys) > 4 {
+		delete(c.entries, c.keys[0])
+		c.keys = c.keys[1:]
+	}
 }
 
 func galleryFilter(w http.ResponseWriter, req *http.Request) (gallery.PhotoFilter, bool) {

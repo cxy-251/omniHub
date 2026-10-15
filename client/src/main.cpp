@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <algorithm>
 #include "player/mpv_item.h"
+#include "gallery/masonry_layout.h"
 #ifdef Q_OS_LINUX
 #include "player/mpris.h"
 #endif
@@ -90,6 +91,7 @@ int main(int argc, char *argv[])
     // 注册 QML 原生类型
     qmlRegisterType<MpvItem>("omniHub.Media", 1, 0, "MpvItem");
     qmlRegisterType<MediaQueue>("omniHub.Media", 1, 0, "MediaQueue");
+    qmlRegisterType<MasonryLayout>("omniHub.Media", 1, 0, "MasonryLayout");
 
     int result = 0;
     {
@@ -107,6 +109,7 @@ int main(int argc, char *argv[])
         // 开发验证用：OMNIHUB_DEV_SCROLL=<像素> 让列表每 100ms 自动下滚，用于测量滚动时的内存。
         engine.rootContext()->setContextProperty("devScroll", qEnvironmentVariableIntValue("OMNIHUB_DEV_SCROLL"));
         // 开发验证：OMNIHUB_DEV_MATRIX=<秒> 打开多联放映并全部播放，每隔这么多秒打印各屏丢帧统计。
+        engine.rootContext()->setContextProperty("devSwitch", qEnvironmentVariableIntValue("OMNIHUB_DEV_SWITCH"));
         engine.rootContext()->setContextProperty("devMatrix", qEnvironmentVariableIntValue("OMNIHUB_DEV_MATRIX"));
 
         // 注册 Linux MPRIS 媒体控制服务

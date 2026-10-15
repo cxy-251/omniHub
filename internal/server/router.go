@@ -53,6 +53,7 @@ type Router struct {
 	userState      *userstate.DB
 	megaClient     *mega.Client
 	downloads      dlState
+	galleryRatios  ratioCache
 	textCatalog    *catalog.Catalog
 	novelCatalog   *catalog.Catalog
 	audioCatalog   *catalog.Catalog

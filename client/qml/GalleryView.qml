@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import omniHub.Media 1.0
 
 // 相册（只读）：按色系筛选的缩略图网格 + 原图查看。
 // 网格数据由 PagedModel 按页懒加载，只保留附近若干页；缩略图按格子尺寸解码。
@@ -18,23 +19,6 @@ Item {
         return backendApi.apiUrl(path + "?library_id=" + encodeURIComponent(photo.library_id) + "&id=" + encodeURIComponent(photo.id))
     }
 
-    // 筛选变化时重新取全部高宽比并排版；回到顶部。
-    function loadRatios() {
-        var url = backendApi.apiUrl("/api/media/gallery/ratios" + (view.color >= 0 ? "?color=" + view.color : ""))
-        if (!url) return
-        var xhr = new XMLHttpRequest()
-        var forColor = view.color
-        xhr.onreadystatechange = function () {
-            if (!view || xhr.readyState !== XMLHttpRequest.DONE || xhr.status !== 200 || forColor !== view.color) return
-            layout.ratios = JSON.parse(xhr.responseText).ratios
-            layout.rebuild()
-            masonry.contentY = 0
-        }
-        xhr.open("GET", url)
-        xhr.send()
-    }
-    onColorChanged: loadRatios()
-
     PagedModel {
         id: paged
         pageSize: 100
@@ -42,7 +26,6 @@ Item {
     }
 
     Component.onCompleted: {
-        loadRatios()
         var url = backendApi.apiUrl("/api/media/gallery/colors")
         if (!url) return
         var xhr = new XMLHttpRequest()
@@ -89,7 +72,7 @@ Item {
             Layout.fillHeight: true
             clip: true
             contentWidth: width
-            contentHeight: layout.height
+            contentHeight: layout.contentHeight
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { minimumSize: 0.05 }
 
@@ -98,42 +81,17 @@ Item {
             readonly property real colWidth: (width - gap * (columns - 1)) / columns
             readonly property int pool: 240
             // 可视区上下各多算一屏
-            readonly property int first: layout.find(contentY - Math.max(height, layout.maxItem))
-            readonly property int last: Math.min(first + pool, layout.find(contentY + 2 * height + layout.maxItem))
+            readonly property int first: (layout.revision, layout.find(contentY - Math.max(height, layout.maxItem)))
+            readonly property int last: (layout.revision, Math.min(first + pool, layout.find(contentY + 2 * height + layout.maxItem)))
 
-            QtObject {
+            // 排版在 C++ 里做（MasonryLayout）：它自己取全部高宽比，筛选变化时重新取并回到顶部。
+            MasonryLayout {
                 id: layout
-                property var ratios: []      // 高宽比 ×1000，与列表同序
-                property var ys: []          // 每张的纵坐标
-                property var cols: []        // 每张所在列
-                property real height: 0
-                property real maxItem: 0
-                property int revision: 0
-                function rebuild() {
-                    var n = ratios.length, w = masonry.colWidth, g = masonry.gap
-                    var heights = []
-                    for (var c = 0; c < masonry.columns; c++) heights.push(0)
-                    var y = new Array(n), col = new Array(n), tallest = 0
-                    for (var i = 0; i < n; i++) {
-                        var best = 0
-                        for (var k = 1; k < heights.length; k++) if (heights[k] < heights[best]) best = k
-                        var h = w * Math.min(2.5, Math.max(0.4, ratios[i] / 1000))
-                        y[i] = heights[best]; col[i] = best
-                        heights[best] += h + g
-                        if (h > tallest) tallest = h
-                    }
-                    ys = y; cols = col; maxItem = tallest
-                    height = Math.max.apply(null, heights.concat([0]))
-                    revision++
-                }
-                // 第一个纵坐标 >= y 的序号（ys 单调不减）
-                function find(y) {
-                    revision
-                    var lo = 0, hi = ys.length
-                    while (lo < hi) { var mid = (lo + hi) >> 1; if (ys[mid] < y) lo = mid + 1; else hi = mid }
-                    return lo
-                }
-                function itemHeight(i) { return masonry.colWidth * Math.min(2.5, Math.max(0.4, ratios[i] / 1000)) }
+                source: backendApi.apiUrl("/api/media/gallery/ratios" + (view.color >= 0 ? "?color=" + view.color : ""))
+                columns: masonry.columns
+                columnWidth: masonry.colWidth
+                gap: masonry.gap
+                onLoaded: masonry.contentY = 0
             }
             // 开发验证：devScroll < 0 时打开原图，每 -devScroll 毫秒翻一张（-100 模拟按住方向键）。
             Timer {
@@ -146,8 +104,6 @@ Item {
                 running: typeof devScroll !== "undefined" && devScroll > 0
                 onTriggered: masonry.contentY = Math.min(masonry.contentHeight - masonry.height, masonry.contentY + devScroll)
             }
-            onColumnsChanged: layout.rebuild()
-            onColWidthChanged: layout.rebuild()
 
             Repeater {
                 model: masonry.pool
@@ -156,13 +112,14 @@ Item {
                     required property int index
                     // 本格子负责 [first, first+pool) 中 序号 ≡ index (mod pool) 的那一张
                     readonly property int photoIndex: masonry.first + ((index - masonry.first % masonry.pool) + masonry.pool) % masonry.pool
-                    readonly property bool shown: photoIndex < masonry.last && photoIndex < layout.ys.length
+                    readonly property bool shown: photoIndex < masonry.last && photoIndex < layout.count
                     readonly property var photo: { paged.revision; return shown ? paged.item(photoIndex) : null }
                     visible: shown
-                    x: shown ? layout.cols[photoIndex] * (masonry.colWidth + masonry.gap) : 0
-                    y: shown ? layout.ys[photoIndex] : 0
+                    // itemX/itemY 是函数，不发通知；读 revision 让排版变化后重新求值。
+                    x: shown ? (layout.revision, layout.itemX(photoIndex)) : 0
+                    y: shown ? (layout.revision, layout.itemY(photoIndex)) : 0
                     width: masonry.colWidth
-                    height: shown ? layout.itemHeight(photoIndex) : 0
+                    height: shown ? (layout.revision, layout.itemHeight(photoIndex)) : 0
                     Rectangle {
                         anchors.fill: parent
                         radius: 3

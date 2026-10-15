@@ -26,12 +26,29 @@ DarkWindow {
         if (stack.currentIndex === index) return
         // Capture before Loader destroys the item; hidden pages must not
         // retain decoders, GPU buffers or request objects.
+        switchStarted = Date.now()
         stack.currentIndex = index
         uiPrefs.page = index
+        switchCreated = Date.now()
     }
 
     // Settings 在组件完成时才读出上次的页码；在那之前不激活任何页面，避免先按默认值建出一个页面再销毁。
     property bool pagesReady: false
+    // 开发验证：OMNIHUB_DEV_SWITCH=<毫秒> 在几个页面之间轮流切换，打印「建页耗时」和「到下一帧画完」的耗时。
+    property double switchStarted: 0
+    property double switchCreated: 0
+    onFrameSwapped: if (switchStarted > 0) { console.log("switch-timing page", stack.currentIndex, "create", switchCreated - switchStarted, "ms frame", Date.now() - switchStarted, "ms"); switchStarted = 0 }
+    Timer {
+        property var order: [4, 5, 1, 3, 6, 7]
+        property int step: 0
+        interval: typeof devSwitch !== "undefined" && devSwitch > 0 ? devSwitch : 3000; repeat: true
+        running: typeof devSwitch !== "undefined" && devSwitch > 0 && mainWindow.serviceReady
+        onTriggered: { mainWindow.selectPage(order[step % order.length]); step++ }
+    }
+    // 依赖本机服务的页面等服务连上（地址与凭证已知）后再创建；否则页面创建时发的请求拿不到地址、直接放弃。
+    // 只置位一次：之后服务短暂断开不销毁已打开的页面（页面自己显示请求失败）。
+    property bool serviceReady: false
+    Binding on serviceReady { value: true; when: backendApi.connected && backendApi.stateReady; restoreMode: Binding.RestoreNone }
     Component.onCompleted: { pagesReady = true; backendApi.refresh() }
     Connections {
         target: backendApi
@@ -108,16 +125,16 @@ DarkWindow {
             // 页 0 原为内嵌播放器。播放器改为系统「打开方式」调用的独立外部窗口（规格 9.2/9.3），这里留空占位以保持页码。
             Item { }
             Loader {
-                active: mainWindow.pagesReady && stack.currentIndex === 1
+                active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 1
                 sourceComponent: Component { GamesView { } }
             }
             Loader {
                 active: mainWindow.pagesReady && stack.currentIndex === 2
                 sourceComponent: Component { LibraryView { } }
             }
-            Loader { id: textLoader; active: mainWindow.pagesReady && stack.currentIndex === 3; sourceComponent: Component { NovelView { } } }
+            Loader { id: textLoader; active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 3; sourceComponent: Component { NovelView { } } }
             Loader {
-                active: mainWindow.pagesReady && stack.currentIndex === 4
+                active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 4
                 sourceComponent: Component {
                     ShortVideoView {
                         matrixWindowOpen: matrixWindow.active
@@ -128,10 +145,10 @@ DarkWindow {
                     }
                 }
             }
-            Loader { active: mainWindow.pagesReady && stack.currentIndex === 5; sourceComponent: Component { GalleryView { } } }
-            Loader { active: mainWindow.pagesReady && stack.currentIndex === 6; sourceComponent: Component { AudioView { engine: audio; request: mainWindow.audioRequest } } }
+            Loader { active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 5; sourceComponent: Component { GalleryView { } } }
+            Loader { active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 6; sourceComponent: Component { AudioView { engine: audio; request: mainWindow.audioRequest } } }
                         Loader {
-                active: mainWindow.pagesReady && stack.currentIndex === 7
+                active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 7
                 sourceComponent: Component {
                     DownloadsView {
                         // 「去收听」：切到音声页打开该专辑并开始播放。
