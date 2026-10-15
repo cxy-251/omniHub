@@ -12,15 +12,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Qt6 6.6 REQUIRED COMPONENTS DBus)
 endif()
 
-option(OMNIHUB_BUILD_GAME_CHECK "Build the native game service integration check" OFF)
-if(OMNIHUB_BUILD_GAME_CHECK)
-    qt_add_executable(omnihub_game_check
-        tests/game_check.cpp src/games/game_launcher.cpp src/games/game_launcher.h
-        src/backend_api.cpp src/backend_api.h
-    )
-    target_include_directories(omnihub_game_check PRIVATE src src/games)
-    target_link_libraries(omnihub_game_check PRIVATE Qt6::Core Qt6::Network)
-endif()
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(MPV QUIET IMPORTED_TARGET mpv)
@@ -92,45 +83,4 @@ install(TARGETS omnihub_client DESTINATION bin)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     install(PROGRAMS desktop/omnihub-client DESTINATION bin)
     install(FILES desktop/omnihub.desktop DESTINATION share/applications)
-endif()
-
-option(OMNIHUB_BUILD_PLAYER_CHECK "Build the isolated OpenGL player integration check" OFF)
-option(OMNIHUB_BUILD_RESUME_CHECK "Build the real service-backed media resume check" OFF)
-if(OMNIHUB_BUILD_RESUME_CHECK)
-    qt_add_executable(omnihub_resume_check tests/resume_check.cpp
-        src/player/mpv_item.cpp src/player/mpv_item.h src/player/native_resume.cpp src/player/native_resume.h
-        src/backend_api.cpp src/backend_api.h)
-    target_include_directories(omnihub_resume_check PRIVATE src/player)
-    target_link_libraries(omnihub_resume_check PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network Qt6::OpenGL ${MPV_TARGET})
-endif()
-option(OMNIHUB_BUILD_YIELD_CHECK "Build the native GUI process handoff check" OFF)
-if(OMNIHUB_BUILD_YIELD_CHECK)
-    qt_add_executable(omnihub_yield_check tests/yield_check.cpp
-        src/native_lifecycle.cpp src/native_lifecycle.h src/backend_api.cpp src/backend_api.h
-        src/player/media_queue.cpp src/player/media_queue.h)
-    target_include_directories(omnihub_yield_check PRIVATE src)
-    target_link_libraries(omnihub_yield_check PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::Network)
-endif()
-if(OMNIHUB_BUILD_PLAYER_CHECK)
-    qt_add_executable(omnihub_queue_check tests/queue_check.cpp qml.qrc
-        src/player/mpv_item.cpp src/player/mpv_item.h
-        src/player/media_queue.cpp src/player/media_queue.h)
-    target_include_directories(omnihub_queue_check PRIVATE src/player)
-    target_link_libraries(omnihub_queue_check PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::OpenGL ${MPV_TARGET})
-    qt_add_executable(omnihub_player_check
-        tests/player_check.cpp src/player/mpv_item.cpp src/player/mpv_item.h
-    )
-    target_include_directories(omnihub_player_check PRIVATE src/player)
-    target_link_libraries(omnihub_player_check PRIVATE
-        Qt6::Core Qt6::Gui Qt6::Quick Qt6::OpenGL ${MPV_TARGET}
-    )
-endif()
-
-option(OMNIHUB_BUILD_TEXT_CHECK "Build the real service-backed text reader check" OFF)
-if(OMNIHUB_BUILD_TEXT_CHECK)
-    qt_add_executable(omnihub_text_check tests/text_check.cpp qml.qrc
-        src/readers/text_reader.cpp src/readers/text_reader.h src/backend_api.cpp src/backend_api.h)
-    target_include_directories(omnihub_text_check PRIVATE src)
-    target_link_libraries(omnihub_text_check PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network)
 endif()

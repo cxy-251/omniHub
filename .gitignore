@@ -2,3 +2,4 @@ omnihub-server
 .build/
 .test-tmp/
 node_modules/
+build/

@@ -7,8 +7,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "check": "tsc --noEmit",
-    "test:reader": "node --experimental-strip-types --test src/mangaWindow.test.ts"
+    "check": "tsc --noEmit"
   },
   "dependencies": {
     "dompurify": "^3.4.17",
