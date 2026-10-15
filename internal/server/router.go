@@ -270,6 +270,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/shortvideo/creators", r.handleShortVideoCreators)
 	r.mux.HandleFunc("/api/media/shortvideo/sequence", r.handleShortVideoSequence)
 	r.mux.HandleFunc("/api/media/shortvideo/like", r.handleShortVideoLike)
+	r.mux.HandleFunc("/api/media/shortvideo/pins", r.handleShortVideoPins)
 	r.mux.HandleFunc("/api/media/shortvideo/admin/", r.handleShortVideoAdmin)
 	r.mux.HandleFunc("/api/media/shortvideo/album/image", r.handleShortVideoAlbumImage)
 	r.mux.HandleFunc("/api/media/shortvideo/thumbnail", r.handleShortVideoThumbnail)

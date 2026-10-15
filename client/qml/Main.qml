@@ -48,15 +48,17 @@ DarkWindow {
     // 依赖本机服务的页面等服务连上（地址与凭证已知）后再创建；否则页面创建时发的请求拿不到地址、直接放弃。
     // 只置位一次：之后服务短暂断开不销毁已打开的页面（页面自己显示请求失败）。
     property bool serviceReady: false
-    Binding on serviceReady { value: true; when: backendApi.connected && backendApi.stateReady; restoreMode: Binding.RestoreNone }
+    function checkService() { if (!serviceReady && backendApi.connected && backendApi.stateReady) serviceReady = true }
     Component.onCompleted: { pagesReady = true; backendApi.refresh() }
     Connections {
         target: backendApi
         function onStatusChanged() {
+            mainWindow.checkService()
             if (backendApi.stateReady && backendApi.connected && !backendApi.hasAdmin) setupDialog.open()
             if (backendApi.hasAdmin) setupDialog.close()
         }
         function onLibrariesChanged() {
+            mainWindow.checkService()
             if (backendApi.stateReady && backendApi.connected && !backendApi.hasAdmin) setupDialog.open()
             // A standalone local file must keep playing when the service is
             // absent/offline; recovery navigation cannot destroy its decoder.
@@ -115,7 +117,14 @@ DarkWindow {
             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#30363d" }
         }
 
-        // 视窗内容切换
+        // 视窗内容切换（服务未连上时，依赖服务的页面先显示提示）
+        Label {
+            visible: mainWindow.pagesReady && !mainWindow.serviceReady && stack.currentIndex !== 2
+            width: parent.width; height: visible ? 40 : 0
+            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+            text: backendApi.error ? backendApi.error + "（可在「资源库」页检查）" : "正在连接 omniHub 服务…"
+            color: "#8b949e"
+        }
         StackLayout {
             id: stack
             width: parent.width

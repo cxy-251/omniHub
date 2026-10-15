@@ -12,6 +12,8 @@ Item {
     property var creators: []
     property string platform: ""
     property string creator: ""
+    property bool liked: false          // 只看我点赞的作品
+    property var pins: []               // 固定的博主 ID（按固定先后）
     property string error: ""
     property int openIndex: -1
     property alias mode: viewPrefs.mode   // browse | matrix，记住上次的模式
@@ -21,7 +23,17 @@ Item {
     Settings { id: viewPrefs; category: "shortvideo"; property string mode: "browse" }
 
     readonly property var platforms: creators.map(function (c) { return c.platform }).filter(function (p, i, a) { return a.indexOf(p) === i })
-    readonly property var shownCreators: creators.filter(function (c) { return !platform || c.platform === platform })
+    // 博主条：固定的博主排在前面（按固定先后），其余按原顺序。
+    readonly property var shownCreators: {
+        var inPlatform = creators.filter(function (c) { return !platform || c.platform === platform })
+        var byId = {}
+        inPlatform.forEach(function (c) { byId[c.id] = c })
+        var pinned = pins.filter(function (id) { return byId[id] }).map(function (id) { return Object.assign({pinned: true}, byId[id]) })
+        return pinned.concat(inPlatform.filter(function (c) { return pins.indexOf(c.id) < 0 }))
+    }
+    function setPinned(id, on) {
+        api.send("POST", "/api/media/shortvideo/pins", {creator: id, pinned: on}, function (list) { view.pins = list })
+    }
 
     ApiClient { id: api; onErrorChanged: view.error = error }
     function getJSON(path, done) { api.getJSON(path, done) }
@@ -31,6 +43,7 @@ Item {
     }
     function localFile(post, rel) { return api.localFile(post, rel) }
     function postsEndpoint() {
+        if (liked) return "/api/media/shortvideo/posts?liked=1" + (platform ? "&platform=" + encodeURIComponent(platform) : "")
         if (creator) return "/api/media/shortvideo/posts?creator=" + encodeURIComponent(creator)
         if (platform) return "/api/media/shortvideo/posts?platform=" + encodeURIComponent(platform)
         return "/api/media/shortvideo/posts"
@@ -49,6 +62,7 @@ Item {
     Component.onCompleted: {
         backendApi.refreshLibraries()
         getJSON("/api/media/shortvideo/creators", function (list) { creators = list })
+        getJSON("/api/media/shortvideo/pins", function (list) { pins = list })
     }
 
 
@@ -75,6 +89,13 @@ Item {
                 }
             }
             Item { Layout.fillWidth: true }
+            Chip {
+                readonly property bool isPinned: view.pins.indexOf(view.creator) >= 0
+                visible: view.creator !== "" && !view.liked
+                text: isPinned ? "取消固定博主" : "📌 固定这个博主"
+                selected: isPinned
+                onClicked: view.setPinned(view.creator, !isPinned)
+            }
             Label {
                 text: view.error || paged.error || (paged.total > 0 ? paged.total + " 个作品" : (paged.loading ? "" : "没有作品，需先由管理员扫描建立索引"))
                 color: view.error || paged.error ? "#f85149" : "#8b949e"
@@ -89,12 +110,12 @@ Item {
             orientation: ListView.Horizontal
             spacing: 4
             clip: true
-            model: [{id: "", name: "全部博主", posts: -1}].concat(view.shownCreators)
+            model: [{id: "", name: "全部博主", posts: -1}, {id: "", name: "♥ 我的点赞", posts: -1, liked: true}].concat(view.shownCreators)
             delegate: Chip {
                 required property var modelData
-                text: modelData.posts < 0 ? modelData.name : modelData.name + " · " + modelData.posts
-                selected: view.creator === modelData.id
-                onClicked: view.creator = modelData.id
+                text: (modelData.pinned ? "📌 " : "") + (modelData.posts < 0 ? modelData.name : modelData.name + " · " + modelData.posts)
+                selected: modelData.liked ? view.liked : (!view.liked && view.creator === modelData.id)
+                onClicked: { view.liked = !!modelData.liked; view.creator = modelData.id }
             }
         }
 

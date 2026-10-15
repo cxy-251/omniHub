@@ -18,6 +18,7 @@ FocusScope {
     signal fullscreenToggled()
 
     property var creators: []
+    property var pins: []
     property int focused: 0
     // 打开时默认暂停：各屏加载后停在第一帧，按「全部播放」或单屏播放开始。
     property bool playing: false
@@ -62,7 +63,10 @@ FocusScope {
         creators.forEach(function (c) {
             if (!seen[c.platform]) { seen[c.platform] = true; list.push({value: c.platform, label: c.platform}) }
         })
-        creators.forEach(function (c) { list.push({value: c.id, label: c.platform + " · " + c.name + "（" + c.posts + "）"}) })
+        // 固定的博主排在前面（按固定先后）。
+        var item = function (c, pinned) { return {value: c.id, label: (pinned ? "📌 " : "") + c.platform + " · " + c.name + "（" + c.posts + "）"} }
+        pins.forEach(function (id) { var c = creators.find(function (x) { return x.id === id }); if (c) list.push(item(c, true)) })
+        creators.forEach(function (c) { if (pins.indexOf(c.id) < 0) list.push(item(c, false)) })
         return list
     }
 
@@ -76,6 +80,7 @@ FocusScope {
         }
         ready = true
         api.getJSON("/api/media/shortvideo/creators", function (list) { matrix.creators = list })
+        api.getJSON("/api/media/shortvideo/pins", function (list) { matrix.pins = list })
     }
     function setSlot(i, changes) {
         var all = prefs.slots.slice()

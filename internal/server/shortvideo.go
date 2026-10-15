@@ -386,3 +386,39 @@ func (r *Router) svTrash(w http.ResponseWriter, req *http.Request) {
 	_ = r.userState.RemoveShortVideoLikes(req.Context(), post.ID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "trashed"})
 }
+
+// handleShortVideoPins：GET 返回固定的博主（按固定先后）；POST {"creator": ID, "pinned": bool} 固定或取消。
+func (r *Router) handleShortVideoPins(w http.ResponseWriter, req *http.Request) {
+	user := auth.UserFromContext(req.Context())
+	if req.Method == http.MethodGet {
+		pins, err := r.userState.ShortVideoPins(req.Context(), user.ID)
+		if err != nil {
+			http.Error(w, "pin store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, pins)
+		return
+	}
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if user.ID <= 0 {
+		http.Error(w, "login required", http.StatusForbidden)
+		return
+	}
+	var in struct {
+		Creator string `json:"creator"`
+		Pinned  bool   `json:"pinned"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&in); err != nil || strings.Count(in.Creator, "/") != 1 || strings.ContainsAny(in.Creator, "\\\x00") || strings.Contains(in.Creator, "..") {
+		http.Error(w, "invalid creator", http.StatusBadRequest)
+		return
+	}
+	if err := r.userState.SetShortVideoPin(req.Context(), user.ID, in.Creator, in.Pinned); err != nil {
+		http.Error(w, "pin store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	pins, _ := r.userState.ShortVideoPins(req.Context(), user.ID)
+	writeJSON(w, http.StatusOK, pins)
+}

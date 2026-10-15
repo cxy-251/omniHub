@@ -80,3 +80,38 @@ func (d *DB) RemoveShortVideoLikes(ctx context.Context, postID string) error {
 	_, err := d.db.ExecContext(ctx, "DELETE FROM shortvideo_likes WHERE post_id=?", postID)
 	return err
 }
+
+// SetShortVideoPin 固定或取消固定一个博主（博主 ID 为「平台/博主目录」，按账号独立）。
+func (d *DB) SetShortVideoPin(ctx context.Context, userID int64, creatorID string, pinned bool) error {
+	if userID <= 0 || creatorID == "" || len(creatorID) > 1024 {
+		return ErrInvalidGamePlay
+	}
+	if !pinned {
+		_, err := d.db.ExecContext(ctx, "DELETE FROM shortvideo_pins WHERE user_id=? AND creator_id=?", userID, creatorID)
+		return err
+	}
+	_, err := d.db.ExecContext(ctx, "INSERT OR IGNORE INTO shortvideo_pins(user_id, creator_id, created_at) VALUES(?,?,?)",
+		userID, creatorID, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+// ShortVideoPins 返回账号固定的博主，按固定的先后排序。
+func (d *DB) ShortVideoPins(ctx context.Context, userID int64) ([]string, error) {
+	out := []string{}
+	if userID <= 0 {
+		return out, nil
+	}
+	rows, err := d.db.QueryContext(ctx, "SELECT creator_id FROM shortvideo_pins WHERE user_id=? ORDER BY created_at, rowid", userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}

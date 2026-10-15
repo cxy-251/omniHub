@@ -49,6 +49,10 @@ func Open(path string) (*DB, error) {
 		user_id INTEGER NOT NULL, game_id TEXT NOT NULL, created_at TEXT NOT NULL,
 		PRIMARY KEY(user_id, game_id)
 	);
+	CREATE TABLE IF NOT EXISTS shortvideo_pins (
+		user_id INTEGER NOT NULL, creator_id TEXT NOT NULL, created_at TEXT NOT NULL,
+		PRIMARY KEY(user_id, creator_id)
+	);
 	CREATE TABLE IF NOT EXISTS shortvideo_likes (
 		user_id INTEGER NOT NULL, post_id TEXT NOT NULL, created_at TEXT NOT NULL,
 		PRIMARY KEY(user_id, post_id)
