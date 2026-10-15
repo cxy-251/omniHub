@@ -25,4 +25,8 @@ export QML_IMPORT_PATH="$OH_TOOLS/qt6/usr/lib/qt6/qml"
 # 使用 --sysroot 后，链接器在 sysroot 下找系统库（libproxy、libpulse 的私有依赖）的 RUNPATH，找不到；显式指定。
 export LDFLAGS="-Wl,-rpath-link,/usr/lib/libproxy -Wl,-rpath-link,/usr/lib/pulseaudio${LDFLAGS:+ $LDFLAGS}"
 
+
+
+# Go 服务是纯 Go（modernc SQLite），不用 cgo；PATH 里有 gcc 时 Go 会默认启用 cgo 并找不到系统头文件。
+export CGO_ENABLED=0
 unset _t _libs

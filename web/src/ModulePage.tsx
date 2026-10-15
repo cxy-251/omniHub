@@ -77,7 +77,7 @@ export default function ModulePage({ id, sections }: { id: ModuleID; sections: s
       <Suspense fallback={<p role="status">正在加载短视频…</p>}><ShortVideoLibrary active={videoActive} onAccompany={sections.includes('audio') ? () => moduleRef.current?.showAudioBar?.() : undefined} /></Suspense>
     </div> : null}
     {id === 'media' && sections.includes('gallery') && galleryVisited ? <div hidden={!galleryActive} className="mt-4">
-      <Suspense fallback={<p role="status">正在加载相册…</p>}><GalleryLibrary active={galleryActive} canEdit={sections.includes('admin')} /></Suspense>
+      <Suspense fallback={<p role="status">正在加载相册…</p>}><GalleryLibrary active={galleryActive} canEdit={false} /></Suspense>
     </div> : null}
     {id === 'media' && sections.includes('audio') && audioVisited ? <div hidden={!audioActive} className="mt-4">
       <Suspense fallback={<p role="status">正在加载音频专辑…</p>}><AudioLibrary active={audioActive} onPlay={(path, title, album) => moduleRef.current?.playAudio?.(path, title, album)} onMetadata={(path, title, album) => moduleRef.current?.updateAudioLabels?.(path, title, album)} /></Suspense>

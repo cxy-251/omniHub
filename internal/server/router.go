@@ -133,8 +133,8 @@ func (r *Router) getMetaDB(root string) (*gallery.MetaDB, error) {
 	if r.closed {
 		return nil, errors.New("router is closed")
 	}
-	readOnly := r.libMgr.IsReadOnly(root)
-	key := fmt.Sprintf("%s:%t", root, readOnly)
+	// 相册目前全部只读：缩略图库的变化应由原图库变化触发，而原图库暂不允许写入。
+	key := root
 	if db := r.metaDB[key]; db != nil {
 		return db, nil
 	}
@@ -142,12 +142,7 @@ func (r *Router) getMetaDB(root string) (*gallery.MetaDB, error) {
 	if err != nil {
 		return nil, err
 	}
-	open := gallery.OpenMetaDB
-	if readOnly {
-		open = gallery.OpenMetaDBReadOnly
-	}
-
-	metaDB, err := open(galleryDir)
+	metaDB, err := gallery.OpenMetaDBReadOnly(galleryDir)
 	if err != nil {
 		return nil, err
 	}
@@ -566,49 +561,9 @@ func (r *Router) handleGalleryOriginal(w http.ResponseWriter, req *http.Request)
 	_, _ = w.Write(data)
 }
 
+// handleGalleryTrash 相册目前只读（原图分卷不允许写入，缩略图库随原图变化），拒绝软删除。
 func (r *Router) handleGalleryTrash(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if auth.UserFromContext(req.Context()).Role != auth.RoleAdmin || auth.IsWANFromContext(req.Context()) {
-		http.Error(w, "trusted environment administrator required", 403)
-		return
-	}
-	photoID := req.URL.Query().Get("id")
-	restore := req.URL.Query().Get("restore") == "1"
-	primary := r.galleryLibrary(w, req)
-	if primary == nil {
-		return
-	}
-	if photoID == "" || len(photoID) > 256 {
-		http.Error(w, "not found", http.StatusBadRequest)
-		return
-	}
-	if primary.ReadOnly {
-		http.Error(w, "gallery library is read-only", 403)
-		return
-	}
-	metaDB, err := r.getMetaDB(primary.RootPath)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	photo, err := metaDB.GetPhoto(photoID)
-	if err != nil {
-		http.Error(w, "gallery index unavailable", 503)
-		return
-	}
-	if photo == nil {
-		http.Error(w, "photo not found", 404)
-		return
-	}
-	if err := metaDB.SoftDelete(photoID, !restore); err != nil {
-		http.Error(w, "photo update failed", 503)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	http.Error(w, "gallery is read-only", http.StatusForbidden)
 }
 
 // --- 短视频与图集 ---
