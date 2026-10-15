@@ -42,7 +42,9 @@ type Router struct {
 	taskRegistry   *tasks.Registry
 	gameRuns       *games.Manager
 	gameTools      games.Tools
+	sc2            sc2State
 	stateDir       string
+	cacheDir       string // 可重新生成的数据（SC2 助手与虚拟环境、只读库的游戏日志），不放进主库的全局状态目录
 	gameDiscovery  *scanner.GameDiscovery
 	webGames       *webGameGrants
 	webGameReads   chan struct{}
@@ -108,6 +110,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		taskRegistry:   registry,
 		gameRuns:       games.NewManagerWithRecorder(gamePlayRecorder(readingDB)),
 		stateDir:       stateDir,
+		cacheDir:       userCacheDir(),
 		gameDiscovery:  scanner.NewGameDiscovery(),
 		webGames:       newWebGameGrants(),
 		webGameReads:   make(chan struct{}, 16),
@@ -300,6 +303,11 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/games/icon", r.handleGameIcon)
 	r.mux.HandleFunc("/api/games/art", r.handleGameArt)
 	r.mux.HandleFunc("/api/games/favorite", r.handleGameFavorite)
+	r.mux.HandleFunc("/api/sc2/status", r.handleSC2Status)
+	r.mux.HandleFunc("/api/sc2/maps", r.handleSC2Maps)
+	r.mux.HandleFunc("/api/sc2/thumb", r.handleSC2Thumb)
+	r.mux.HandleFunc("/api/sc2/mods", r.handleSC2Mods)
+	r.mux.HandleFunc("/api/sc2/play", r.handleSC2Play)
 	r.mux.HandleFunc("/api/games/web/open", r.handleWebGameOpen)
 	r.mux.HandleFunc("/game-content/", r.handleWebGameAsset)
 	r.mux.HandleFunc("/api/games/launch", r.handleGameLaunch)
@@ -1254,4 +1262,12 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
+}
+
+// userCacheDir 返回 omniHub 的缓存目录（Linux: ~/.cache/omnihub）。
+func userCacheDir() string {
+	if dir, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(dir, "omnihub")
+	}
+	return filepath.Join(os.TempDir(), "omnihub-cache")
 }

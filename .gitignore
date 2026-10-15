@@ -3,3 +3,4 @@ omnihub-server
 .test-tmp/
 node_modules/
 build/
+features/sc2/.venv/

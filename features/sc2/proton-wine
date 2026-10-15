@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# omniHub：burnysc2 把它当 "wine" 调（移植自 omni-deck），形如：
+#   proton-wine start /d <cwd> /unix <C:\...\SC2_x64.exe> -listen ... -dataDir /linux/path -tempDir /linux/path ...
+# 这里剥掉 "start /d <cwd> /unix"，把余下的 exe + 参数丢给 Proton（在 Steam 容器里跑）。
+# Linux 绝对路径参数转成 Z:\ 形式，SC2 在 wine 里才认。
+set -euo pipefail
+
+STEAM_ROOT="${OMNIHUB_STEAM_ROOT:-$HOME/.local/share/Steam}"
+STEAM_COMMON="$STEAM_ROOT/steamapps/common"
+COMPAT_DATA="${SC2MOD_COMPAT_DATA:-$HOME/.local/share/omni_deck_pfx}"
+SLR="$STEAM_COMMON/SteamLinuxRuntime_sniper/_v2-entry-point"
+PROTON=""
+for n in "Proton - Experimental" "Proton 11.0" "Proton 10.0" "Proton 9.0 (Beta)" "Proton Hotfix" "Proton 8.0"; do
+  [ -x "$STEAM_COMMON/$n/proton" ] && PROTON="$STEAM_COMMON/$n/proton" && break
+done
+[ -n "$PROTON" ] || { echo "proton-wine: 找不到 Proton" >&2; exit 1; }
+
+# 剥掉前导的 start / /d <cwd> / /unix
+args=()
+skip=0
+for a in "$@"; do
+  if [ $skip -gt 0 ]; then skip=$((skip-1)); continue; fi
+  case "$a" in
+    start) continue ;;
+    /d) skip=1; continue ;;      # 跳过它和后面的 cwd
+    /unix) continue ;;
+    *) args+=("$a") ;;
+  esac
+done
+
+# 逐个参数：以 / 开头的绝对路径 → Z:\ + 反斜杠
+conv=()
+for a in "${args[@]}"; do
+  if [[ "$a" == /?* && ! "$a" == -* ]]; then
+    conv+=("Z:${a//\//\\}")
+  else
+    conv+=("$a")
+  fi
+done
+
+export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT"
+export STEAM_COMPAT_DATA_PATH="$COMPAT_DATA"
+export STEAM_COMPAT_APP_ID=0
+export SteamAppId=0
+export SteamGameId=0
+export WINEDEBUG="${WINEDEBUG:--all}"
+
+if [ -x "$SLR" ]; then
+  exec "$SLR" --verb=waitforexitandrun -- "$PROTON" waitforexitandrun "${conv[@]}"
+else
+  exec "$PROTON" waitforexitandrun "${conv[@]}"
+fi

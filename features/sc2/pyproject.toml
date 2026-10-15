@@ -1,0 +1,20 @@
+[project]
+name = "omnihub-sc2"
+version = "0.1.0"
+description = "omniHub 星际争霸 2 对战助手（由 Go 服务按需调用）"
+requires-python = ">=3.10"
+dependencies = [
+    "burnysc2==7.1.3",
+    "protobuf==3.20.3",
+    "mpyq==0.2.5",
+    "pillow==12.3.0",
+    "numpy>=2.2,<3",
+    "scipy>=1.15,<2",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

@@ -60,6 +60,8 @@ type GameTools struct {
 	ProtonPrefix string `json:"proton_prefix,omitempty"`
 	Lime3DS      string `json:"lime3ds,omitempty"`
 	RenpySDK     string `json:"renpy_sdk,omitempty"`
+	SC2Dir       string `json:"sc2_dir,omitempty"`
+	SC2ModDir    string `json:"sc2mod_dir,omitempty"`
 }
 
 var saveMu sync.Mutex

@@ -240,6 +240,8 @@ type Tools struct {
 	ProtonPrefix string // 默认 Wine 容器（存档在里面，沿用 omni-deck 的容器）
 	Lime3DS      string // Lime3DS 可执行文件（AppImage）
 	RenpySDK     string // renpy.sh
+	SC2Dir       string // 星际争霸 2 安装目录（含 Maps/）
+	SC2ModDir    string // omniMod 的 sc2Mod 项目（bake.py，可选）
 }
 
 // 按优先级尝试的 Proton 版本目录名。

@@ -27,6 +27,9 @@ func resolveGameTools(override config.GameTools, configDir string) games.Tools {
 		SteamRoot: first(override.SteamRoot, filepath.Join(home, ".local/share/Steam"), filepath.Join(home, ".steam/steam")),
 		Lime3DS:   first(override.Lime3DS, filepath.Join(home, "Applications/Lime3DS/Lime3DS.AppImage")),
 		RenpySDK:  first(override.RenpySDK, filepath.Join(home, "Applications/renpy-*-sdk/renpy.sh")),
+		// SC2 不在资源库里（与 omni-deck 相同的位置）；sc2Mod 是另一个项目，可选。
+		SC2Dir:    first(override.SC2Dir, filepath.Join(home, "Games/StarCraft II")),
+		SC2ModDir: first(override.SC2ModDir, filepath.Join(home, "Games/claude/omniMod/sc2Mod")),
 	}
 	tools.ProtonPrefix = first(override.ProtonPrefix, filepath.Join(home, ".local/share/omni_deck_pfx"))
 	if tools.ProtonPrefix == "" {

@@ -86,6 +86,12 @@ Item {
     Timer { id: stopPoll; interval: 1500; repeat: true; onTriggered: request("GET", "/api/games/session", null, function (s) { if (!s || s.state === "exited") { view.active = null; stopPoll.stop(); view.reload() } }) }
 
     Component.onCompleted: reload()
+    // 开发验证：devScroll < 0 时选中星际争霸 II（显示对战面板）。
+    Timer {
+        interval: 300; repeat: true
+        running: typeof devScroll !== "undefined" && devScroll < 0 && !view.selected
+        onTriggered: { var g = view.gamesList.find(function (x) { return x.kind === "sc2" }); if (g) { view.category = "wine"; view.selected = g } }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -187,16 +193,24 @@ Item {
                             Label { width: parent.width; text: view.displayName(cell.modelData); elide: Text.ElideRight; color: "#c9d1d9"; font.pixelSize: 12 }
                             Label { width: parent.width; text: view.categoryNames[cell.modelData.category] + " · " + view.playTime(cell.modelData.play_time_sec); elide: Text.ElideRight; color: "#8b949e"; font.pixelSize: 11 }
                         }
-                        TapHandler { id: tap; onTapped: view.selected = cell.modelData; onDoubleTapped: if (!view.active) view.launch(cell.modelData) }
+                        TapHandler { id: tap; onTapped: view.selected = cell.modelData; onDoubleTapped: if (!view.active && cell.modelData.kind !== "sc2") view.launch(cell.modelData) }
                     }
                 }
             }
 
+            // 星际争霸 2：对战面板
+            Loader {
+                Layout.preferredWidth: Math.round(view.width * 0.6)
+                Layout.fillHeight: true
+                active: !!(view.selected && view.selected.kind === "sc2")
+                visible: active
+                sourceComponent: Component { SC2Panel { request: view.request } }
+            }
             // 详情
             Rectangle {
                 Layout.preferredWidth: 280
                 Layout.fillHeight: true
-                visible: !!view.selected
+                visible: !!view.selected && view.selected.kind !== "sc2"
                 radius: 6
                 color: "#161b22"; border.color: "#30363d"
                 ColumnLayout {

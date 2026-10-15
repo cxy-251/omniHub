@@ -6,6 +6,7 @@
         <file>qml/ExternalPlayerWindow.qml</file>
         <file>qml/PlayerView.qml</file>
         <file>qml/GamesView.qml</file>
+        <file>qml/SC2Panel.qml</file>
         <file>qml/TouchControls.qml</file>
         <file>qml/LibraryView.qml</file>
         <file>qml/ShortVideoView.qml</file>

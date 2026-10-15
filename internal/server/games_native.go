@@ -40,6 +40,7 @@ func (r *Router) categoryDir(libID, category string) (string, error) {
 
 type gameEntry struct {
 	games.Entry
+	Kind         string    `json:"kind,omitempty"` // "sc2" 表示星际争霸 2 对战面板
 	Favorite     bool      `json:"favorite,omitempty"`
 	PlayTimeSec  int64     `json:"play_time_sec,omitempty"`
 	LastPlayedAt time.Time `json:"last_played_at,omitzero"`
@@ -78,6 +79,10 @@ func (r *Router) handleGameList(w http.ResponseWriter, req *http.Request) {
 				out = append(out, gameEntry{Entry: e})
 			}
 		}
+	}
+	// 星际争霸 2 不在资源库里，作为 Wine 分类的一张卡片（规格 10.1）。
+	if r.sc2Available() && auth.ClientFromContext(req.Context()) == auth.TargetGUI && (want == "" || want == "wine") {
+		out = append(out, gameEntry{Entry: games.Entry{ID: sc2GameID, Name: "星际争霸 II", Category: "wine", Folder: "StarCraft II"}, Kind: "sc2"})
 	}
 	// 账号收藏与游玩时长（时长按 100 个一批查询）。
 	if user.ID > 0 && r.userState != nil {
@@ -192,6 +197,11 @@ func (r *Router) gameArtStore(libID string) *games.ArtStore {
 func (r *Router) handleGameArt(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
 	libID, id := q.Get("library_id"), q.Get("id")
+	if id == sc2GameID {
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+		http.ServeFile(w, req, filepath.Join(r.gameTools.SC2Dir, "icon.png"))
+		return
+	}
 	category, dir, err := r.gameDir(libID, id)
 	if err != nil {
 		http.NotFound(w, req)
@@ -303,7 +313,7 @@ func (r *Router) handleGameLaunch(w http.ResponseWriter, req *http.Request) {
 	}
 	logsDir := filepath.Join(filepath.Dir(filepath.Dir(dir)), "logs")
 	if lib := r.findLibrary(input.LibraryID); lib == nil || lib.ReadOnly {
-		logsDir = filepath.Join(r.stateDir, "game-logs")
+		logsDir = filepath.Join(r.cacheDir, "game-logs")
 	}
 	key := input.LibraryID + ":" + input.ID
 	status, err := r.gameRuns.Start(req.Context(), key, games.LaunchOptions{
