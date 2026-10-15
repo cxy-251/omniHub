@@ -159,6 +159,7 @@
    - omni-deck 的问题：游戏是其子进程，内存记在 omni-deck 名下，内存紧张时系统连同整个 omni-deck 一起杀掉；
    - omniHub 拉起的游戏及外部窗口必须与 omniHub 内存记账分离：Linux 下每个游戏放入独立的 systemd 用户 scope（独立 cgroup），并以独立会话（`Setsid`）脱离；游戏被系统杀掉不得波及 omniHub 服务与客户端；
    - 主程序设置 `oom_score_adj = -500` 防连带被杀；
+   - 启动游戏时主窗口保持原样，不被动最小化、隐藏或关闭（omni-deck 的老问题）；内存问题由独立 cgroup 解决，不靠让出界面；
    - 拉起命令强制追加 `ionice -c 3`（空闲模式），严禁游戏突发读取打满磁盘通道引起整机假死。
 2. **两级内存告警与主动熔断**：
    - 运行期间看门狗每秒监控系统 `MemAvailable` 与进程树 RSS；

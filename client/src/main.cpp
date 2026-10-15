@@ -17,7 +17,6 @@
 #endif
 #include "backend_api.h"
 #include "local_network.h"
-#include "native_lifecycle.h"
 #include "player/media_queue.h"
 #include "player/native_resume.h"
 #include "host/external_router.h"
@@ -31,9 +30,6 @@ int main(int argc, char *argv[])
     mallopt(M_MMAP_THRESHOLD, 256 * 1024);
     mallopt(M_ARENA_MAX, 2);
 #endif
-    if (argc > 1 && QString::fromLocal8Bit(argv[1]) == "--watch-game")
-        return NativeLifecycle::watchGame(argc, argv);
-    const bool restore = argc > 1 && QString::fromLocal8Bit(argv[1]) == "--resume-ui";
     qputenv("QT_QUICK_CONTROLS_STYLE", "Basic");
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     // 统一控件风格：Fusion + 深色调色板（默认 Basic 样式在深色界面里是浅灰按钮，文字也看不清）。
@@ -67,7 +63,7 @@ int main(int argc, char *argv[])
     app.setOrganizationName("omniHub");
     app.setApplicationName("omnihub_client");
     QStringList externalFiles;
-    if (argc > 1 && !restore) {
+    if (argc > 1) {
         for (int index=1;index<argc;++index) {
             const QString argument=QString::fromLocal8Bit(argv[index]);
             if(index==1&&argument=="--")continue;
@@ -90,10 +86,8 @@ int main(int argc, char *argv[])
     int result = 0;
     {
         BackendApi backend;
-        NativeLifecycle lifecycle(restore);
         NativeResume resume;
         QObject::connect(&backend,&BackendApi::statusChanged,&resume,[&]{if(backend.connected()&&backend.hasAdmin())resume.refresh();});
-        QObject::connect(&lifecycle,&NativeLifecycle::observerStarted,&resume,[&](qint64){resume.flush();});
 #ifdef Q_OS_LINUX
         MprisService mprisService(nullptr,externalFiles.isEmpty()?"org.mpris.MediaPlayer2.omnihub":"org.mpris.MediaPlayer2.omnihub.external");
 #endif
@@ -101,7 +95,6 @@ int main(int argc, char *argv[])
         QQmlApplicationEngine engine;
         engine.setNetworkAccessManagerFactory(&networkFactory);
         engine.rootContext()->setContextProperty("backendApi", &backend);
-        engine.rootContext()->setContextProperty("nativeLifecycle", &lifecycle);
         engine.rootContext()->setContextProperty("nativeResume", &resume);
         // 开发验证用：OMNIHUB_DEV_SCROLL=<像素> 让列表每 100ms 自动下滚，用于测量滚动时的内存。
         engine.rootContext()->setContextProperty("devScroll", qEnvironmentVariableIntValue("OMNIHUB_DEV_SCROLL"));

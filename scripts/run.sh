@@ -1,7 +1,7 @@
 #!/bin/bash
 # 本机运行：服务未运行时在后台启动（日志 build/logs/server.log），然后打开 Qt 客户端。
 # 带文件参数（文件管理器「打开方式 → omniHub」）时打开独立外部播放窗口；已有外部窗口时交给它切播。
-# 关闭最后一个窗口时一并停止服务（游戏运行期间由观察器进程维持，不会停）。
+# 关闭最后一个窗口时一并停止服务；有游戏在运行时保留服务。
 #
 # 进程放在 systemd 用户 scope「app-omnihub-<pid>.scope」里，并安装 omnihub.desktop，
 # 这样 KDE 系统监视器的「应用程序」页能把服务和客户端归为 omniHub 一个应用显示（内存合计）。
@@ -49,8 +49,9 @@ export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
 # 标准错误不是终端时 Qt 默认把日志写进 journald，这里强制输出到终端。
 export QT_FORCE_STDERR_LOGGING=1
 build/client/omnihub_client "$@"
-# 窗口关闭后：没有其他客户端窗口、也没有游戏观察器（同为 omnihub_client 进程）时，一并停止服务。
+# 窗口关闭后：没有其他客户端窗口、也没有正在运行的游戏（服务退出会结束它管理的游戏）时，一并停止服务。
 sleep 0.5
-if ! pgrep -x omnihub_client > /dev/null; then
+if ! pgrep -x omnihub_client > /dev/null \
+        && [ -z "$(systemctl --user list-units --type=scope --state=running --no-legend 'app-omnihub-game-*' 2>/dev/null)" ]; then
     pkill -x omnihub-server
 fi

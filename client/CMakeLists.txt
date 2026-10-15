@@ -39,8 +39,6 @@ set(SOURCES
     src/backend_api.h
     src/local_network.cpp
     src/local_network.h
-    src/native_lifecycle.cpp
-    src/native_lifecycle.h
     src/player/mpv_item.cpp
     src/player/mpv_item.h
     src/player/media_queue.cpp

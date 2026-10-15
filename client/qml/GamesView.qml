@@ -3,10 +3,10 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtCore
 
-// 游戏大厅（本地原生游戏）：分类标签 + 卡片网格 + 右侧详情。启动后由 Main.qml 让出界面（GUI 退出、游戏结束后恢复）。
+// 游戏大厅（本地原生游戏）：分类标签 + 卡片网格 + 右侧详情。
+// 启动游戏后主窗口保持原样（不最小化、不关闭）；游戏在独立 cgroup，内存不算在 omniHub 名下。
 Item {
     id: view
-    signal gameStarted(string sessionId)
 
     property var gamesList: []
     property var active: null          // 正在运行的游戏会话
@@ -47,7 +47,7 @@ Item {
     }
     function reload() {
         request("GET", "/api/games/list", null, function (list) { view.gamesList = list })
-        request("GET", "/api/games/session", null, function (s) { view.active = s && s.state !== "exited" ? s : null })
+        request("GET", "/api/games/session", null, function (s) { view.active = s && s.state !== "exited" ? s : null; if (view.active) sessionPoll.start() })
     }
     function displayName(g) { return g.name.replace(/^\d+\s*-\s*/, "") }
     function playTime(sec) {
@@ -64,13 +64,16 @@ Item {
         busy = true
         request("POST", "/api/games/launch", {library_id: g.library_id, id: g.id}, function (s) {
             view.busy = false
-            view.gameStarted(s.id)
+            view.active = s
+            sessionPoll.start()
         })
     }
     function stop() {
         if (!active) return
         request("POST", "/api/games/stop", {id: active.id}, function () { stopPoll.start() })
     }
+    // 游戏运行期间低频检查会话，结束后刷新时长。
+    Timer { id: sessionPoll; interval: 5000; repeat: true; onTriggered: request("GET", "/api/games/session", null, function (s) { if (!s || s.state === "exited") { view.active = null; sessionPoll.stop(); view.reload() } }) }
     Timer { id: stopPoll; interval: 1500; repeat: true; onTriggered: request("GET", "/api/games/session", null, function (s) { if (!s || s.state === "exited") { view.active = null; stopPoll.stop(); view.reload() } }) }
 
     Component.onCompleted: reload()
@@ -196,7 +199,7 @@ Item {
                         highlighted: true
                         onClicked: view.launch(view.selected)
                     }
-                    Label { Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 11; text: "启动后 omniHub 界面会退出以让出内存，游戏结束后自动回来。" }
+                    Label { Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 11; text: "游戏在独立进程组中运行，内存不计入 omniHub。" }
                 }
             }
         }

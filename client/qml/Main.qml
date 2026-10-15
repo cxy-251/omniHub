@@ -14,15 +14,8 @@ DarkWindow {
         if (typeof nativeResume !== "undefined") nativeResume.flush()
         if (textLoader.item) textLoader.item.flush()
     }
-    // 记住上次打开的页面（游戏让出后恢复时以 restoredUI 为准）。
+    // 记住上次打开的页面。
     Settings { id: uiPrefs; category: "main"; property int page: 4 }
-    property var lifecycle: typeof nativeLifecycle === "undefined" ? null : nativeLifecycle
-    property var restoredUI: lifecycle ? lifecycle.restored : ({})
-
-    function yieldForGame(sessionId) {
-        if (!lifecycle) return
-        lifecycle.yieldToGame(sessionId, {page: stack.currentIndex})
-    }
 
     function selectPage(index) {
         if (stack.currentIndex === index) return
@@ -66,14 +59,6 @@ DarkWindow {
 
     Column {
         anchors.fill: parent
-        Label {
-            width: parent.width
-            visible: !!mainWindow.lifecycle && mainWindow.lifecycle.error.length > 0
-            text: mainWindow.lifecycle ? mainWindow.lifecycle.error : ""
-            textFormat: Text.PlainText
-            color: "#f85149"
-            wrapMode: Text.Wrap
-        }
 
         // 顶栏导航（按常用度排序）
         Rectangle {
@@ -106,13 +91,13 @@ DarkWindow {
             id: stack
             width: parent.width
             height: parent.height - 40
-            currentIndex: Math.max(1, mainWindow.restoredUI.page !== undefined ? mainWindow.restoredUI.page : uiPrefs.page)
+            currentIndex: Math.max(1, uiPrefs.page)
 
             // 页 0 原为内嵌播放器。播放器改为系统「打开方式」调用的独立外部窗口（规格 9.2/9.3），这里留空占位以保持页码。
             Item { }
             Loader {
                 active: mainWindow.pagesReady && stack.currentIndex === 1
-                sourceComponent: Component { GamesView { onGameStarted: function(sessionId) { mainWindow.yieldForGame(sessionId) } } }
+                sourceComponent: Component { GamesView { } }
             }
             Loader {
                 active: mainWindow.pagesReady && stack.currentIndex === 2
