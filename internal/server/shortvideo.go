@@ -284,7 +284,15 @@ func (r *Router) handleShortVideoSequence(w http.ResponseWriter, req *http.Reque
 		return
 	}
 	seed, _ := strconv.ParseInt(q.Get("seed"), 10, 64)
-	all, ok := r.svMergedKeys(w, req, shortvideo.Filter{Platform: q.Get("platform"), CreatorID: q.Get("creator"), Kind: shortvideo.KindVideo})
+	filter := shortvideo.Filter{Platform: q.Get("platform"), CreatorID: q.Get("creator"), Kind: shortvideo.KindVideo, NotLandscape: q.Get("portrait") == "1"}
+	if codecs := q.Get("codecs"); codecs != "" {
+		filter.Codecs = strings.Split(codecs, ",")
+		if len(filter.Codecs) > 16 {
+			http.Error(w, "too many codecs", http.StatusBadRequest)
+			return
+		}
+	}
+	all, ok := r.svMergedKeys(w, req, filter)
 	if !ok {
 		return
 	}

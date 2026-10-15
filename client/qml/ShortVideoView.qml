@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtCore
 import omniHub.Media 1.0
 
 // 短视频浏览：平台 → 博主 → 作品网格；视频用内嵌 mpv 直接播放磁盘文件，图集经本机服务读取（原目录或 albums.db）。
@@ -13,7 +14,8 @@ Item {
     property string creator: ""
     property string error: ""
     property int openIndex: -1
-    property string mode: "browse"   // browse | matrix
+    property alias mode: viewPrefs.mode   // browse | matrix，记住上次的模式
+    Settings { id: viewPrefs; category: "shortvideo"; property string mode: "browse" }
 
     readonly property var platforms: creators.map(function (c) { return c.platform }).filter(function (p, i, a) { return a.indexOf(p) === i })
     readonly property var shownCreators: creators.filter(function (c) { return !platform || c.platform === platform })
@@ -59,42 +61,42 @@ Item {
         getJSON("/api/media/shortvideo/creators", function (list) { creators = list })
     }
 
-    component Chip: Button {
-        id: chip
-        property bool selected: false
-        font.pixelSize: 14
-        contentItem: Label { text: chip.text; font: chip.font; color: chip.selected ? "#58a6ff" : "#c9d1d9"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-        background: Rectangle { radius: 16; color: chip.selected ? "#1f2a3a" : "#161b22"; border.color: chip.selected ? "#58a6ff" : "#30363d" }
-    }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 12
-        spacing: 8
+        anchors.margins: 8
+        spacing: 6
         visible: view.openIndex < 0 && view.mode === "browse"
 
+        // 第一行：模式 | 平台 | 作品数
         RowLayout {
+            Layout.fillWidth: true
+            spacing: 4
             Chip { text: "浏览"; selected: true }
             Chip { text: "多联放映"; onClicked: view.mode = "matrix" }
-        }
-        ListView {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 40
-            orientation: ListView.Horizontal
-            spacing: 6
-            model: [""].concat(view.platforms)
-            delegate: Chip {
-                required property string modelData
-                text: modelData || "全部平台"
-                selected: view.platform === modelData
-                onClicked: { view.platform = modelData; view.creator = "" }
+            Rectangle { width: 1; height: 20; color: "#30363d"; Layout.leftMargin: 4; Layout.rightMargin: 4 }
+            Repeater {
+                model: [""].concat(view.platforms)
+                delegate: Chip {
+                    required property string modelData
+                    text: modelData || "全部平台"
+                    selected: view.platform === modelData
+                    onClicked: { view.platform = modelData; view.creator = "" }
+                }
+            }
+            Item { Layout.fillWidth: true }
+            Label {
+                text: view.error || paged.error || (paged.total > 0 ? paged.total + " 个作品" : (paged.loading ? "" : "没有作品，需先由管理员扫描建立索引"))
+                color: view.error || paged.error ? "#f85149" : "#8b949e"
+                font.pixelSize: 12
             }
         }
+        // 第二行：博主（横向滚动）
         ListView {
             Layout.fillWidth: true
-            Layout.preferredHeight: 40
+            Layout.preferredHeight: 28
             orientation: ListView.Horizontal
-            spacing: 6
+            spacing: 4
             clip: true
             model: [{id: "", name: "全部博主", posts: -1}].concat(view.shownCreators)
             delegate: Chip {
@@ -104,12 +106,6 @@ Item {
                 onClicked: view.creator = modelData.id
             }
         }
-        Label { text: view.error || paged.error; visible: text.length > 0; color: "#f85149"; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        Label {
-            text: paged.total > 0 ? paged.total + " 个作品" : "没有作品。资源库需要先由管理员扫描建立索引。"
-            visible: !paged.loading || paged.total > 0
-            color: "#8b949e"
-        }
 
         GridView {
             id: grid
@@ -118,7 +114,7 @@ Item {
             clip: true
             readonly property int columns: Math.max(2, Math.round(width / 210))
             cellWidth: Math.floor(width / columns)
-            cellHeight: cellWidth * 16 / 9 + 56
+            cellHeight: cellWidth * 16 / 9 + 42
             model: paged.total
             cacheBuffer: cellHeight * 2
             ScrollBar.vertical: ScrollBar { minimumSize: 0.05 }
@@ -129,7 +125,7 @@ Item {
                 height: grid.cellHeight
                 Rectangle {
                     anchors.fill: parent
-                    anchors.margins: 4
+                    anchors.margins: 3
                     color: "#161b22"
                     border.color: tap.pressed ? "#58a6ff" : "#30363d"
                     radius: 6
@@ -157,9 +153,9 @@ Item {
                         background: Rectangle { color: "#99000000"; radius: 3 }
                     }
                     Column {
-                        anchors.top: thumb.bottom; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 6
-                        Label { width: parent.width; text: modelData.title; elide: Text.ElideRight; color: "#c9d1d9"; font.pixelSize: 13 }
-                        Label { width: parent.width; text: modelData.creator_id.split("/")[1] + " · " + modelData.published; elide: Text.ElideRight; color: "#8b949e"; font.pixelSize: 12 }
+                        anchors.top: thumb.bottom; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 4; anchors.topMargin: 3
+                        Label { width: parent.width; text: modelData.title; elide: Text.ElideRight; color: "#c9d1d9"; font.pixelSize: 12 }
+                        Label { width: parent.width; text: modelData.creator_id.split("/")[1] + " · " + modelData.published; elide: Text.ElideRight; color: "#8b949e"; font.pixelSize: 11 }
                     }
                     TapHandler { id: tap; onTapped: if (modelData.id) view.openIndex = index }
                 }

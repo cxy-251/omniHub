@@ -10,6 +10,7 @@
         <file>qml/ShortVideoView.qml</file>
         <file>qml/MatrixView.qml</file>
         <file>qml/PagedModel.qml</file>
+        <file>qml/Chip.qml</file>
         <file>qml/GalleryView.qml</file>
     </qresource>
 </RCC>

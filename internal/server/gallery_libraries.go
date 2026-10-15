@@ -55,12 +55,9 @@ func (r *Router) listGalleryLibraries(w http.ResponseWriter, req *http.Request) 
 		http.Error(w, "invalid page bounds", 400)
 		return
 	}
-	filter := gallery.PhotoFilter{Color: -1}
-	if raw := req.URL.Query().Get("color"); raw != "" {
-		if filter.Color, err = strconv.Atoi(raw); err != nil || filter.Color < 0 || filter.Color > 9 {
-			http.Error(w, "invalid color", 400)
-			return
-		}
+	filter, ok := galleryFilter(w, req)
+	if !ok {
+		return
 	}
 	libs, dbs, ok := r.galleryDBs(w, req)
 	if !ok {
@@ -91,6 +88,40 @@ func (r *Router) listGalleryLibraries(w http.ResponseWriter, req *http.Request) 
 	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	writeJSON(w, 200, items)
+}
+
+// handleGalleryRatios 返回与列表同序的全部高宽比（×1000），客户端据此一次算出瀑布流布局。
+func (r *Router) handleGalleryRatios(w http.ResponseWriter, req *http.Request) {
+	filter, ok := galleryFilter(w, req)
+	if !ok {
+		return
+	}
+	_, dbs, ok := r.galleryDBs(w, req)
+	if !ok {
+		return
+	}
+	ratios := []int{}
+	for _, db := range dbs {
+		part, err := db.Ratios(filter)
+		if err != nil {
+			http.Error(w, "gallery index unavailable", 503)
+			return
+		}
+		ratios = append(ratios, part...)
+	}
+	writeJSON(w, 200, map[string]any{"ratios": ratios})
+}
+
+func galleryFilter(w http.ResponseWriter, req *http.Request) (gallery.PhotoFilter, bool) {
+	filter := gallery.PhotoFilter{Color: -1}
+	if raw := req.URL.Query().Get("color"); raw != "" {
+		var err error
+		if filter.Color, err = strconv.Atoi(raw); err != nil || filter.Color < 0 || filter.Color > 9 {
+			http.Error(w, "invalid color", 400)
+			return filter, false
+		}
+	}
+	return filter, true
 }
 
 // handleGalleryColors 返回各色系照片数（跨库合并），用于筛选。

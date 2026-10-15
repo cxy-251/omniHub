@@ -5,6 +5,9 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QEvent>
+#include <QPalette>
+#include <QTimer>
+#include <algorithm>
 #include "player/mpv_item.h"
 #ifdef Q_OS_LINUX
 #include "player/mpris.h"
@@ -25,7 +28,32 @@ int main(int argc, char *argv[])
     const bool restore = argc > 1 && QString::fromLocal8Bit(argv[1]) == "--resume-ui";
     qputenv("QT_QUICK_CONTROLS_STYLE", "Basic");
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+    // 统一控件风格：Fusion + 深色调色板（默认 Basic 样式在深色界面里是浅灰按钮，文字也看不清）。
+    if (qEnvironmentVariableIsEmpty("QT_QUICK_CONTROLS_STYLE")) qputenv("QT_QUICK_CONTROLS_STYLE", "Fusion");
     QGuiApplication app(argc, argv);
+    {
+        QPalette dark;
+        const QColor window(0x0d, 0x11, 0x17), base(0x16, 0x1b, 0x22), text(0xc9, 0xd1, 0xd9), accent(0x58, 0xa6, 0xff);
+        dark.setColor(QPalette::Window, window);
+        dark.setColor(QPalette::WindowText, text);
+        dark.setColor(QPalette::Base, base);
+        dark.setColor(QPalette::AlternateBase, window);
+        dark.setColor(QPalette::Text, text);
+        dark.setColor(QPalette::Button, QColor(0x21, 0x26, 0x2d));
+        dark.setColor(QPalette::ButtonText, text);
+        dark.setColor(QPalette::Highlight, accent);
+        dark.setColor(QPalette::HighlightedText, QColor(0x0d, 0x11, 0x17));
+        dark.setColor(QPalette::ToolTipBase, base);
+        dark.setColor(QPalette::ToolTipText, text);
+        dark.setColor(QPalette::PlaceholderText, QColor(0x8b, 0x94, 0x9e));
+        dark.setColor(QPalette::Mid, QColor(0x30, 0x36, 0x3d));
+        dark.setColor(QPalette::Dark, QColor(0x0b, 0x0e, 0x13));
+        dark.setColor(QPalette::Light, QColor(0x30, 0x36, 0x3d));
+        dark.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(0x6e, 0x76, 0x81));
+        dark.setColor(QPalette::Disabled, QPalette::Text, QColor(0x6e, 0x76, 0x81));
+        dark.setColor(QPalette::Disabled, QPalette::WindowText, QColor(0x6e, 0x76, 0x81));
+        QGuiApplication::setPalette(dark);
+    }
     // libmpv 要求 LC_NUMERIC 为 "C"，否则 mpv_create 失败；QGuiApplication 会按系统区域改写它。
     std::setlocale(LC_NUMERIC, "C");
     app.setOrganizationName("omniHub");
@@ -102,6 +130,19 @@ int main(int argc, char *argv[])
         if (!engine.rootObjects().isEmpty()) mprisService.setWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().first()));
 #endif
 
+        // 开发验证用：OMNIHUB_SNAPSHOT=<png 路径>:<秒数>，到时把主窗口画面存成 PNG 后退出。
+        // 配合 QT_QPA_PLATFORM=offscreen，可以在不打扰桌面的情况下检查界面。
+        const QString snapshot = qEnvironmentVariable("OMNIHUB_SNAPSHOT");
+        if (!snapshot.isEmpty() && !engine.rootObjects().isEmpty()) {
+            const int split = snapshot.lastIndexOf(':');
+            const QString file = snapshot.left(split);
+            const int seconds = split > 0 ? snapshot.mid(split + 1).toInt() : 5;
+            auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+            QTimer::singleShot(std::max(1, seconds) * 1000, &app, [window, file] {
+                if (window && !window->grabWindow().save(file)) fprintf(stderr, "snapshot failed: %s\n", qPrintable(file));
+                QCoreApplication::quit();
+            });
+        }
         result = app.exec();
     }
     // Renderers may release their final core reference during engine teardown.

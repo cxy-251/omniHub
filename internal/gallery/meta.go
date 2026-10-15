@@ -274,3 +274,26 @@ func (m *MetaDB) ColorCounts() (map[int]int, error) {
 	}
 	return counts, rows.Err()
 }
+
+// Ratios 按 ListPhotos 的顺序返回每张照片的高宽比 ×1000（瀑布流排版用）；尺寸缺失时按正方形。
+func (m *MetaDB) Ratios(f PhotoFilter) ([]int, error) {
+	where, args := f.clause()
+	rows, err := m.db.Query("SELECT width, height FROM photos"+where+" ORDER BY created_at DESC, id ASC", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ratios []int
+	for rows.Next() {
+		var w, h int
+		if err := rows.Scan(&w, &h); err != nil {
+			return nil, err
+		}
+		r := 1000
+		if w > 0 && h > 0 {
+			r = h * 1000 / w
+		}
+		ratios = append(ratios, r)
+	}
+	return ratios, rows.Err()
+}

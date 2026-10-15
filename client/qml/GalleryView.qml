@@ -18,6 +18,23 @@ Item {
         return backendApi.apiUrl(path + "?library_id=" + encodeURIComponent(photo.library_id) + "&id=" + encodeURIComponent(photo.id))
     }
 
+    // 筛选变化时重新取全部高宽比并排版；回到顶部。
+    function loadRatios() {
+        var url = backendApi.apiUrl("/api/media/gallery/ratios" + (view.color >= 0 ? "?color=" + view.color : ""))
+        if (!url) return
+        var xhr = new XMLHttpRequest()
+        var forColor = view.color
+        xhr.onreadystatechange = function () {
+            if (!view || xhr.readyState !== XMLHttpRequest.DONE || xhr.status !== 200 || forColor !== view.color) return
+            layout.ratios = JSON.parse(xhr.responseText).ratios
+            layout.rebuild()
+            masonry.contentY = 0
+        }
+        xhr.open("GET", url)
+        xhr.send()
+    }
+    onColorChanged: loadRatios()
+
     PagedModel {
         id: paged
         pageSize: 100
@@ -25,6 +42,7 @@ Item {
     }
 
     Component.onCompleted: {
+        loadRatios()
         var url = backendApi.apiUrl("/api/media/gallery/colors")
         if (!url) return
         var xhr = new XMLHttpRequest()
@@ -35,67 +53,117 @@ Item {
         xhr.send()
     }
 
-    component Chip: Button {
-        id: chip
-        property bool selected: false
-        font.pixelSize: 14
-        contentItem: Label { text: chip.text; font: chip.font; color: chip.selected ? "#58a6ff" : "#c9d1d9"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-        background: Rectangle { radius: 16; color: chip.selected ? "#1f2a3a" : "#161b22"; border.color: chip.selected ? "#58a6ff" : "#30363d" }
-    }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 12
-        spacing: 8
+        anchors.margins: 8
+        spacing: 6
         visible: view.openIndex < 0
 
-        ListView {
+        RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 40
-            orientation: ListView.Horizontal
-            spacing: 6
-            model: 11
-            delegate: Chip {
-                required property int index
-                readonly property int family: index - 1
-                text: family < 0 ? "全部" : view.colorNames[family] + " · " + (view.colorCounts[family] || 0)
-                selected: view.color === family
-                onClicked: view.color = family
+            spacing: 4
+            Repeater {
+                model: 11
+                delegate: Chip {
+                    required property int index
+                    readonly property int family: index - 1
+                    text: family < 0 ? "全部" : view.colorNames[family] + " · " + (view.colorCounts[family] || 0)
+                    selected: view.color === family
+                    onClicked: view.color = family
+                }
+            }
+            Item { Layout.fillWidth: true }
+            Label {
+                text: paged.error || (paged.total + " 张 · 只读")
+                color: paged.error ? "#f85149" : "#8b949e"; font.pixelSize: 12
             }
         }
-        Label { text: paged.error; visible: text.length > 0; color: "#f85149" }
-        Label { text: paged.total + " 张（只读）"; color: "#8b949e" }
 
-        GridView {
-            id: grid
+        // 瀑布流：每张照片放进当前最矮的一列，纵坐标随序号单调不减，可二分查找可视范围。
+        // 只创建可视区上下各一屏内的格子；pool 个格子按 序号 mod pool 复用，滚动时只换进出边界的那几张。
+        Flickable {
+            id: masonry
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            readonly property int columns: Math.max(3, Math.round(width / 200))
-            cellWidth: Math.floor(width / columns)
-            cellHeight: cellWidth
-            model: paged.total
-            cacheBuffer: cellHeight * 2
+            contentWidth: width
+            contentHeight: layout.height
+            boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { minimumSize: 0.05 }
-            delegate: Item {
-                id: cell
-                required property int index
-                readonly property var photo: { paged.revision; return paged.item(index) }
-                width: grid.cellWidth
-                height: grid.cellHeight
-                Rectangle {
-                    anchors.fill: parent
-                    anchors.margins: 2
-                    color: cell.photo && cell.photo.color_hex ? cell.photo.color_hex : "#161b22"
-                    Image {
-                        anchors.fill: parent
-                        fillMode: Image.PreserveAspectCrop
-                        asynchronous: true
-                        sourceSize.width: grid.cellWidth
-                        sourceSize.height: grid.cellHeight
-                        source: cell.photo ? view.apiQuery("/api/media/gallery/thumbnail", cell.photo) : ""
+
+            readonly property int gap: 4
+            readonly property int columns: Math.max(3, Math.round(width / 200))
+            readonly property real colWidth: (width - gap * (columns - 1)) / columns
+            readonly property int pool: 240
+            // 可视区上下各多算一屏
+            readonly property int first: layout.find(contentY - Math.max(height, layout.maxItem))
+            readonly property int last: Math.min(first + pool, layout.find(contentY + 2 * height + layout.maxItem))
+
+            QtObject {
+                id: layout
+                property var ratios: []      // 高宽比 ×1000，与列表同序
+                property var ys: []          // 每张的纵坐标
+                property var cols: []        // 每张所在列
+                property real height: 0
+                property real maxItem: 0
+                property int revision: 0
+                function rebuild() {
+                    var n = ratios.length, w = masonry.colWidth, g = masonry.gap
+                    var heights = []
+                    for (var c = 0; c < masonry.columns; c++) heights.push(0)
+                    var y = new Array(n), col = new Array(n), tallest = 0
+                    for (var i = 0; i < n; i++) {
+                        var best = 0
+                        for (var k = 1; k < heights.length; k++) if (heights[k] < heights[best]) best = k
+                        var h = w * Math.min(2.5, Math.max(0.4, ratios[i] / 1000))
+                        y[i] = heights[best]; col[i] = best
+                        heights[best] += h + g
+                        if (h > tallest) tallest = h
                     }
-                    TapHandler { onTapped: if (cell.photo) view.openIndex = cell.index }
+                    ys = y; cols = col; maxItem = tallest
+                    height = Math.max.apply(null, heights.concat([0]))
+                    revision++
+                }
+                // 第一个纵坐标 >= y 的序号（ys 单调不减）
+                function find(y) {
+                    revision
+                    var lo = 0, hi = ys.length
+                    while (lo < hi) { var mid = (lo + hi) >> 1; if (ys[mid] < y) lo = mid + 1; else hi = mid }
+                    return lo
+                }
+                function itemHeight(i) { return masonry.colWidth * Math.min(2.5, Math.max(0.4, ratios[i] / 1000)) }
+            }
+            onColumnsChanged: layout.rebuild()
+            onColWidthChanged: layout.rebuild()
+
+            Repeater {
+                model: masonry.pool
+                delegate: Item {
+                    id: cell
+                    required property int index
+                    // 本格子负责 [first, first+pool) 中 序号 ≡ index (mod pool) 的那一张
+                    readonly property int photoIndex: masonry.first + ((index - masonry.first % masonry.pool) + masonry.pool) % masonry.pool
+                    readonly property bool shown: photoIndex < masonry.last && photoIndex < layout.ys.length
+                    readonly property var photo: { paged.revision; return shown ? paged.item(photoIndex) : null }
+                    visible: shown
+                    x: shown ? layout.cols[photoIndex] * (masonry.colWidth + masonry.gap) : 0
+                    y: shown ? layout.ys[photoIndex] : 0
+                    width: masonry.colWidth
+                    height: shown ? layout.itemHeight(photoIndex) : 0
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 3
+                        color: cell.photo && cell.photo.color_hex ? cell.photo.color_hex : "#161b22"
+                        Image {
+                            anchors.fill: parent
+                            fillMode: Image.PreserveAspectCrop
+                            asynchronous: true
+                            sourceSize.width: masonry.colWidth
+                            source: cell.photo ? view.apiQuery("/api/media/gallery/thumbnail", cell.photo) : ""
+                        }
+                        TapHandler { onTapped: if (cell.photo) view.openIndex = cell.photoIndex }
+                    }
                 }
             }
         }

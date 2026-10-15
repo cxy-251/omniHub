@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, post } from './api';
 
-type Stats = { videos: number; albums: number; thumbnails: number; thumbnail_failures: number; albums_imported: number; albums_on_disk: number; albums_cleanable: number };
+type Stats = { videos: number; videos_probed: number; albums: number; thumbnails: number; thumbnail_failures: number; albums_imported: number; albums_on_disk: number; albums_cleanable: number };
 type Worker = { thumbnails_enabled: boolean; job: string; done: number; total: number; last_job: string; last_error: string; last_note: string };
 type Status = { worker: Worker; libraries: { library_id: string; name: string; stats: Stats; error?: string }[] | null };
 
@@ -63,6 +63,7 @@ export default function ShortVideoAdmin() {
       <h3 className="mb-2 font-semibold">{lib.name}</h3>
       {lib.error ? <p className="text-muted">{lib.error}</p> : <ul className="space-y-1">
         <li>视频 {lib.stats.videos}，图集 {lib.stats.albums}</li>
+        <li>编码/尺寸已探测 {lib.stats.videos_probed} / {lib.stats.videos}（后台自动进行，用于竖屏与浏览器解码过滤）</li>
         <li>缩略图 {lib.stats.thumbnails} / {lib.stats.videos + lib.stats.albums}{lib.stats.thumbnail_failures ? `（${lib.stats.thumbnail_failures} 个源文件无法解码）` : ''}</li>
         <li>图集已入库 {lib.stats.albums_imported}，原目录仍在磁盘 {lib.stats.albums_on_disk}</li>
       </ul>}

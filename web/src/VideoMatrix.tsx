@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
+import { playableCodecs } from './codecs';
 
 type Creator = { id: string; platform: string; name: string; posts: number };
 type Post = { id: string; creator_id: string; title: string; published: string; library_id: string };
 type Slot = { channel: string; shuffle: boolean; muted: boolean; seed: number; index: number };
 type Prefs = { screens: number; focusAudio: boolean; slots: Slot[] };
+type Album = { id: string; title: string; track_count: number };
+type Track = { title: string; rel_path: string };
 
-const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
+const chip = (on: boolean) => `shrink-0 rounded-full border px-2.5 py-0.5 text-sm ${on ? 'border-primary text-primary' : 'border-line text-muted hover:text-foreground'}`;
+const select = 'rounded border border-line bg-background px-2 py-0.5 text-sm';
 const STORE = 'omnihub.matrix';
 const newSlot = (): Slot => ({ channel: '', shuffle: true, muted: false, seed: Math.floor(Math.random() * 1e9), index: 0 });
 
@@ -19,45 +23,78 @@ function loadPrefs(): Prefs {
   return { screens: 3, focusAudio: true, slots: [newSlot(), newSlot(), newSlot()] };
 }
 
+// 只取竖屏，且只取本浏览器能解码的编码（否则会黑屏）。
 function sequenceURL(slot: Slot) {
-  const q = new URLSearchParams({ index: String(slot.index), seed: String(slot.seed), order: slot.shuffle ? 'shuffle' : 'sequential' });
+  const q = new URLSearchParams({ index: String(slot.index), seed: String(slot.seed), order: slot.shuffle ? 'shuffle' : 'sequential', portrait: '1', codecs: playableCodecs().join(',') });
   if (slot.channel.includes('/')) q.set('creator', slot.channel); else if (slot.channel) q.set('platform', slot.channel);
   return `/api/media/shortvideo/sequence?${q}`;
 }
 
-type SlotState = { post?: Post; total: number; paused: boolean; error: string };
+type SlotState = { post?: Post; total: number; error: string };
 
 function VideoSlot({ active, slot, audible, focused, onFocus, onEnded, onState }: { active: boolean; slot: Slot; audible: boolean; focused: boolean; onFocus(): void; onEnded(): void; onState(s: SlotState): void }) {
   const video = useRef<HTMLVideoElement>(null);
-  const state = useRef(onState);
-  state.current = onState;
+  const report = useRef(onState);
+  report.current = onState;
+  const [state, setState] = useState<SlotState>({ total: 0, error: '' });
 
   useEffect(() => {
     const player = video.current;
     if (!player || !active) return;
     const controller = new AbortController();
-    api<{ total: number; post: Post }>(sequenceURL(slot), { signal: controller.signal }).then(async ({ total, post }) => {
-      const q = new URLSearchParams({ library_id: post.library_id, id: post.id });
-      player.src = `/api/media/shortvideo/stream?${q}`;
-      state.current({ post, total, paused: false, error: '' });
-      await player.play().catch(() => state.current({ post, total, paused: true, error: '' }));
-    }).catch((e: Error) => { if (!controller.signal.aborted) state.current({ total: 0, paused: true, error: e.message }); });
+    const update = (s: SlotState) => { setState(s); report.current(s); };
+    api<{ total: number; post: Post }>(sequenceURL(slot), { signal: controller.signal }).then(({ total, post }) => {
+      player.src = `/api/media/shortvideo/stream?${new URLSearchParams({ library_id: post.library_id, id: post.id })}`;
+      update({ post, total, error: '' });
+      player.play().catch(() => undefined); // 自动播放被浏览器拦截时保持暂停，点击继续
+    }).catch((e: Error) => { if (!controller.signal.aborted) update({ total: 0, error: e.message }); });
     return () => { controller.abort(); player.pause(); player.removeAttribute('src'); player.load(); };
   }, [active, slot.channel, slot.shuffle, slot.seed, slot.index]);
 
-  return <div className={`relative overflow-hidden rounded-lg border-2 bg-black ${focused ? 'border-primary' : 'border-transparent'}`} onClick={onFocus}>
-    <video ref={video} muted={!audible} playsInline className="h-[78vh] w-full object-contain" onEnded={onEnded} />
-    {!audible ? <span className="absolute bottom-2 left-2 text-xl">🔇</span> : null}
+  const p = state.post;
+  return <div className={`relative overflow-hidden rounded border-2 bg-black ${focused ? 'border-primary' : 'border-transparent'}`} onClick={onFocus}>
+    <video ref={video} muted={!audible} playsInline className="h-[calc(100vh-9.5rem)] w-full object-contain" onEnded={onEnded} />
+    <p className={`absolute inset-x-0 bottom-0 truncate bg-black/60 px-2 py-0.5 text-xs ${state.error ? 'text-danger' : 'text-white'}`}>
+      {audible ? '' : '🔇 '}{state.error || (p ? `${p.creator_id.split('/')[1]} · ${p.published} · ${p.title}（${slot.index + 1}/${state.total}）` : '加载中…')}
+    </p>
   </div>;
+}
+
+// Accompany：音频伴听。选一个音频专辑后按顺序循环播放，期间所有视频静音。
+function Accompany({ active, album }: { active: boolean; album?: Album }) {
+  const audio = useRef<HTMLAudioElement>(null);
+  const [track, setTrack] = useState(0);
+  const [title, setTitle] = useState('');
+  useEffect(() => setTrack(0), [album?.id]);
+  useEffect(() => {
+    const player = audio.current;
+    if (!player || !active || !album) return;
+    const controller = new AbortController();
+    api<{ tracks: Track[] }>(`/api/media/audio/album?${new URLSearchParams({ path: album.id, limit: '1', offset: String(track) })}`, { signal: controller.signal })
+      .then(({ tracks }) => {
+        if (!tracks.length) return;
+        setTitle(tracks[0].title);
+        player.src = `/api/media/audio/stream?path=${encodeURIComponent(tracks[0].rel_path)}`;
+        player.play().catch(() => undefined);
+      }).catch(() => undefined);
+    return () => { controller.abort(); player.pause(); player.removeAttribute('src'); player.load(); };
+  }, [active, album, track]);
+  if (!album) return null;
+  return <span className="flex min-w-0 items-center gap-2 text-xs text-muted">
+    <audio ref={audio} onEnded={() => setTrack(t => (t + 1) % Math.max(1, album.track_count))} />
+    <button className={chip(false)} onClick={() => { const a = audio.current; if (a) { if (a.paused) void a.play(); else a.pause(); } }}>⏯</button>
+    <span className="truncate">{track + 1}/{album.track_count} {title}</span>
+  </span>;
 }
 
 // VideoMatrix：2/3 屏并排，顶栏操作焦点屏。点屏或按 1/2/3 选焦点；空格 暂停/继续，←/→ 上/下一条，M 静音。
 // 隐藏时各屏释放解码器。
-export default function VideoMatrix({ active, onAccompany }: { active: boolean; onAccompany?: () => void }) {
+export default function VideoMatrix({ active }: { active: boolean }) {
   const [creators, setCreators] = useState<Creator[]>([]);
+  const [albums, setAlbums] = useState<Album[]>([]);
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
   const [focused, setFocused] = useState(0);
-  const [accompany, setAccompany] = useState(false);
+  const [accompany, setAccompany] = useState<Album>();
   const [states, setStates] = useState<SlotState[]>([]);
   const container = useRef<HTMLDivElement>(null);
 
@@ -66,6 +103,7 @@ export default function VideoMatrix({ active, onAccompany }: { active: boolean; 
     if (!active) return;
     const controller = new AbortController();
     api<Creator[]>('/api/media/shortvideo/creators', { signal: controller.signal }).then(setCreators).catch(() => undefined);
+    api<Album[]>('/api/media/audio/albums?limit=100', { signal: controller.signal }).then(setAlbums).catch(() => undefined);
     return () => controller.abort();
   }, [active]);
 
@@ -94,27 +132,32 @@ export default function VideoMatrix({ active, onAccompany }: { active: boolean; 
   });
 
   const cfg = prefs.slots[focused];
-  const current = states[focused];
   const platforms = [...new Set(creators.map(c => c.platform))];
-  return <section className="space-y-3">
-    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-panel p-2 text-sm">
-      <select className="rounded border border-line bg-background p-2" value={prefs.screens} onChange={e => { const n = Number(e.target.value); setPrefs(p => ({ ...p, screens: n })); setFocused(f => Math.min(f, n - 1)); }}><option value={2}>2 屏</option><option value={3}>3 屏</option></select>
-      <label className="flex items-center gap-2"><input type="checkbox" checked={prefs.focusAudio} onChange={e => setPrefs(p => ({ ...p, focusAudio: e.target.checked }))} />焦点出声</label>
-      {onAccompany ? <label className="flex items-center gap-2"><input type="checkbox" checked={accompany} onChange={e => { setAccompany(e.target.checked); if (e.target.checked) onAccompany(); }} />音频伴听（视频静音）</label> : null}
-      <span className="text-primary">屏 {focused + 1}：</span>
-      <select className="max-w-72 rounded border border-line bg-background p-2" value={cfg.channel} onChange={e => setSlot(focused, { channel: e.target.value, index: 0, seed: Math.floor(Math.random() * 1e9) })}>
+  return <section className="space-y-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
+      <button className={chip(prefs.screens === 2)} onClick={() => { setPrefs(p => ({ ...p, screens: 2 })); setFocused(f => Math.min(f, 1)); }}>2 屏</button>
+      <button className={chip(prefs.screens === 3)} onClick={() => setPrefs(p => ({ ...p, screens: 3 }))}>3 屏</button>
+      <button className={chip(prefs.focusAudio)} onClick={() => setPrefs(p => ({ ...p, focusAudio: !p.focusAudio }))}>焦点出声</button>
+      <span className="mx-1 h-4 w-px bg-line" />
+      <span className="text-sm text-primary">屏 {focused + 1}</span>
+      <select className={`${select} max-w-60`} value={cfg.channel} onChange={e => setSlot(focused, { channel: e.target.value, index: 0, seed: Math.floor(Math.random() * 1e9) })}>
         <option value="">全部</option>
         {platforms.map(p => <option key={p} value={p}>{p}</option>)}
         {creators.map(c => <option key={c.id} value={c.id}>{c.platform} · {c.name}（{c.posts}）</option>)}
       </select>
-      <button className={button} onClick={() => setSlot(focused, { shuffle: !cfg.shuffle, index: 0 })}>{cfg.shuffle ? '随机' : '顺序'}</button>
-      <button className={button} onClick={() => step(focused, -1)}>上一条</button>
-      <button className={button} onClick={() => togglePause(focused)}>暂停/播放</button>
-      <button className={button} onClick={() => step(focused, 1)}>下一条</button>
-      <button className={button} onClick={() => setSlot(focused, { muted: !cfg.muted })}>{cfg.muted ? '取消静音' : '静音'}</button>
-      <span className="min-w-0 flex-1 truncate text-muted">{current?.error || (current?.post ? `${current.post.creator_id.split('/')[1]} · ${current.post.published} · ${current.post.title}（${cfg.index + 1}/${current.total}）` : '')}</span>
+      <button className={chip(false)} onClick={() => setSlot(focused, { shuffle: !cfg.shuffle, index: 0 })}>{cfg.shuffle ? '随机' : '顺序'}</button>
+      <button className={chip(false)} onClick={() => step(focused, -1)}>◀ 上一条</button>
+      <button className={chip(false)} onClick={() => togglePause(focused)}>⏯</button>
+      <button className={chip(false)} onClick={() => step(focused, 1)}>下一条 ▶</button>
+      <button className={chip(cfg.muted)} onClick={() => setSlot(focused, { muted: !cfg.muted })}>{cfg.muted ? '🔇 已静音' : '🔊 声音'}</button>
+      <span className="mx-1 h-4 w-px bg-line" />
+      <select className={`${select} max-w-48`} value={accompany?.id ?? ''} onChange={e => setAccompany(albums.find(a => a.id === e.target.value))} title="音频伴听：播放专辑，视频全部静音">
+        <option value="">伴听：关</option>
+        {albums.map(a => <option key={a.id} value={a.id}>伴听：{a.title}（{a.track_count}）</option>)}
+      </select>
+      <Accompany active={active} album={accompany} />
     </div>
-    <div ref={container} className={`grid gap-2 ${prefs.screens === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
+    <div ref={container} className={`grid gap-1 ${prefs.screens === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>
       {prefs.slots.slice(0, prefs.screens).map((slot, i) => <VideoSlot key={i} active={active} slot={slot} focused={focused === i}
         audible={!accompany && !slot.muted && (!prefs.focusAudio || focused === i)}
         onFocus={() => setFocused(i)} onEnded={() => step(i, 1)}

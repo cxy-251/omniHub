@@ -67,19 +67,19 @@ export default function ModulePage({ id, sections }: { id: ModuleID; sections: s
     {id === 'admin' ? <Suspense fallback={<p role="status">正在加载管理页面…</p>}><AdminCenter /></Suspense> : null}
     {id === 'tasks' ? <Suspense fallback={<p role="status">正在加载任务台…</p>}><TaskConsole /></Suspense> : null}
     {id === 'games' ? <Suspense fallback={<p role="status">正在加载游戏大厅…</p>}><GameLibrary /></Suspense> : null}
-    {id === 'media' && sections.includes('manga') && visited.includes('manga') ? <div hidden={mediaTab !== 'manga'} className="mt-4">
+    {id === 'media' && sections.includes('manga') && visited.includes('manga') ? <div hidden={mediaTab !== 'manga'} className="mt-1">
       <Suspense fallback={<p role="status">正在加载漫画阅读器…</p>}><MangaLibrary active={mediaTab === 'manga'} /></Suspense>
     </div> : null}
-    {id === 'media' && sections.includes('text') && textVisited ? <div hidden={!textActive} className="mt-4">
+    {id === 'media' && sections.includes('text') && textVisited ? <div hidden={!textActive} className="mt-1">
       <Suspense fallback={<p role="status">正在加载文本阅读器…</p>}><TextLibrary active={textActive} /></Suspense>
     </div> : null}
-    {id === 'media' && sections.includes('shortvideo') && videoVisited ? <div hidden={!videoActive} className="mt-4">
-      <Suspense fallback={<p role="status">正在加载短视频…</p>}><ShortVideoLibrary active={videoActive} onAccompany={sections.includes('audio') ? () => moduleRef.current?.showAudioBar?.() : undefined} /></Suspense>
+    {id === 'media' && sections.includes('shortvideo') && videoVisited ? <div hidden={!videoActive} className="mt-1">
+      <Suspense fallback={<p role="status">正在加载短视频…</p>}><ShortVideoLibrary active={videoActive} /></Suspense>
     </div> : null}
-    {id === 'media' && sections.includes('gallery') && galleryVisited ? <div hidden={!galleryActive} className="mt-4">
+    {id === 'media' && sections.includes('gallery') && galleryVisited ? <div hidden={!galleryActive} className="mt-1">
       <Suspense fallback={<p role="status">正在加载相册…</p>}><GalleryLibrary active={galleryActive} canEdit={false} /></Suspense>
     </div> : null}
-    {id === 'media' && sections.includes('audio') && audioVisited ? <div hidden={!audioActive} className="mt-4">
+    {id === 'media' && sections.includes('audio') && audioVisited ? <div hidden={!audioActive} className="mt-1">
       <Suspense fallback={<p role="status">正在加载音频专辑…</p>}><AudioLibrary active={audioActive} onPlay={(path, title, album) => moduleRef.current?.playAudio?.(path, title, album)} onMetadata={(path, title, album) => moduleRef.current?.updateAudioLabels?.(path, title, album)} /></Suspense>
     </div> : null}
   </section>;

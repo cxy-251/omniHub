@@ -17,12 +17,22 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"omnihub/internal/storage"
 )
 
-// SchemaVersion 写入每个数据库的 user_version；不同版本的旧库拒绝打开，避免误读 agy 阶段的遗留表。
-const SchemaVersion = 2
+// SchemaVersion 写入每个数据库的 user_version。2 起为本模块格式；更早（agy 阶段遗留）拒绝打开。
+// 低版本按 upgrades 原地升级。
+const SchemaVersion = 3
+
+// upgrades[v] 把版本 v 升到 v+1（只用于 index.db；其他库没有结构变化，只更新版本号）。
+var upgrades = map[int]string{
+	2: `ALTER TABLE posts ADD COLUMN codec TEXT NOT NULL DEFAULT '';
+	ALTER TABLE posts ADD COLUMN width INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE posts ADD COLUMN height INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE posts ADD COLUMN duration REAL NOT NULL DEFAULT 0;`,
+}
 
 // DatabaseFiles 是本模块在 shortvideo/ 下拥有的数据库文件名。
 var DatabaseFiles = []string{"index.db", "thumbnails.db", "albums.db"}
@@ -55,7 +65,11 @@ CREATE TABLE IF NOT EXISTS posts (
 	image_count INTEGER NOT NULL DEFAULT 0,
 	music       TEXT NOT NULL DEFAULT '',
 	on_disk     INTEGER NOT NULL DEFAULT 1,
-	imported    INTEGER NOT NULL DEFAULT 0
+	imported    INTEGER NOT NULL DEFAULT 0,
+	codec       TEXT NOT NULL DEFAULT '',   -- 视频编码（ffprobe），'?' 表示探测失败
+	width       INTEGER NOT NULL DEFAULT 0, -- 显示宽高（已按旋转元数据调整）
+	height      INTEGER NOT NULL DEFAULT 0,
+	duration    REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_posts_creator ON posts(creator_id, published DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_order ON posts(published DESC, id DESC);`
@@ -118,6 +132,20 @@ func prepare(db *sql.DB, schema string, readOnly bool) error {
 	}
 	if version == SchemaVersion {
 		return nil
+	}
+	if version >= 2 && version < SchemaVersion {
+		if readOnly {
+			return fmt.Errorf("schema version %d needs upgrade; mount the library writable once", version)
+		}
+		for v := version; v < SchemaVersion; v++ {
+			if sqlText, ok := upgrades[v]; ok && strings.Contains(schema, "CREATE TABLE IF NOT EXISTS posts") {
+				if _, err := db.Exec(sqlText); err != nil {
+					return fmt.Errorf("upgrade from %d: %w", v, err)
+				}
+			}
+		}
+		_, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion))
+		return err
 	}
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table'").Scan(&tables); err != nil {
 		return err

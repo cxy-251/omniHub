@@ -73,42 +73,43 @@ FocusScope {
         anchors.fill: parent
         spacing: 0
 
-        // 顶栏：全局设置 + 焦点屏控件
+        // 顶栏：全局设置 + 焦点屏控件（标题显示在各屏底部，顶栏只放控件）
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: matrix.barVisible ? bar.implicitHeight + 12 : 0
+            Layout.preferredHeight: matrix.barVisible ? 40 : 0
             visible: matrix.barVisible
             color: "#161b22"
             RowLayout {
                 id: bar
-                anchors.fill: parent; anchors.margins: 6
+                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8
+                spacing: 4
                 property var cfg: matrix.slotConfig(matrix.focused)
                 property var slotItem: repeater.itemAt(matrix.focused)
-                Button { text: "返回浏览"; onClicked: matrix.exitRequested() }
+                Chip { text: "浏览"; onClicked: matrix.exitRequested() }
+                Chip { text: "多联放映"; selected: true }
+                Rectangle { width: 1; height: 20; color: "#30363d" }
+                Chip { text: "2 屏"; selected: prefs.screens === 2; onClicked: { prefs.screens = 2; matrix.focused = Math.min(matrix.focused, 1) } }
+                Chip { text: "3 屏"; selected: prefs.screens === 3; onClicked: prefs.screens = 3 }
+                Chip { text: "焦点出声"; selected: prefs.focusAudio; onClicked: prefs.focusAudio = !prefs.focusAudio }
+                Rectangle { width: 1; height: 20; color: "#30363d" }
+                Label { text: "屏 " + (matrix.focused + 1); color: "#58a6ff"; font.pixelSize: 13 }
                 ComboBox {
-                    model: ["2 屏", "3 屏"]
-                    currentIndex: prefs.screens - 2
-                    onActivated: function (i) { prefs.screens = i + 2; matrix.focused = Math.min(matrix.focused, prefs.screens - 1) }
-                }
-                CheckBox { text: "焦点出声"; checked: prefs.focusAudio; onToggled: prefs.focusAudio = checked }
-                Label { text: "屏 " + (matrix.focused + 1) + "："; color: "#58a6ff" }
-                ComboBox {
-                    Layout.preferredWidth: 280
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: 320
+                    Layout.minimumWidth: 140
+                    implicitHeight: 28
+                    font.pixelSize: 13
                     textRole: "label"; valueRole: "value"
                     model: matrix.channels
                     currentIndex: Math.max(0, indexOfValue(bar.cfg.channel))
                     onActivated: matrix.setSlot(matrix.focused, {channel: currentValue, index: 0, seed: Math.floor(Math.random() * 1e9)})
                 }
-                Button { text: bar.cfg.shuffle ? "随机" : "顺序"; onClicked: matrix.setSlot(matrix.focused, {shuffle: !bar.cfg.shuffle, index: 0}) }
-                Button { text: "上一条"; onClicked: if (bar.slotItem) bar.slotItem.step(-1) }
-                Button { text: bar.slotItem && bar.slotItem.paused ? "播放" : "暂停"; onClicked: if (bar.slotItem) bar.slotItem.togglePause() }
-                Button { text: "下一条"; onClicked: if (bar.slotItem) bar.slotItem.step(1) }
-                Button { text: bar.cfg.muted ? "取消静音" : "静音"; onClicked: matrix.setSlot(matrix.focused, {muted: !bar.cfg.muted}) }
-                Label {
-                    Layout.fillWidth: true
-                    elide: Text.ElideRight; color: "#8b949e"
-                    text: bar.slotItem ? bar.slotItem.caption : ""
-                }
+                Chip { text: bar.cfg.shuffle ? "随机" : "顺序"; onClicked: matrix.setSlot(matrix.focused, {shuffle: !bar.cfg.shuffle, index: 0}) }
+                Chip { text: "◀ 上一条"; onClicked: if (bar.slotItem) bar.slotItem.step(-1) }
+                Chip { text: bar.slotItem && bar.slotItem.paused ? "▶ 播放" : "⏸ 暂停"; onClicked: if (bar.slotItem) bar.slotItem.togglePause() }
+                Chip { text: "下一条 ▶"; onClicked: if (bar.slotItem) bar.slotItem.step(1) }
+                Chip { text: bar.cfg.muted ? "🔇 已静音" : "🔊 声音"; selected: bar.cfg.muted; onClicked: matrix.setSlot(matrix.focused, {muted: !bar.cfg.muted}) }
+                Item { Layout.fillWidth: true }
             }
         }
 
@@ -136,7 +137,7 @@ FocusScope {
                     border.width: 2
 
                     function load() {
-                        var q = "/api/media/shortvideo/sequence?index=" + cfg.index + "&seed=" + cfg.seed + "&order=" + (cfg.shuffle ? "shuffle" : "sequential")
+                        var q = "/api/media/shortvideo/sequence?portrait=1&index=" + cfg.index + "&seed=" + cfg.seed + "&order=" + (cfg.shuffle ? "shuffle" : "sequential")
                         if (cfg.channel.indexOf("/") >= 0) q += "&creator=" + encodeURIComponent(cfg.channel)
                         else if (cfg.channel) q += "&platform=" + encodeURIComponent(cfg.channel)
                         error = ""
@@ -168,10 +169,20 @@ FocusScope {
                         onPlaybackEnded: slot.step(1)
                     }
                     TapHandler { onTapped: { matrix.focused = slot.index; matrix.forceActiveFocus() } }
-                    Label {
-                        anchors.bottom: parent.bottom; anchors.left: parent.left; anchors.margins: 8
-                        visible: !slot.audible
-                        text: "🔇"; font.pixelSize: 20
+                    // 底部标题条：静音标记 + 博主 · 日期 · 标题（序号/总数）
+                    Rectangle {
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                        anchors.margins: 2
+                        height: 22
+                        color: "#99000000"
+                        Label {
+                            anchors.fill: parent; anchors.leftMargin: 6; anchors.rightMargin: 6
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                            font.pixelSize: 12
+                            color: slot.error ? "#f85149" : "#e6edf3"
+                            text: (slot.audible ? "" : "🔇 ") + slot.caption
+                        }
                     }
                 }
             }

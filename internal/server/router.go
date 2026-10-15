@@ -243,6 +243,7 @@ func (r *Router) registerRoutes() {
 	// 画廊接口
 	r.mux.HandleFunc("/api/media/gallery/list", r.handleGalleryList)
 	r.mux.HandleFunc("/api/media/gallery/colors", r.handleGalleryColors)
+	r.mux.HandleFunc("/api/media/gallery/ratios", r.handleGalleryRatios)
 	r.mux.HandleFunc("/api/media/gallery/thumbnail", r.handleGalleryThumbnail)
 	r.mux.HandleFunc("/api/media/gallery/original", r.handleGalleryOriginal)
 	r.mux.HandleFunc("/api/media/gallery/trash", r.handleGalleryTrash)

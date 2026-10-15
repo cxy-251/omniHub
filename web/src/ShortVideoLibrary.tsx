@@ -2,13 +2,14 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { usePaged } from './paged';
 import VirtualGrid from './VirtualGrid';
+import { canPlayCodec } from './codecs';
 
 const VideoMatrix = lazy(() => import('./VideoMatrix'));
 
 type Creator = { id: string; platform: string; name: string; posts: number };
-type Post = { id: string; creator_id: string; kind: 'video' | 'album'; title: string; published: string; image_count?: number; music?: string; library_id: string; has_thumbnail: boolean };
+type Post = { id: string; creator_id: string; kind: 'video' | 'album'; title: string; published: string; image_count?: number; music?: string; library_id: string; has_thumbnail: boolean; codec?: string };
 
-const chip = (on: boolean) => `shrink-0 rounded-full border px-3 py-1 text-sm ${on ? 'border-primary text-primary' : 'border-line text-muted hover:text-foreground'}`;
+const chip = (on: boolean) => `shrink-0 rounded-full border px-2.5 py-0.5 text-sm ${on ? 'border-primary text-primary' : 'border-line text-muted hover:text-foreground'}`;
 const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
 
 function query(post: Post, extra: Record<string, string> = {}) {
@@ -16,7 +17,7 @@ function query(post: Post, extra: Record<string, string> = {}) {
 }
 
 // ShortVideoLibrary：浏览（平台 → 博主 → 作品网格 → 播放/翻看）与多联放映两种模式。
-export default function ShortVideoLibrary({ active, onAccompany }: { active: boolean; onAccompany?: () => void }) {
+export default function ShortVideoLibrary({ active }: { active: boolean }) {
   const [mode, setMode] = useState<'browse' | 'matrix'>('browse');
   const [creators, setCreators] = useState<Creator[]>([]);
   const [platform, setPlatform] = useState('');
@@ -40,23 +41,23 @@ export default function ShortVideoLibrary({ active, onAccompany }: { active: boo
     : platform ? `/api/media/shortvideo/posts?platform=${encodeURIComponent(platform)}` : '/api/media/shortvideo/posts';
   const paged = usePaged<Post>(browsing ? endpoint : '');
 
-  return <section className="space-y-4">
-    <div className="flex gap-2">
+  return <section className="space-y-1.5">
+    <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
       <button className={chip(mode === 'browse')} onClick={() => setMode('browse')}>浏览</button>
       <button className={chip(mode === 'matrix')} onClick={() => setMode('matrix')}>多联放映</button>
-    </div>
-    {mode === 'matrix' ? <Suspense fallback={<p role="status">正在加载…</p>}><VideoMatrix active={active} onAccompany={onAccompany} /></Suspense> : <>
-      <div className="flex gap-2 overflow-x-auto pb-1">
+      {mode === 'browse' ? <>
+        <span className="mx-1 h-4 w-px shrink-0 bg-line" />
         <button className={chip(!platform)} onClick={() => { setPlatform(''); setCreator(''); }}>全部平台</button>
         {platforms.map(p => <button key={p} className={chip(platform === p)} onClick={() => { setPlatform(p); setCreator(''); }}>{p}</button>)}
-      </div>
-      <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
+        <span className={`ml-auto shrink-0 text-xs ${error || paged.error ? 'text-danger' : 'text-muted'}`}>{error || paged.error || (paged.total ? `${paged.total} 个作品` : '没有作品，需先由管理员扫描建立索引')}</span>
+      </> : null}
+    </div>
+    {mode === 'matrix' ? <Suspense fallback={<p role="status">正在加载…</p>}><VideoMatrix active={active} /></Suspense> : <>
+      <div className="flex gap-1.5 overflow-x-auto pb-0.5">
         <button className={chip(!creator)} onClick={() => setCreator('')}>全部博主</button>
         {shownCreators.map(c => <button key={c.id} className={chip(creator === c.id)} onClick={() => setCreator(c.id)}>{c.name} · {c.posts}</button>)}
       </div>
-      {error || paged.error ? <p role="alert" className="text-danger">{error || paged.error}</p> : null}
-      <p className="text-sm text-muted">{paged.total ? `${paged.total} 个作品` : '没有作品。资源库需要先由管理员扫描建立索引。'}</p>
-      {browsing ? <VirtualGrid total={paged.total} minColumnWidth={170} aspect={16 / 9} extraHeight={56} render={index => {
+      {browsing ? <VirtualGrid total={paged.total} minColumnWidth={170} aspect={16 / 9} extraHeight={44} render={index => {
         const post = paged.item(index);
         if (!post) return <div className="h-full rounded-lg border border-line bg-panel" />;
         return <button className="flex h-full w-full flex-col overflow-hidden rounded-lg border border-line bg-panel text-left hover:border-primary" onClick={() => setOpen(index)}>
@@ -66,7 +67,7 @@ export default function ShortVideoLibrary({ active, onAccompany }: { active: boo
               : <span className="flex h-full items-center justify-center text-4xl text-line">{post.kind === 'album' ? '🖼' : '▶'}</span>}
             <span className="absolute right-1 top-1 rounded bg-black/60 px-1.5 text-xs text-white">{post.kind === 'album' ? `图集 ${post.image_count}` : '视频'}</span>
           </div>
-          <div className="h-14 p-2"><p className="truncate text-sm">{post.title}</p><p className="mt-1 truncate text-xs text-muted">{post.creator_id.split('/')[1]} · {post.published}</p></div>
+          <div className="h-11 px-1.5 py-1"><p className="truncate text-xs">{post.title}</p><p className="truncate text-xs text-muted">{post.creator_id.split('/')[1]} · {post.published}</p></div>
         </button>;
       }} /> : null}
       {open !== undefined && paged.item(open) ? <Viewer post={paged.item(open)!} onClose={() => setOpen(undefined)}
@@ -105,7 +106,9 @@ function Viewer({ post, onClose, onPrev, onNext }: { post: Post; onClose(): void
       <button className={button} onClick={onClose}>关闭</button>
     </div>
     <div className="relative flex min-h-0 flex-1 items-center justify-center">
-      {post.kind === 'video'
+      {post.kind === 'video' && !canPlayCodec(post.codec)
+        ? <p className="max-w-md text-center">这个视频是 {post.codec?.toUpperCase()} 编码，当前浏览器无法解码（会只有声音没有画面）。请在 Deck 上的 omniHub 客户端中播放。</p>
+        : post.kind === 'video'
         ? <video key={post.id} className="max-h-full max-w-full" src={`/api/media/shortvideo/stream?${query(post)}`} controls autoPlay playsInline onEnded={onNext} />
         : <>
           <img key={post.id + page} className="max-h-full max-w-full object-contain" src={`/api/media/shortvideo/album/image?${query(post, { index: String(page) })}`} alt={`${page}/${pages}`} onClick={() => setPage(p => p < pages ? p + 1 : 1)} />

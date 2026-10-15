@@ -1,7 +1,7 @@
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Window 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Window
+import QtQuick.Layouts
 import QtCore
 
 Window {
@@ -11,6 +11,22 @@ Window {
     visible: true
     title: "omniHub Native Client"
     color: "#0d1117"
+    // 深色调色板（Fusion 控件按调色板着色）。
+    palette.window: "#0d1117"
+    palette.windowText: "#c9d1d9"
+    palette.base: "#161b22"
+    palette.alternateBase: "#0d1117"
+    palette.text: "#c9d1d9"
+    palette.button: "#21262d"
+    palette.buttonText: "#c9d1d9"
+    palette.highlight: "#58a6ff"
+    palette.highlightedText: "#0d1117"
+    palette.placeholderText: "#8b949e"
+    palette.mid: "#30363d"
+    palette.light: "#30363d"
+    palette.dark: "#0b0e13"
+    palette.toolTipBase: "#161b22"
+    palette.toolTipText: "#c9d1d9"
     onClosing: {
         if (typeof nativeResume !== "undefined") nativeResume.flush()
         if (textLoader.item) textLoader.item.flush()
@@ -95,43 +111,37 @@ Window {
             wrapMode: Text.Wrap
         }
 
-        // 顶栏导航
+        // 顶栏导航（按常用度排序）
         Rectangle {
             width: parent.width
-            height: 48
+            height: 40
             color: "#161b22"
-            border.color: "#30363d"
-
             Row {
-                anchors.centerIn: parent
-                spacing: 20
-
-                Button {
-                    text: "通用播放器"
-                    highlighted: stack.currentIndex === 0
-                    onClicked: mainWindow.selectPage(0)
+                anchors.verticalCenter: parent.verticalCenter
+                x: 8
+                spacing: 4
+                Repeater {
+                    model: [{page: 4, label: "短视频"}, {page: 5, label: "相册"}, {page: 0, label: "播放器"},
+                            {page: 1, label: "游戏"}, {page: 3, label: "文本"}, {page: 2, label: "资源库"}]
+                    delegate: Chip {
+                        required property var modelData
+                        text: modelData.label
+                        selected: stack.currentIndex === modelData.page
+                        onClicked: {
+                            mainWindow.selectPage(modelData.page)
+                            if (modelData.page === 2) backendApi.refreshLibraries()
+                        }
+                    }
                 }
-                Button {
-                    text: "独立游戏大厅"
-                    highlighted: stack.currentIndex === 1
-                    onClicked: mainWindow.selectPage(1)
-                }
-                Button {
-                    text: "资源库管理"
-                    highlighted: stack.currentIndex === 2
-                    onClicked: { mainWindow.selectPage(2); backendApi.refreshLibraries() }
-                }
-                Button { text: "文本阅读"; highlighted: stack.currentIndex === 3; onClicked: mainWindow.selectPage(3) }
-                Button { text: "短视频"; highlighted: stack.currentIndex === 4; onClicked: mainWindow.selectPage(4) }
-                Button { text: "相册"; highlighted: stack.currentIndex === 5; onClicked: mainWindow.selectPage(5) }
             }
+            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#30363d" }
         }
 
         // 视窗内容切换
         StackLayout {
             id: stack
             width: parent.width
-            height: parent.height - 48
+            height: parent.height - 40
             currentIndex: mainWindow.restoredUI.page !== undefined ? mainWindow.restoredUI.page : (initialExternalFile !== "" ? 0 : uiPrefs.page)
 
             Loader {

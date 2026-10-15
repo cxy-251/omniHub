@@ -57,20 +57,20 @@ export default function App() {
     } catch (e) { setError((e as Error).message); } finally { setPending(false); }
   }
 
-  const navigationStyle = (selected: boolean) => `shrink-0 rounded-md px-4 py-2 text-sm ${selected ? 'bg-panel text-primary' : 'text-muted hover:bg-panel hover:text-foreground'}`;
+  const navigationStyle = (selected: boolean) => `shrink-0 rounded-md px-3 py-1 text-sm ${selected ? 'bg-panel text-primary' : 'text-muted hover:bg-panel hover:text-foreground'}`;
   return <div className="min-h-screen bg-background text-foreground antialiased">
-    <header className="sticky top-0 z-20 flex h-auto min-h-14 flex-wrap items-center justify-between gap-3 border-b border-line bg-panel px-4 py-3 sm:px-6">
-      <div className="flex flex-wrap items-center gap-3"><h1 className="text-xl font-semibold text-primary">omniHub</h1><span className="text-sm text-muted">{library}</span></div>
+    <header className="sticky top-0 z-20 flex h-auto min-h-11 flex-wrap items-center justify-between gap-2 border-b border-line bg-panel px-3 py-1.5">
+      <div className="flex flex-wrap items-center gap-3"><h1 className="text-lg font-semibold text-primary">omniHub</h1><span className="text-sm text-muted">{library}</span></div>
       <div className="flex items-center gap-3"><span className="text-sm text-muted">{status?.user.username ?? '访客'}{status ? ` · Lv.${status.user.level}` : ''}</span>
         <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => setLoginOpen(!loginOpen)}>登录账号</button>
  {status?.logged_in ? <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => setPasswordOpen(value => !value)}>修改密码</button> : null}
  {status?.logged_in ? <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => { void post('/api/auth/logout', {}).then(() => window.location.reload()).catch((e: Error) => setError(e.message)); }}>退出登录</button> : null}</div>
     </header>
-    <nav className="flex gap-2 overflow-x-auto border-b border-line px-4 py-3 sm:px-6" aria-label="主要导航">
+    <nav className="flex gap-1 overflow-x-auto border-b border-line px-3 py-1" aria-label="主要导航">
       <button className={navigationStyle(active === 'portal')} onClick={() => setActive('portal')}>门户大厅</button>
       {visible.map(m => <button key={m.id} className={navigationStyle(active === m.id)} onClick={() => setActive(m.id)}>{m.title}</button>)}
     </nav>
-    <main className="mx-auto max-w-screen-2xl p-4 sm:p-6">
+    <main className="mx-auto max-w-screen-2xl px-3 py-2">
       {error ? <p role="alert" className="mb-4 whitespace-pre-wrap text-danger">{error}</p> : null}
       {passwordOpen && status?.logged_in ? <Suspense fallback={<p role="status">正在加载…</p>}><PasswordChange onCancel={() => setPasswordOpen(false)} /></Suspense> : null}
       {loginOpen ? <form className="mb-6 flex flex-wrap items-end gap-3 rounded-lg border border-line bg-panel p-4" onSubmit={login}>

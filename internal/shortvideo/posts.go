@@ -34,6 +34,10 @@ type Post struct {
 	Music      string `json:"music,omitempty"`
 	OnDisk     bool   `json:"on_disk"`
 	Imported   bool   `json:"imported"`
+	Codec      string  `json:"codec,omitempty"`
+	Width      int     `json:"width,omitempty"`
+	Height     int     `json:"height,omitempty"`
+	Duration   float64 `json:"duration,omitempty"`
 	// HasThumbnail 表示 thumbnails.db 里有可用封面；客户端据此决定是否请求缩略图。
 	HasThumbnail bool `json:"has_thumbnail"`
 }
@@ -43,13 +47,17 @@ type Filter struct {
 	Platform  string
 	CreatorID string
 	Kind      Kind
+	// NotLandscape 排除已知横屏或方形的视频（尚未探测的保留）。
+	NotLandscape bool
+	// Codecs 非空时只保留这些编码的视频（尚未探测的排除，避免浏览器黑屏）。
+	Codecs []string
 }
 
-const postColumns = "id, creator_id, kind, title, published, size, mtime, image_count, music, on_disk, imported"
+const postColumns = "id, creator_id, kind, title, published, size, mtime, image_count, music, on_disk, imported, codec, width, height, duration"
 
 func scanPost(row interface{ Scan(...any) error }) (Post, error) {
 	var p Post
-	err := row.Scan(&p.ID, &p.CreatorID, &p.Kind, &p.Title, &p.Published, &p.Size, &p.MTime, &p.ImageCount, &p.Music, &p.OnDisk, &p.Imported)
+	err := row.Scan(&p.ID, &p.CreatorID, &p.Kind, &p.Title, &p.Published, &p.Size, &p.MTime, &p.ImageCount, &p.Music, &p.OnDisk, &p.Imported, &p.Codec, &p.Width, &p.Height, &p.Duration)
 	return p, err
 }
 
@@ -117,6 +125,7 @@ func (s *Store) Creators(platform string) ([]Creator, error) {
 // Stats 统计作品、缩略图与图集入库情况，供管理页显示进度。
 type Stats struct {
 	Videos         int `json:"videos"`
+	VideosProbed   int `json:"videos_probed"`
 	Albums         int `json:"albums"`
 	Thumbnails     int `json:"thumbnails"`
 	ThumbFailures  int `json:"thumbnail_failures"`
@@ -131,11 +140,12 @@ func (s *Store) Stats() (Stats, error) {
 	var st Stats
 	err := s.index.QueryRow(`SELECT
 		count(*) FILTER (WHERE kind='video'),
+		count(*) FILTER (WHERE kind='video' AND codec != ''),
 		count(*) FILTER (WHERE kind='album'),
 		count(*) FILTER (WHERE kind='album' AND imported=1),
 		count(*) FILTER (WHERE kind='album' AND on_disk=1),
 		count(*) FILTER (WHERE kind='album' AND imported=1 AND on_disk=1)
-		FROM posts`).Scan(&st.Videos, &st.Albums, &st.AlbumsImported, &st.AlbumsOnDisk, &st.AlbumsCleanable)
+		FROM posts`).Scan(&st.Videos, &st.VideosProbed, &st.Albums, &st.AlbumsImported, &st.AlbumsOnDisk, &st.AlbumsCleanable)
 	if err != nil {
 		return st, err
 	}
@@ -157,6 +167,15 @@ func (f Filter) clause() (string, []any) {
 	if f.Kind != "" {
 		conds = append(conds, "kind = ?")
 		args = append(args, string(f.Kind))
+	}
+	if f.NotLandscape {
+		conds = append(conds, "NOT (width > 0 AND width >= height)")
+	}
+	if len(f.Codecs) > 0 {
+		conds = append(conds, "codec IN (?"+strings.Repeat(",?", len(f.Codecs)-1)+")")
+		for _, c := range f.Codecs {
+			args = append(args, c)
+		}
 	}
 	if len(conds) == 0 {
 		return "", nil
@@ -193,10 +212,16 @@ func (s *Store) writePosts(posts []scannedPost, known map[string]Post) error {
 		return err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT INTO posts (` + postColumns + `) VALUES (?,?,?,?,?,?,?,?,?,1,?)
+	// 内容变化时清空探测结果，由后台重新探测。
+	stmt, err := tx.Prepare(`INSERT INTO posts (id, creator_id, kind, title, published, size, mtime, image_count, music, on_disk, imported)
+		VALUES (?,?,?,?,?,?,?,?,?,1,?)
 		ON CONFLICT(id) DO UPDATE SET creator_id=excluded.creator_id, kind=excluded.kind, title=excluded.title,
 		published=excluded.published, size=excluded.size, mtime=excluded.mtime, image_count=excluded.image_count,
-		music=excluded.music, on_disk=1, imported=excluded.imported`)
+		music=excluded.music, on_disk=1, imported=excluded.imported,
+		codec=CASE WHEN posts.size=excluded.size AND posts.mtime=excluded.mtime THEN posts.codec ELSE '' END,
+		width=CASE WHEN posts.size=excluded.size AND posts.mtime=excluded.mtime THEN posts.width ELSE 0 END,
+		height=CASE WHEN posts.size=excluded.size AND posts.mtime=excluded.mtime THEN posts.height ELSE 0 END,
+		duration=CASE WHEN posts.size=excluded.size AND posts.mtime=excluded.mtime THEN posts.duration ELSE 0 END`)
 	if err != nil {
 		return err
 	}

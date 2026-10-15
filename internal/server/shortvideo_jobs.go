@@ -129,6 +129,10 @@ func (r *Router) runShortVideoWorker() {
 			continue
 		default:
 		}
+		// 探测编码/尺寸开销小（只读文件头），始终进行；缩略图受开关控制。
+		if r.probePass() > 0 {
+			continue
+		}
 		if w.thumbsEnabled() && r.thumbnailPass() > 0 {
 			continue
 		}
@@ -247,6 +251,33 @@ func (r *Router) thumbnailPass() int {
 			}
 			if err != nil && ctx.Err() == nil {
 				w.finish("thumbnails", "", err)
+				return processed
+			}
+			processed++
+		}
+	}
+	return processed
+}
+
+// probePass 为各库探测一小批视频的编码、尺寸与时长；有显式任务等待时提前返回。
+func (r *Router) probePass() int {
+	w := r.svJobs
+	stores, dirs, _ := r.writableStores()
+	processed := 0
+	for i, s := range stores {
+		pending, err := s.PendingProbes(16)
+		if err != nil {
+			continue
+		}
+		for _, p := range pending {
+			if len(w.requests) > 0 || w.ctx.Err() != nil {
+				return processed
+			}
+			if err := s.ProbeVideo(w.ctx, dirs[i], p); err != nil {
+				if errors.Is(err, shortvideo.ErrToolMissing) {
+					w.finish("probe", "", err)
+					return 0
+				}
 				return processed
 			}
 			processed++
