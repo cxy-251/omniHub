@@ -11,4 +11,6 @@ if ! pgrep -x omnihub-server > /dev/null; then
 fi
 # 本机 Qt 没带 wayland 平台插件，直接用 xcb（XWayland），避免启动时的回退警告。
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+# 标准错误不是终端时 Qt 默认把日志写进 journald，这里强制输出到终端。
+export QT_FORCE_STDERR_LOGGING=1
 exec build/client/omnihub_client "$@"

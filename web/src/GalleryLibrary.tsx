@@ -1,66 +1,79 @@
-import { useEffect, useState } from 'react';
-import { request } from './api';
+import { useEffect, useRef, useState } from 'react';
+import { api } from './api';
+import { usePaged } from './paged';
+import VirtualGrid from './VirtualGrid';
 
-type Photo = { id: string; filename: string; size_bytes: number; width: number; height: number; library_id: string; library_name: string; read_only: boolean; deleted_at?: string };
-type Props = { active: boolean; canEdit: boolean };
+type Photo = { id: string; filename: string; width: number; height: number; color_hex: string; library_id: string };
+
+// color_family 0~9（定义见 gallery 项目 color_service.ClassifyColor）。
+const colors = [['红', '#ef4444'], ['橙', '#f97316'], ['黄', '#eab308'], ['绿', '#22c55e'], ['蓝', '#3b82f6'], ['紫', '#a855f7'], ['粉', '#ec4899'], ['白', '#f1f5f9'], ['黑', '#0f172a'], ['灰', '#78716c']] as const;
+const chip = (on: boolean) => `shrink-0 rounded-full border px-3 py-1 text-sm ${on ? 'border-primary text-primary' : 'border-line text-muted hover:text-foreground'}`;
 const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
+const query = (p: Photo) => new URLSearchParams({ library_id: p.library_id, id: p.id }).toString();
 
-function photoURL(kind: string, photo: Photo) {
-  return `/api/media/gallery/${kind}?${new URLSearchParams({ id: photo.id, library_id: photo.library_id })}`;
-}
-
-// GalleryLibrary bounds the rendered page and exposes permitted trash actions.
-export default function GalleryLibrary({ active, canEdit }: Props) {
-  const [photos, setPhotos] = useState<Photo[]>([]);
-  const [offset, setOffset] = useState(0);
-  const [more, setMore] = useState(false);
-  const [includeDeleted, setIncludeDeleted] = useState(false);
-  const [revision, setRevision] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [pending, setPending] = useState('');
+// GalleryLibrary：只读相册。网格虚拟滚动、按页懒加载；隐藏时卸载网格与查看器，释放图片。
+export default function GalleryLibrary({ active }: { active: boolean; canEdit?: boolean }) {
+  const [color, setColor] = useState(-1);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [open, setOpen] = useState<number>();
+  const paged = usePaged<Photo>(active ? `/api/media/gallery/list${color >= 0 ? `?color=${color}` : ''}` : '', 100);
 
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
-    setLoading(true); setError('');
-    request(`/api/media/gallery/list?limit=48&offset=${offset}&include_deleted=${includeDeleted ? 1 : 0}`, { signal: controller.signal })
-      .then(async response => {
-        const next = await response.json() as Photo[];
-        if (!controller.signal.aborted) { setPhotos(next); setMore(response.headers.get('X-Has-More') === 'true'); }
-      }).catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    api<Record<string, number>>('/api/media/gallery/colors', { signal: controller.signal }).then(setCounts).catch(() => undefined);
     return () => controller.abort();
-  }, [active, offset, includeDeleted, revision]);
+  }, [active]);
 
-  async function toggleTrash(photo: Photo) {
-    if (!photo.deleted_at && !window.confirm(`将“${photo.filename}”移入相册废纸篓？`)) return;
-    const key = `${photo.library_id}:${photo.id}`;
-    setPending(key); setError('');
-    try {
-      await request(photoURL('trash', photo) + `&restore=${photo.deleted_at ? 1 : 0}`, { method: 'POST' });
-      setRevision(value => value + 1);
-    } catch (e) { setError((e as Error).message); }
-    finally { setPending(''); }
-  }
-
-  return <section className="space-y-4">
-    <div className="flex flex-wrap items-center gap-4">
-      <button className={button} disabled={loading} onClick={() => setRevision(value => value + 1)}>刷新相册</button>
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeDeleted} onChange={event => { setIncludeDeleted(event.target.checked); setOffset(0); }} />包含废纸篓</label>
-      <span role="status" className="text-sm text-muted">{loading ? '正在加载…' : photos.length ? `第 ${offset + 1}–${offset + photos.length} 项` : '当前页暂无照片'}</span>
+  if (!active) return null;
+  return <section className="space-y-3">
+    <div className="flex gap-2 overflow-x-auto pb-1">
+      <button className={chip(color < 0)} onClick={() => setColor(-1)}>全部</button>
+      {colors.map(([name, swatch], i) => <button key={i} className={chip(color === i)} onClick={() => setColor(i)}>
+        <span className="mr-1 inline-block h-3 w-3 rounded-full border border-line align-middle" style={{ background: swatch }} />{name} · {counts[i] ?? 0}
+      </button>)}
     </div>
-    {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-      {photos.map(photo => <article key={`${photo.library_id}:${photo.id}`} className="overflow-hidden rounded-lg border border-line bg-surface">
-        <a href={photoURL('original', photo)} target="_blank" rel="noopener noreferrer">
-          <img src={photoURL('thumbnail', photo)} className="aspect-square w-full object-cover" loading="lazy" decoding="async" alt={photo.filename} />
-        </a>
-        <div className="space-y-2 p-3"><p className="break-all text-sm">{photo.filename}</p><p className="text-xs text-muted">{photo.library_name} · {Math.max(0, photo.size_bytes / 1024).toFixed(0)} KiB{photo.deleted_at ? ' · 废纸篓' : ''}</p>
-          {canEdit && !photo.read_only ? <button className={button} disabled={!!pending} onClick={() => void toggleTrash(photo)}>{pending === `${photo.library_id}:${photo.id}` ? '正在保存…' : photo.deleted_at ? '恢复' : '移入废纸篓'}</button> : null}
-        </div>
-      </article>)}
-    </div>
-    <div className="flex gap-3"><button className={button} disabled={loading || offset === 0} onClick={() => setOffset(value => Math.max(0, value - 48))}>上一页</button><button className={button} disabled={loading || !more} onClick={() => setOffset(value => value + 48)}>下一页</button></div>
+    {paged.error ? <p role="alert" className="text-danger">{paged.error}</p> : null}
+    <p className="text-sm text-muted">{paged.total} 张（只读）</p>
+    <VirtualGrid total={paged.total} minColumnWidth={180} aspect={1} render={i => {
+      const photo = paged.item(i);
+      return <button className="block h-full w-full overflow-hidden rounded" style={{ background: photo?.color_hex || 'var(--surface)' }} onClick={() => photo && setOpen(i)}>
+        {photo ? <img className="h-full w-full object-cover" src={`/api/media/gallery/thumbnail?${query(photo)}`} alt="" decoding="async" /> : null}
+      </button>;
+    }} />
+    {open !== undefined ? <Viewer index={open} total={paged.total} photo={paged.item(open)} onIndex={setOpen} onClose={() => setOpen(undefined)} /> : null}
   </section>;
+}
+
+// Viewer：原图查看。先显示缩略图，原图到达后替换；←/→ 翻页，Esc 关闭。
+function Viewer({ index, total, photo, onIndex, onClose }: { index: number; total: number; photo?: Photo; onIndex(i: number): void; onClose(): void }) {
+  const [loaded, setLoaded] = useState('');
+  const keys = useRef({ index, total, onIndex, onClose });
+  keys.current = { index, total, onIndex, onClose };
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const k = keys.current;
+      if (e.key === 'Escape') k.onClose();
+      else if (e.key === 'ArrowRight' && k.index < k.total - 1) k.onIndex(k.index + 1);
+      else if (e.key === 'ArrowLeft' && k.index > 0) k.onIndex(k.index - 1);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+  return <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex flex-col bg-black/95 text-white">
+    <div className="flex items-center gap-3 p-3">
+      <p className="min-w-0 flex-1 truncate text-sm">{index + 1} / {total}{photo ? ` · ${photo.filename} · ${photo.width}×${photo.height}` : ''}</p>
+      <button className={button} disabled={index <= 0} onClick={() => onIndex(index - 1)}>上一张</button>
+      <button className={button} disabled={index >= total - 1} onClick={() => onIndex(index + 1)}>下一张</button>
+      <button className={button} onClick={onClose}>关闭</button>
+    </div>
+    <div className="relative flex min-h-0 flex-1 items-center justify-center">
+      {photo ? <>
+        {loaded !== photo.id ? <img className="absolute max-h-full max-w-full object-contain" src={`/api/media/gallery/thumbnail?${query(photo)}`} alt="" /> : null}
+        <img key={photo.id} className="relative max-h-full max-w-full object-contain" src={`/api/media/gallery/original?${query(photo)}`} alt={photo.filename} onLoad={() => setLoaded(photo.id)} />
+      </> : <p>加载中…</p>}
+    </div>
+  </div>;
 }

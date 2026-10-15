@@ -66,32 +66,32 @@ type svPost struct {
 	LibraryID string `json:"library_id"`
 }
 
-// handleShortVideoPosts 合并各库作品，按发布日期倒序分页。
-func (r *Router) handleShortVideoPosts(w http.ResponseWriter, req *http.Request) {
-	limit, offset, err := pageBounds(req)
-	if err != nil || limit > 500 || offset > 100000 {
-		http.Error(w, "invalid page bounds", http.StatusBadRequest)
-		return
-	}
-	q := req.URL.Query()
-	filter := shortvideo.Filter{Platform: q.Get("platform"), CreatorID: q.Get("creator"), Kind: shortvideo.Kind(q.Get("kind"))}
+// svKey 是跨库合并后的作品键。
+type svKey struct {
+	shortvideo.Key
+	store *shortvideo.Store
+	lib   string
+}
+
+// svMergedKeys 合并各库符合筛选的作品键，按发布日期倒序；未建索引的库跳过。
+func (r *Router) svMergedKeys(w http.ResponseWriter, req *http.Request, filter shortvideo.Filter) ([]svKey, bool) {
 	libs, ok := r.queryLibraries(w, req)
 	if !ok {
-		return
+		return nil, false
 	}
-	var all []svPost
+	var all []svKey
 	for _, lib := range libs {
 		store, _, err := r.svStore(lib)
 		if err != nil {
-			continue // 未建索引的库（例如只读且没有数据库）不参与
+			continue
 		}
-		posts, err := store.Posts(filter, offset+limit+1, 0)
+		keys, err := store.Keys(filter)
 		if err != nil {
 			http.Error(w, "short video index unavailable", http.StatusServiceUnavailable)
-			return
+			return nil, false
 		}
-		for _, p := range posts {
-			all = append(all, svPost{Post: p, LibraryID: lib.ID})
+		for _, k := range keys {
+			all = append(all, svKey{k, store, lib.ID})
 		}
 	}
 	sort.SliceStable(all, func(i, j int) bool {
@@ -100,17 +100,46 @@ func (r *Router) handleShortVideoPosts(w http.ResponseWriter, req *http.Request)
 		}
 		return all[i].ID > all[j].ID
 	})
-	if offset >= len(all) {
-		all = nil
-	} else {
-		all = all[offset:]
+	return all, true
+}
+
+// handleShortVideoPosts 跨库分页列出作品，X-Total-Count 给出总数，客户端可直接跳到任意页。
+func (r *Router) handleShortVideoPosts(w http.ResponseWriter, req *http.Request) {
+	limit, offset, err := pageBounds(req)
+	if err != nil || limit > 200 || offset < 0 {
+		http.Error(w, "invalid page bounds", http.StatusBadRequest)
+		return
 	}
-	more := len(all) > limit
-	if more {
-		all = all[:limit]
+	q := req.URL.Query()
+	keys, ok := r.svMergedKeys(w, req, shortvideo.Filter{Platform: q.Get("platform"), CreatorID: q.Get("creator"), Kind: shortvideo.Kind(q.Get("kind"))})
+	if !ok {
+		return
 	}
-	w.Header().Set("X-Has-More", strconv.FormatBool(more))
-	writeJSON(w, http.StatusOK, all)
+	w.Header().Set("X-Total-Count", strconv.Itoa(len(keys)))
+	page := keys[min(offset, len(keys)):min(offset+limit, len(keys))]
+	// 按库分组读取详情，再按合并后的顺序输出。
+	byStore := make(map[*shortvideo.Store][]string)
+	for _, k := range page {
+		byStore[k.store] = append(byStore[k.store], k.ID)
+	}
+	found := make(map[string]shortvideo.Post, len(page))
+	for store, ids := range byStore {
+		posts, err := store.PostsByID(ids)
+		if err != nil {
+			http.Error(w, "short video index unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		for _, p := range posts {
+			found[p.ID] = p
+		}
+	}
+	out := make([]svPost, 0, len(page))
+	for _, k := range page {
+		if p, ok := found[k.ID]; ok {
+			out = append(out, svPost{Post: p, LibraryID: k.lib})
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleShortVideoCreators 合并各库的博主，同名博主（同一 ID）作品数相加。
@@ -255,41 +284,14 @@ func (r *Router) handleShortVideoSequence(w http.ResponseWriter, req *http.Reque
 		return
 	}
 	seed, _ := strconv.ParseInt(q.Get("seed"), 10, 64)
-	filter := shortvideo.Filter{Platform: q.Get("platform"), CreatorID: q.Get("creator")}
-	libs, ok := r.queryLibraries(w, req)
+	all, ok := r.svMergedKeys(w, req, shortvideo.Filter{Platform: q.Get("platform"), CreatorID: q.Get("creator"), Kind: shortvideo.KindVideo})
 	if !ok {
 		return
-	}
-	type entry struct {
-		shortvideo.VideoKey
-		store *shortvideo.Store
-		lib   string
-	}
-	var all []entry
-	for _, lib := range libs {
-		store, _, err := r.svStore(lib)
-		if err != nil {
-			continue
-		}
-		keys, err := store.VideoKeys(filter)
-		if err != nil {
-			http.Error(w, "short video index unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		for _, k := range keys {
-			all = append(all, entry{k, store, lib.ID})
-		}
 	}
 	if len(all) == 0 {
 		http.Error(w, "no videos in channel", http.StatusNotFound)
 		return
 	}
-	sort.SliceStable(all, func(i, j int) bool {
-		if all[i].Published != all[j].Published {
-			return all[i].Published > all[j].Published
-		}
-		return all[i].ID > all[j].ID
-	})
 	if q.Get("order") == "shuffle" {
 		rng := rand.New(rand.NewPCG(uint64(seed), 0x5eed))
 		rng.Shuffle(len(all), func(i, j int) { all[i], all[j] = all[j], all[i] })

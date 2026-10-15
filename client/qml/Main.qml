@@ -2,6 +2,7 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Window 2.15
 import QtQuick.Layouts 1.15
+import QtCore
 
 Window {
     id: mainWindow
@@ -14,6 +15,8 @@ Window {
         if (typeof nativeResume !== "undefined") nativeResume.flush()
         if (textLoader.item) textLoader.item.flush()
     }
+    // 记住上次打开的页面（游戏让出后恢复时以 restoredUI 为准）。
+    Settings { id: uiPrefs; category: "main"; property int page: 4 }
     property var lifecycle: typeof nativeLifecycle === "undefined" ? null : nativeLifecycle
     property var restoredUI: lifecycle ? lifecycle.restored : ({})
     property string savedMediaSource: restoredUI.source || initialExternalFile
@@ -46,9 +49,12 @@ Window {
             savedPlaylistIndex = playerLoader.item.playlistIndex
         }
         stack.currentIndex = index
+        uiPrefs.page = index
     }
 
-    Component.onCompleted: backendApi.refresh()
+    // Settings 在组件完成时才读出上次的页码；在那之前不激活任何页面，避免先按默认值建出一个页面再销毁。
+    property bool pagesReady: false
+    Component.onCompleted: { pagesReady = true; backendApi.refresh() }
     Connections {
         target: backendApi
         function onStatusChanged() {
@@ -59,7 +65,8 @@ Window {
             if (backendApi.stateReady && backendApi.connected && !backendApi.hasAdmin) setupDialog.open()
             // A standalone local file must keep playing when the service is
             // absent/offline; recovery navigation cannot destroy its decoder.
-            if (!backendApi.stateReady && !(playerLoader.item && playerLoader.item.source.length > 0)) mainWindow.selectPage(2)
+            // 只在资源库请求完成且确认状态离线时跳转；请求进行中 stateReady 尚未更新。不写入记住的页面。
+            if (!backendApi.libraryBusy && backendApi.connected && !backendApi.stateReady && !(playerLoader.item && playerLoader.item.source.length > 0)) stack.currentIndex = 2
         }
     }
     Dialog {
@@ -116,6 +123,7 @@ Window {
                 }
                 Button { text: "文本阅读"; highlighted: stack.currentIndex === 3; onClicked: mainWindow.selectPage(3) }
                 Button { text: "短视频"; highlighted: stack.currentIndex === 4; onClicked: mainWindow.selectPage(4) }
+                Button { text: "相册"; highlighted: stack.currentIndex === 5; onClicked: mainWindow.selectPage(5) }
             }
         }
 
@@ -124,11 +132,11 @@ Window {
             id: stack
             width: parent.width
             height: parent.height - 48
-            currentIndex: mainWindow.restoredUI.page !== undefined ? mainWindow.restoredUI.page : (initialExternalFile !== "" ? 0 : 4)
+            currentIndex: mainWindow.restoredUI.page !== undefined ? mainWindow.restoredUI.page : (initialExternalFile !== "" ? 0 : uiPrefs.page)
 
             Loader {
                 id: playerLoader
-                active: stack.currentIndex === 0
+                active: mainWindow.pagesReady && stack.currentIndex === 0
                 sourceComponent: Component { PlayerView { } }
                 onLoaded: {
                     item.restorePlayback(mainWindow.savedMediaSource, mainWindow.savedMediaPosition, mainWindow.savedMediaPaused, mainWindow.savedPlaylistEntries, mainWindow.savedPlaylistIndex)
@@ -138,15 +146,16 @@ Window {
             }
 
             Loader {
-                active: stack.currentIndex === 1
+                active: mainWindow.pagesReady && stack.currentIndex === 1
                 sourceComponent: Component { GameLauncherView { onGameStarted: function(sessionId) { mainWindow.yieldForGame(sessionId) } } }
             }
             Loader {
-                active: stack.currentIndex === 2
+                active: mainWindow.pagesReady && stack.currentIndex === 2
                 sourceComponent: Component { LibraryView { } }
             }
-            Loader { id: textLoader; active: stack.currentIndex === 3; sourceComponent: Component { TextLibraryView { } } }
-            Loader { active: stack.currentIndex === 4; sourceComponent: Component { ShortVideoView { } } }
+            Loader { id: textLoader; active: mainWindow.pagesReady && stack.currentIndex === 3; sourceComponent: Component { TextLibraryView { } } }
+            Loader { active: mainWindow.pagesReady && stack.currentIndex === 4; sourceComponent: Component { ShortVideoView { } } }
+            Loader { active: mainWindow.pagesReady && stack.currentIndex === 5; sourceComponent: Component { GalleryView { } } }
         }
     }
 }

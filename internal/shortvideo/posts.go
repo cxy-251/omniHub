@@ -53,28 +53,6 @@ func scanPost(row interface{ Scan(...any) error }) (Post, error) {
 	return p, err
 }
 
-// Posts 按发布日期倒序返回一页作品。
-func (s *Store) Posts(f Filter, limit, offset int) ([]Post, error) {
-	where, args := f.clause()
-	rows, err := s.index.Query("SELECT "+postColumns+" FROM posts"+where+" ORDER BY published DESC, id DESC LIMIT ? OFFSET ?", append(args, limit, offset)...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var posts []Post
-	for rows.Next() {
-		p, err := scanPost(rows)
-		if err != nil {
-			return nil, err
-		}
-		posts = append(posts, p)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return posts, s.markThumbnails(posts)
-}
-
 // markThumbnails 为一页作品填写 HasThumbnail。
 func (s *Store) markThumbnails(posts []Post) error {
 	if len(posts) == 0 {
@@ -278,28 +256,61 @@ func (s *Store) replaceCreators(creators map[string]Creator) error {
 	return tx.Commit()
 }
 
-// VideoKey 是排序用的最小视频信息。
-type VideoKey struct {
+// Key 是排序用的最小作品信息。
+type Key struct {
 	ID        string
 	Published string
 }
 
-// VideoKeys 返回符合筛选的全部视频（不含图集），按发布日期倒序。多联放映据此构造播放序列。
-func (s *Store) VideoKeys(f Filter) ([]VideoKey, error) {
-	f.Kind = KindVideo
+// Keys 返回符合筛选的全部作品键，按发布日期倒序。跨库分页与多联放映序列据此合并排序。
+func (s *Store) Keys(f Filter) ([]Key, error) {
 	where, args := f.clause()
 	rows, err := s.index.Query("SELECT id, published FROM posts"+where+" ORDER BY published DESC, id DESC", args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var keys []VideoKey
+	var keys []Key
 	for rows.Next() {
-		var k VideoKey
+		var k Key
 		if err := rows.Scan(&k.ID, &k.Published); err != nil {
 			return nil, err
 		}
 		keys = append(keys, k)
 	}
 	return keys, rows.Err()
+}
+
+// PostsByID 按给定顺序返回作品详情（含缩略图标记），不存在的 ID 跳过。
+func (s *Store) PostsByID(ids []string) ([]Post, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := s.index.Query("SELECT "+postColumns+" FROM posts WHERE id IN (?"+strings.Repeat(",?", len(ids)-1)+")", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byID := make(map[string]Post, len(ids))
+	for rows.Next() {
+		p, err := scanPost(rows)
+		if err != nil {
+			return nil, err
+		}
+		byID[p.ID] = p
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	posts := make([]Post, 0, len(ids))
+	for _, id := range ids {
+		if p, ok := byID[id]; ok {
+			posts = append(posts, p)
+		}
+	}
+	return posts, s.markThumbnails(posts)
 }

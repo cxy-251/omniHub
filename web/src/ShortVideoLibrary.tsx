@@ -1,12 +1,13 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { api, request } from './api';
+import { api } from './api';
+import { usePaged } from './paged';
+import VirtualGrid from './VirtualGrid';
 
 const VideoMatrix = lazy(() => import('./VideoMatrix'));
 
 type Creator = { id: string; platform: string; name: string; posts: number };
 type Post = { id: string; creator_id: string; kind: 'video' | 'album'; title: string; published: string; image_count?: number; music?: string; library_id: string; has_thumbnail: boolean };
 
-const PAGE = 60;
 const chip = (on: boolean) => `shrink-0 rounded-full border px-3 py-1 text-sm ${on ? 'border-primary text-primary' : 'border-line text-muted hover:text-foreground'}`;
 const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
 
@@ -20,9 +21,6 @@ export default function ShortVideoLibrary({ active, onAccompany }: { active: boo
   const [creators, setCreators] = useState<Creator[]>([]);
   const [platform, setPlatform] = useState('');
   const [creator, setCreator] = useState('');
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [more, setMore] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [open, setOpen] = useState<number>();
 
@@ -37,24 +35,10 @@ export default function ShortVideoLibrary({ active, onAccompany }: { active: boo
   const platforms = [...new Set(creators.map(c => c.platform))];
   const shownCreators = creators.filter(c => !platform || c.platform === platform);
 
-  function load(offset: number, signal?: AbortSignal) {
-    setLoading(true); setError('');
-    const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
-    if (creator) params.set('creator', creator); else if (platform) params.set('platform', platform);
-    return request(`/api/media/shortvideo/posts?${params}`, { signal }).then(async response => {
-      const page = await response.json() as Post[];
-      setPosts(old => offset === 0 ? page : [...old, ...page]);
-      setMore(response.headers.get('X-Has-More') === 'true');
-    }).catch((e: Error) => { if (!signal?.aborted) setError(e.message); })
-      .finally(() => { if (!signal?.aborted) setLoading(false); });
-  }
-  useEffect(() => {
-    if (!active || mode !== 'browse') return;
-    const controller = new AbortController();
-    void load(0, controller.signal);
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, mode, platform, creator]);
+  const browsing = active && mode === 'browse';
+  const endpoint = creator ? `/api/media/shortvideo/posts?creator=${encodeURIComponent(creator)}`
+    : platform ? `/api/media/shortvideo/posts?platform=${encodeURIComponent(platform)}` : '/api/media/shortvideo/posts';
+  const paged = usePaged<Post>(browsing ? endpoint : '');
 
   return <section className="space-y-4">
     <div className="flex gap-2">
@@ -70,23 +54,24 @@ export default function ShortVideoLibrary({ active, onAccompany }: { active: boo
         <button className={chip(!creator)} onClick={() => setCreator('')}>全部博主</button>
         {shownCreators.map(c => <button key={c.id} className={chip(creator === c.id)} onClick={() => setCreator(c.id)}>{c.name} · {c.posts}</button>)}
       </div>
-      {error ? <p role="alert" className="text-danger">{error}</p> : null}
-      {!loading && !posts.length && !error ? <p className="text-muted">没有作品。资源库需要先由管理员扫描建立索引。</p> : null}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-6">
-        {posts.map((post, index) => <button key={post.library_id + post.id} className="group overflow-hidden rounded-lg border border-line bg-panel text-left hover:border-primary" onClick={() => setOpen(index)}>
-          <div className="relative aspect-[9/16] bg-background">
+      {error || paged.error ? <p role="alert" className="text-danger">{error || paged.error}</p> : null}
+      <p className="text-sm text-muted">{paged.total ? `${paged.total} 个作品` : '没有作品。资源库需要先由管理员扫描建立索引。'}</p>
+      {browsing ? <VirtualGrid total={paged.total} minColumnWidth={170} aspect={16 / 9} extraHeight={56} render={index => {
+        const post = paged.item(index);
+        if (!post) return <div className="h-full rounded-lg border border-line bg-panel" />;
+        return <button className="flex h-full w-full flex-col overflow-hidden rounded-lg border border-line bg-panel text-left hover:border-primary" onClick={() => setOpen(index)}>
+          <div className="relative min-h-0 flex-1 bg-background">
             {post.has_thumbnail
-              ? <img className="h-full w-full object-cover" loading="lazy" src={`/api/media/shortvideo/thumbnail?${query(post)}`} alt="" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
+              ? <img className="h-full w-full object-cover" src={`/api/media/shortvideo/thumbnail?${query(post)}`} alt="" decoding="async" />
               : <span className="flex h-full items-center justify-center text-4xl text-line">{post.kind === 'album' ? '🖼' : '▶'}</span>}
             <span className="absolute right-1 top-1 rounded bg-black/60 px-1.5 text-xs text-white">{post.kind === 'album' ? `图集 ${post.image_count}` : '视频'}</span>
           </div>
-          <div className="p-2"><p className="line-clamp-2 text-sm">{post.title}</p><p className="mt-1 text-xs text-muted">{post.creator_id.split('/')[1]} · {post.published}</p></div>
-        </button>)}
-      </div>
-      {more ? <button className={button} disabled={loading} onClick={() => void load(posts.length)}>{loading ? '加载中…' : '加载更多'}</button> : null}
-      {open !== undefined && posts[open] ? <Viewer post={posts[open]} onClose={() => setOpen(undefined)}
+          <div className="h-14 p-2"><p className="truncate text-sm">{post.title}</p><p className="mt-1 truncate text-xs text-muted">{post.creator_id.split('/')[1]} · {post.published}</p></div>
+        </button>;
+      }} /> : null}
+      {open !== undefined && paged.item(open) ? <Viewer post={paged.item(open)!} onClose={() => setOpen(undefined)}
         onPrev={open > 0 ? () => setOpen(open - 1) : undefined}
-        onNext={open < posts.length - 1 ? () => setOpen(open + 1) : more ? () => { void load(posts.length).then(() => setOpen(open + 1)); } : undefined} /> : null}
+        onNext={open < paged.total - 1 ? () => setOpen(open + 1) : undefined} /> : null}
     </>}
   </section>;
 }

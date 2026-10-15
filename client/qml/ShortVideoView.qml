@@ -11,9 +11,6 @@ Item {
     property var creators: []
     property string platform: ""
     property string creator: ""
-    property var posts: []
-    property bool hasMore: false
-    property bool loading: false
     property string error: ""
     property int openIndex: -1
     property string mode: "browse"   // browse | matrix
@@ -23,12 +20,12 @@ Item {
 
     function getJSON(path, done) {
         var url = backendApi.apiUrl(path)
-        if (!url) { error = "无法连接 omniHub 服务"; return }
+        if (!url) { view.error = "无法连接 omniHub 服务"; return }
         var xhr = new XMLHttpRequest()
         xhr.onreadystatechange = function () {
-            if (xhr.readyState !== XMLHttpRequest.DONE) return
-            if (xhr.status !== 200) { error = "请求失败（" + xhr.status + "）：" + xhr.responseText; loading = false; return }
-            error = ""
+            if (xhr.readyState !== XMLHttpRequest.DONE || !view) return   // 页面已销毁
+            if (xhr.status !== 200) { view.error = "请求失败（" + xhr.status + "）：" + xhr.responseText; return }
+            view.error = ""
             done(JSON.parse(xhr.responseText), xhr)
         }
         xhr.open("GET", url)
@@ -48,23 +45,18 @@ Item {
         var root = libraryRoot(post.library_id)
         return root ? root + "/media_library/shortvideo/" + rel : ""
     }
-    function load(offset) {
-        loading = true
-        var q = "/api/media/shortvideo/posts?limit=" + pageSize + "&offset=" + offset
-        if (creator) q += "&creator=" + encodeURIComponent(creator)
-        else if (platform) q += "&platform=" + encodeURIComponent(platform)
-        getJSON(q, function (page, xhr) {
-            posts = offset === 0 ? page : posts.concat(page)
-            hasMore = xhr.getResponseHeader("X-Has-More") === "true"
-            loading = false
-        })
+    function postsEndpoint() {
+        if (creator) return "/api/media/shortvideo/posts?creator=" + encodeURIComponent(creator)
+        if (platform) return "/api/media/shortvideo/posts?platform=" + encodeURIComponent(platform)
+        return "/api/media/shortvideo/posts"
     }
-    function reload() { posts = []; openIndex = -1; load(0) }
+    function postAt(i) { paged.revision; return paged.item(i) }
+
+    PagedModel { id: paged; endpoint: view.postsEndpoint() }
 
     Component.onCompleted: {
         backendApi.refreshLibraries()
         getJSON("/api/media/shortvideo/creators", function (list) { creators = list })
-        load(0)
     }
 
     component Chip: Button {
@@ -95,7 +87,7 @@ Item {
                 required property string modelData
                 text: modelData || "全部平台"
                 selected: view.platform === modelData
-                onClicked: { view.platform = modelData; view.creator = ""; view.reload() }
+                onClicked: { view.platform = modelData; view.creator = "" }
             }
         }
         ListView {
@@ -109,13 +101,13 @@ Item {
                 required property var modelData
                 text: modelData.posts < 0 ? modelData.name : modelData.name + " · " + modelData.posts
                 selected: view.creator === modelData.id
-                onClicked: { view.creator = modelData.id; view.reload() }
+                onClicked: view.creator = modelData.id
             }
         }
-        Label { text: view.error; visible: text.length > 0; color: "#f85149"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { text: view.error || paged.error; visible: text.length > 0; color: "#f85149"; wrapMode: Text.Wrap; Layout.fillWidth: true }
         Label {
-            text: "没有作品。资源库需要先由管理员扫描建立索引。"
-            visible: !view.loading && view.posts.length === 0 && !view.error
+            text: paged.total > 0 ? paged.total + " 个作品" : "没有作品。资源库需要先由管理员扫描建立索引。"
+            visible: !paged.loading || paged.total > 0
             color: "#8b949e"
         }
 
@@ -127,13 +119,12 @@ Item {
             readonly property int columns: Math.max(2, Math.round(width / 210))
             cellWidth: Math.floor(width / columns)
             cellHeight: cellWidth * 16 / 9 + 56
-            model: view.posts
+            model: paged.total
             cacheBuffer: cellHeight * 2
-            onAtYEndChanged: if (atYEnd && view.hasMore && !view.loading) view.load(view.posts.length)
-            ScrollBar.vertical: ScrollBar {}
+            ScrollBar.vertical: ScrollBar { minimumSize: 0.05 }
             delegate: Item {
-                required property var modelData
                 required property int index
+                readonly property var modelData: { paged.revision; return paged.item(index) || {id: "", kind: "", title: "", published: "", creator_id: "/", has_thumbnail: false} }
                 width: grid.cellWidth
                 height: grid.cellHeight
                 Rectangle {
@@ -170,11 +161,11 @@ Item {
                         Label { width: parent.width; text: modelData.title; elide: Text.ElideRight; color: "#c9d1d9"; font.pixelSize: 13 }
                         Label { width: parent.width; text: modelData.creator_id.split("/")[1] + " · " + modelData.published; elide: Text.ElideRight; color: "#8b949e"; font.pixelSize: 12 }
                     }
-                    TapHandler { id: tap; onTapped: view.openIndex = index }
+                    TapHandler { id: tap; onTapped: if (modelData.id) view.openIndex = index }
                 }
             }
         }
-        BusyIndicator { running: view.loading; visible: running; Layout.alignment: Qt.AlignHCenter }
+        BusyIndicator { running: paged.loading; visible: running; Layout.alignment: Qt.AlignHCenter }
     }
 
     Loader {
@@ -186,29 +177,26 @@ Item {
 
     Loader {
         anchors.fill: parent
-        active: view.openIndex >= 0 && view.openIndex < view.posts.length
-        sourceComponent: Component { Viewer { post: view.posts[view.openIndex] } }
+        active: view.openIndex >= 0 && view.openIndex < paged.total
+        sourceComponent: Component { Viewer { post: view.postAt(view.openIndex) } }
     }
 
     // Viewer：全屏查看一个作品。←/→ 切作品，↑/↓ 翻图，空格暂停，Esc 返回。
     component Viewer: Rectangle {
         id: viewer
-        required property var post
+        required property var post   // 所在页未到达时为 null
         property int page: 1
-        readonly property bool isVideo: post.kind === "video"
+        readonly property bool isVideo: post?.kind === "video"
         color: "black"
         focus: true
         onPostChanged: page = 1
-        function next() {
-            if (view.openIndex < view.posts.length - 1) view.openIndex++
-            else if (view.hasMore && !view.loading) view.load(view.posts.length)
-        }
+        function next() { if (view.openIndex < paged.total - 1) view.openIndex++ }
         function prev() { if (view.openIndex > 0) view.openIndex-- }
         Keys.onPressed: function (event) {
             if (event.key === Qt.Key_Escape || event.key === Qt.Key_Back) view.openIndex = -1
             else if (event.key === Qt.Key_Right) next()
             else if (event.key === Qt.Key_Left) prev()
-            else if (event.key === Qt.Key_Down) page = Math.min(post.image_count, page + 1)
+            else if (event.key === Qt.Key_Down) page = Math.min(post?.image_count ?? 1, page + 1)
             else if (event.key === Qt.Key_Up) page = Math.max(1, page - 1)
             else if (event.key === Qt.Key_Space && isVideo) video.playing ? video.pause() : video.play()
             else return
@@ -227,17 +215,17 @@ Item {
         Image {
             anchors.fill: parent
             anchors.bottomMargin: 96
-            visible: !viewer.isVideo
+            visible: !viewer.isVideo && !!viewer.post
             fillMode: Image.PreserveAspectFit
             asynchronous: true
-            source: viewer.isVideo ? "" : view.apiQuery("/api/media/shortvideo/album/image", viewer.post, "&index=" + viewer.page)
-            TapHandler { onTapped: viewer.page = viewer.page < viewer.post.image_count ? viewer.page + 1 : 1 }
+            source: viewer.post && !viewer.isVideo ? view.apiQuery("/api/media/shortvideo/album/image", viewer.post, "&index=" + viewer.page) : ""
+            TapHandler { onTapped: viewer.page = viewer.page < (viewer.post?.image_count ?? 1) ? viewer.page + 1 : 1 }
             BusyIndicator { anchors.centerIn: parent; running: parent.status === Image.Loading }
         }
         // 图集背景音乐：音频不需要画面，用 1 像素透明播放器播放磁盘上的 mp3。
         MpvItem {
             width: 1; height: 1; opacity: 0
-            source: !viewer.isVideo && viewer.post.music ? view.localFile(viewer.post, viewer.post.music) : ""
+            source: viewer.post && !viewer.isVideo && viewer.post.music ? view.localFile(viewer.post, viewer.post.music) : ""
             onPlaybackEnded: restart()
         }
 
@@ -246,14 +234,14 @@ Item {
             anchors.margins: 12
             Label {
                 Layout.fillWidth: true
-                text: viewer.post.creator_id.split("/")[1] + " · " + viewer.post.published + " · " + viewer.post.title
+                text: viewer.post ? viewer.post.creator_id.split("/")[1] + " · " + viewer.post.published + " · " + viewer.post.title : "加载中…"
                 elide: Text.ElideRight; color: "white"
             }
             RowLayout {
                 Layout.fillWidth: true
                 Button { text: "返回"; onClicked: view.openIndex = -1 }
                 Button { text: "上一个"; enabled: view.openIndex > 0; onClicked: viewer.prev() }
-                Button { text: "下一个"; enabled: view.openIndex < view.posts.length - 1 || view.hasMore; onClicked: viewer.next() }
+                Button { text: "下一个"; enabled: view.openIndex < paged.total - 1; onClicked: viewer.next() }
                 Button { visible: viewer.isVideo; text: video.playing ? "暂停" : "播放"; onClicked: video.playing ? video.pause() : video.play() }
                 Slider {
                     visible: viewer.isVideo
@@ -265,8 +253,8 @@ Item {
                 Label { visible: viewer.isVideo; color: "white"; text: Math.floor(video.position) + " / " + Math.floor(video.duration) + " 秒" }
                 Item { visible: !viewer.isVideo; Layout.fillWidth: true }
                 Button { visible: !viewer.isVideo; text: "上一张"; enabled: viewer.page > 1; onClicked: viewer.page-- }
-                Label { visible: !viewer.isVideo; color: "white"; text: viewer.page + " / " + viewer.post.image_count }
-                Button { visible: !viewer.isVideo; text: "下一张"; enabled: viewer.page < viewer.post.image_count; onClicked: viewer.page++ }
+                Label { visible: !viewer.isVideo; color: "white"; text: viewer.page + " / " + (viewer.post?.image_count ?? 0) }
+                Button { visible: !viewer.isVideo; text: "下一张"; enabled: viewer.page < (viewer.post?.image_count ?? 1); onClicked: viewer.page++ }
             }
             Label { text: video.error; visible: viewer.isVideo && text.length > 0; color: "#f85149" }
         }

@@ -204,29 +204,27 @@ func (m *MetaDB) GetPhoto(photoID string) (*Photo, error) {
 	return &p, nil
 }
 
-// ListPhotos 按分页列出照片（支持软删除过滤、limit与offset分页）。
-func (m *MetaDB) ListPhotos(includeDeleted bool, limit, offset int) ([]*Photo, error) {
-	if limit <= 0 {
-		limit = 48
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	if limit > 101 {
-		return nil, errors.New("photo page exceeds capacity")
-	}
+// PhotoFilter 选择照片；Color 为 -1 表示不限色系。软删除的照片始终排除。
+type PhotoFilter struct {
+	Color int
+}
 
-	query := `
-		SELECT id, filename, size_bytes, mime_type, width, height,
-		       volume, color_family, color_hex, is_favorite, created_at, deleted_at
-		FROM photos
-	`
-	if !includeDeleted {
-		query += " WHERE deleted_at IS NULL"
+func (f PhotoFilter) clause() (string, []any) {
+	if f.Color >= 0 {
+		return " WHERE deleted_at IS NULL AND color_family = ?", []any{f.Color}
 	}
-	query += " ORDER BY created_at DESC, id ASC LIMIT ? OFFSET ?"
+	return " WHERE deleted_at IS NULL", nil
+}
 
-	rows, err := m.db.Query(query, limit, offset)
+// ListPhotos 分页列出照片（按 created_at 倒序，同时间按 id），limit 上限 200。
+func (m *MetaDB) ListPhotos(f PhotoFilter, limit, offset int) ([]*Photo, error) {
+	if limit <= 0 || limit > 200 || offset < 0 {
+		return nil, errors.New("invalid photo page")
+	}
+	where, args := f.clause()
+	rows, err := m.db.Query(`SELECT id, filename, size_bytes, mime_type, width, height,
+		volume, color_family, color_hex, is_favorite, created_at, deleted_at
+		FROM photos`+where+" ORDER BY created_at DESC, id ASC LIMIT ? OFFSET ?", append(args, limit, offset)...)
 	if err != nil {
 		return nil, err
 	}
@@ -238,33 +236,41 @@ func (m *MetaDB) ListPhotos(includeDeleted bool, limit, offset int) ([]*Photo, e
 		var favInt int
 		var createdStr string
 		var deletedStr sql.NullString
-
 		if err := rows.Scan(
 			&p.ID, &p.Filename, &p.SizeBytes, &p.MimeType, &p.Width, &p.Height,
 			&p.Volume, &p.ColorFamily, &p.ColorHex, &favInt, &createdStr, &deletedStr,
 		); err != nil {
 			return nil, err
 		}
-
 		p.IsFavorite = favInt == 1
 		p.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-		if deletedStr.Valid {
-			t, _ := time.Parse(time.RFC3339, deletedStr.String)
-			p.DeletedAt = &t
-		}
 		photos = append(photos, &p)
 	}
-
 	return photos, rows.Err()
 }
 
-// CountPhotos counts the same visible set as ListPhotos without reading image data.
-func (m *MetaDB) CountPhotos(includeDeleted bool) (int, error) {
-	query := "SELECT COUNT(*) FROM photos"
-	if !includeDeleted {
-		query += " WHERE deleted_at IS NULL"
-	}
+// CountPhotos 统计与 ListPhotos 相同筛选下的照片数。
+func (m *MetaDB) CountPhotos(f PhotoFilter) (int, error) {
+	where, args := f.clause()
 	var count int
-	err := m.db.QueryRow(query).Scan(&count)
+	err := m.db.QueryRow("SELECT COUNT(*) FROM photos"+where, args...).Scan(&count)
 	return count, err
+}
+
+// ColorCounts 返回每个色系（0~9）的照片数。
+func (m *MetaDB) ColorCounts() (map[int]int, error) {
+	rows, err := m.db.Query("SELECT color_family, COUNT(*) FROM photos WHERE deleted_at IS NULL AND color_family >= 0 GROUP BY color_family")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := make(map[int]int)
+	for rows.Next() {
+		var color, n int
+		if err := rows.Scan(&color, &n); err != nil {
+			return nil, err
+		}
+		counts[color] = n
+	}
+	return counts, rows.Err()
 }

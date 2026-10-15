@@ -242,6 +242,7 @@ func (r *Router) registerRoutes() {
 
 	// 画廊接口
 	r.mux.HandleFunc("/api/media/gallery/list", r.handleGalleryList)
+	r.mux.HandleFunc("/api/media/gallery/colors", r.handleGalleryColors)
 	r.mux.HandleFunc("/api/media/gallery/thumbnail", r.handleGalleryThumbnail)
 	r.mux.HandleFunc("/api/media/gallery/original", r.handleGalleryOriginal)
 	r.mux.HandleFunc("/api/media/gallery/trash", r.handleGalleryTrash)
@@ -507,6 +508,8 @@ func (r *Router) handleGalleryThumbnail(w http.ResponseWriter, req *http.Request
 	}
 	w.Header().Set("Content-Type", http.DetectContentType(thumb))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// 照片 ID 是内容哈希，内容不变，可长期缓存。
+	w.Header().Set("Cache-Control", "private, max-age=2592000, immutable")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(thumb)
 }
@@ -552,6 +555,7 @@ func (r *Router) handleGalleryOriginal(w http.ResponseWriter, req *http.Request)
 	}
 	w.Header().Set("Content-Type", http.DetectContentType(data))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=2592000, immutable")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
