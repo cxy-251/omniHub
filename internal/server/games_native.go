@@ -40,6 +40,7 @@ func (r *Router) categoryDir(libID, category string) (string, error) {
 
 type gameEntry struct {
 	games.Entry
+	Favorite     bool      `json:"favorite,omitempty"`
 	PlayTimeSec  int64     `json:"play_time_sec,omitempty"`
 	LastPlayedAt time.Time `json:"last_played_at,omitzero"`
 }
@@ -78,8 +79,13 @@ func (r *Router) handleGameList(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 	}
-	// 账号游玩时长（按 100 个一批查询）。
+	// 账号收藏与游玩时长（时长按 100 个一批查询）。
 	if user.ID > 0 && r.userState != nil {
+		if fav, err := r.userState.GameFavorites(req.Context(), user.ID); err == nil {
+			for i := range out {
+				out[i].Favorite = fav[out[i].ID]
+			}
+		}
 		for start := 0; start < len(out); start += 100 {
 			batch := out[start:min(start+100, len(out))]
 			ids := make([]string, len(batch))
@@ -131,6 +137,98 @@ func (r *Router) gameDir(libID, id string) (category, dir string, err error) {
 		return "", "", errors.New("game directory not found")
 	}
 	return category, dir, nil
+}
+
+// handleGameFavorite 收藏或取消收藏：{"id": "分类/目录名", "favorite": true}。
+func (r *Router) handleGameFavorite(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	var input struct {
+		ID       string `json:"id"`
+		Favorite bool   `json:"favorite"`
+	}
+	user := auth.UserFromContext(req.Context())
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil || user.ID <= 0 {
+		http.Error(w, "invalid request or not logged in", 400)
+		return
+	}
+	if err := r.userState.SetGameFavorite(req.Context(), user.ID, input.ID, input.Favorite); err != nil {
+		http.Error(w, "favorite storage unavailable", 503)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"favorite": input.Favorite})
+}
+
+// gameArtStore 返回可写资源库的封面缓存（standalone_games/games.db）；只读库返回 nil。
+func (r *Router) gameArtStore(libID string) *games.ArtStore {
+	lib := r.findLibrary(libID)
+	if lib == nil || lib.ReadOnly || !lib.IsOnline {
+		return nil
+	}
+	r.dbMu.Lock()
+	defer r.dbMu.Unlock()
+	if r.closed {
+		return nil
+	}
+	if s := r.gameArt[lib.RootPath]; s != nil {
+		return s
+	}
+	dir, err := r.libMgr.ResolveCategoryPath(lib.ID+":standalone_games", "standalone_games")
+	if err != nil {
+		return nil
+	}
+	s, err := games.OpenArtStore(dir)
+	if err != nil {
+		return nil
+	}
+	r.gameArt[lib.RootPath] = s
+	return s
+}
+
+// handleGameArt 返回游戏封面：omni.json/图片文件 → Steam 封面缓存 → exe 内嵌图标；结果缓存在 games.db。
+// 没有可用图片时 404（客户端显示生成的卡片）。
+func (r *Router) handleGameArt(w http.ResponseWriter, req *http.Request) {
+	q := req.URL.Query()
+	libID, id := q.Get("library_id"), q.Get("id")
+	category, dir, err := r.gameDir(libID, id)
+	if err != nil {
+		http.NotFound(w, req)
+		return
+	}
+	store := r.gameArtStore(libID)
+	var art games.Art
+	if data, mime, ok := func() ([]byte, string, bool) {
+		if store == nil {
+			return nil, "", false
+		}
+		return store.Cached(id)
+	}(); ok {
+		art = games.Art{MIME: mime, Data: data}
+	} else {
+		entries, _ := games.ScanCategory(filepath.Dir(dir), category, libID)
+		icon := ""
+		for _, e := range entries {
+			if e.ID == id {
+				icon = e.Icon
+			}
+		}
+		art, err = games.FindArt(dir, category, games.ReadMeta(dir), icon, r.gameTools.SteamRoot)
+		if err != nil {
+			art = games.Art{Source: dir, MIME: "", Data: []byte{}} // 记下「没有图」，目录变化前不再重算
+		}
+		if store != nil {
+			_ = store.Put(id, art)
+		}
+	}
+	if len(art.Data) == 0 {
+		http.NotFound(w, req)
+		return
+	}
+	w.Header().Set("Content-Type", art.MIME)
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	_, _ = w.Write(art.Data)
 }
 
 // handleGameIcon 返回游戏图标（omni.json icon 或常见文件名）。

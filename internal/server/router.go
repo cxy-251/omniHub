@@ -65,6 +65,7 @@ type Router struct {
 	closed    bool
 	metaDB    map[string]*gallery.MetaDB
 	svStores  map[string]*shortvideo.Store
+	gameArt   map[string]*games.ArtStore
 	svJobs    *svWorker
 	mangaDB   map[string]*manga.DB
 }
@@ -96,6 +97,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		mux:            http.NewServeMux(),
 		metaDB:         make(map[string]*gallery.MetaDB),
 		svStores:       make(map[string]*shortvideo.Store),
+		gameArt:        make(map[string]*games.ArtStore),
 		svJobs:         newSVWorker(),
 		mangaDB:        make(map[string]*manga.DB),
 		libMgr:         libMgr,
@@ -211,6 +213,9 @@ func (r *Router) Close() error {
 	for _, db := range r.metaDB {
 		errs = append(errs, db.Close())
 	}
+	for _, s := range r.gameArt {
+		errs = append(errs, s.Close())
+	}
 	for _, db := range r.svStores {
 		errs = append(errs, db.Close())
 	}
@@ -293,6 +298,8 @@ func (r *Router) registerRoutes() {
 	// 游戏中心接口（双端过滤）
 	r.mux.HandleFunc("/api/games/list", r.handleGamesList)
 	r.mux.HandleFunc("/api/games/icon", r.handleGameIcon)
+	r.mux.HandleFunc("/api/games/art", r.handleGameArt)
+	r.mux.HandleFunc("/api/games/favorite", r.handleGameFavorite)
 	r.mux.HandleFunc("/api/games/web/open", r.handleWebGameOpen)
 	r.mux.HandleFunc("/game-content/", r.handleWebGameAsset)
 	r.mux.HandleFunc("/api/games/launch", r.handleGameLaunch)

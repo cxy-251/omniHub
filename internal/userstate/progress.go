@@ -45,6 +45,10 @@ func Open(path string) (*DB, error) {
 		play_time_ms INTEGER NOT NULL DEFAULT 0,
 		last_played_at TEXT NOT NULL, PRIMARY KEY(user_id,game_id)
 	);
+	CREATE TABLE IF NOT EXISTS game_favorites (
+		user_id INTEGER NOT NULL, game_id TEXT NOT NULL, created_at TEXT NOT NULL,
+		PRIMARY KEY(user_id, game_id)
+	);
 	CREATE TABLE IF NOT EXISTS native_progress (
 		user_id INTEGER NOT NULL,media_id TEXT NOT NULL,file_version TEXT NOT NULL,
 		position REAL NOT NULL,duration REAL NOT NULL,paused INTEGER NOT NULL,

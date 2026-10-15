@@ -28,6 +28,7 @@ Item {
         if (category === "__recent")
             return gamesList.filter(function (g) { return !!g.last_played_at }).sort(function (a, b) { return a.last_played_at < b.last_played_at ? 1 : -1 })
         if (category === "__all") return gamesList
+        if (category === "__fav") return gamesList.filter(function (g) { return !!g.favorite })
         return gamesList.filter(function (g) { return g.category === category })
     }
 
@@ -68,6 +69,14 @@ Item {
             sessionPoll.start()
         })
     }
+    function toggleFavorite(g) {
+        var on = !g.favorite
+        request("POST", "/api/games/favorite", {id: g.id, favorite: on}, function () {
+            var list = view.gamesList.slice()
+            for (var i = 0; i < list.length; i++) if (list[i].id === g.id) { list[i] = Object.assign({}, list[i], {favorite: on}); if (view.selected && view.selected.id === g.id) view.selected = list[i] }
+            view.gamesList = list
+        })
+    }
     function stop() {
         if (!active) return
         request("POST", "/api/games/stop", {id: active.id}, function () { stopPoll.start() })
@@ -98,6 +107,7 @@ Item {
             Layout.fillWidth: true
             spacing: 4
             Chip { text: "最近游玩"; selected: view.category === "__recent"; onClicked: view.category = "__recent" }
+            Chip { text: "收藏 · " + view.gamesList.filter(function (g) { return !!g.favorite }).length; selected: view.category === "__fav"; onClicked: view.category = "__fav" }
             Chip { text: "全部 · " + view.gamesList.length; selected: view.category === "__all"; onClicked: view.category = "__all" }
             Rectangle { width: 1; height: 20; color: "#30363d" }
             Repeater {
@@ -163,8 +173,14 @@ Item {
                                 fillMode: Image.PreserveAspectFit
                                 asynchronous: true
                                 sourceSize.width: width
-                                source: cell.modelData.icon ? backendApi.apiUrl("/api/games/icon?library_id=" + encodeURIComponent(cell.modelData.library_id) + "&id=" + encodeURIComponent(cell.modelData.id) + "&icon=" + encodeURIComponent(cell.modelData.icon)) : ""
+                                // 封面：图片文件 / Steam 封面缓存 / exe 内嵌图标（服务端缓存在 games.db）；没有时显示名字卡片。
+                                source: backendApi.apiUrl("/api/games/art?library_id=" + encodeURIComponent(cell.modelData.library_id) + "&id=" + encodeURIComponent(cell.modelData.id))
                             }
+                        }
+                        Label {
+                            anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4
+                            visible: !!cell.modelData.favorite
+                            text: "♥"; color: "#f778ba"; font.pixelSize: 16
                         }
                         Column {
                             anchors.top: art.bottom; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 5
@@ -191,6 +207,11 @@ Item {
                     Label { color: "#c9d1d9"; text: view.selected ? "游玩时长：" + view.playTime(view.selected.play_time_sec) : "" }
                     Label { color: "#c9d1d9"; visible: !!(view.selected && view.selected.last_played_at); text: view.selected && view.selected.last_played_at ? "上次游玩：" + new Date(view.selected.last_played_at).toLocaleString(Qt.locale(), "yyyy-MM-dd hh:mm") : "" }
                     Label { Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; color: "#6e7681"; font.pixelSize: 11; text: view.selected ? view.selected.folder : "" }
+                    Chip {
+                        text: view.selected && view.selected.favorite ? "♥ 已收藏" : "♡ 收藏"
+                        selected: !!(view.selected && view.selected.favorite)
+                        onClicked: view.toggleFavorite(view.selected)
+                    }
                     Item { Layout.fillHeight: true }
                     Button {
                         Layout.fillWidth: true
