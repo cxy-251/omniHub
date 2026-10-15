@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 import QtQuick.Dialogs
 import omniHub.Media 1.0
 
@@ -69,26 +70,51 @@ Item {
         nameFilters: ["字幕 (*.srt *.ass *.ssa *.vtt)"]
         onAccepted: mpv.addSubtitle(selectedFile.toString())
     }
+    // 控件浮在视频底部；播放中鼠标 2.5 秒不动自动隐藏，暂停或出错时常显。双击或 F 键切换全屏。
+    property bool controlsShown: true
+    readonly property bool controlsVisible: controlsShown || !mpv.playing || controlsHover.hovered
+    function poke() { controlsShown = true; hideTimer.restart() }
+    function toggleFullScreen() {
+        var w = playerView.Window.window
+        if (!w) return
+        if (w.visibility === Window.FullScreen) w.showNormal(); else w.showFullScreen()
+    }
+    property real volumeBeforeMute: 100
+    Timer { id: hideTimer; interval: 2500; onTriggered: playerView.controlsShown = false }
+    HoverHandler { onPointChanged: playerView.poke() }
+    focus: true
+    Keys.onPressed: function (event) {
+        if (event.key === Qt.Key_Space) { mpv.playing ? mpv.pause() : mpv.play() }
+        else if (event.key === Qt.Key_F) toggleFullScreen()
+        else if (event.key === Qt.Key_Escape && playerView.Window.window && playerView.Window.window.visibility === Window.FullScreen) playerView.Window.window.showNormal()
+        else if (event.key === Qt.Key_Right) mpv.seekRelative(5)
+        else if (event.key === Qt.Key_Left) mpv.seekRelative(-5)
+        else return
+        poke()
+        event.accepted = true
+    }
+
     MpvItem {
-        id: mpv; anchors.fill: parent; anchors.bottomMargin: controls.height
+        id: mpv; anchors.fill: parent
         onPlaybackEnded: { if (queue.next()) playerView.loadCurrent(); else mpv.pause() }
     }
     Label {
         anchors.centerIn: parent
         width: parent.width * 0.8
-        text: playlistError || queue.error || mpv.error || (typeof nativeResume !== "undefined" ? nativeResume.error : "") || (mpv.source.length === 0 ? "点击“打开文件”选择音视频，可多选" : "")
+        text: playlistError || queue.error || mpv.error || (typeof nativeResume !== "undefined" ? nativeResume.error : "") || (mpv.source.length === 0 ? "从文件管理器「打开方式 → omniHub」，或点下方文件夹按钮选择音视频" : "")
         textFormat: Text.PlainText
-        color: playlistError || queue.error || mpv.error ? "#f85149" : "#c9d1d9"
+        color: playlistError || queue.error || mpv.error ? "#f85149" : "#8b949e"
         wrapMode: Text.Wrap
         horizontalAlignment: Text.AlignHCenter
         visible: text.length > 0
     }
     TouchControls {
         anchors.fill: parent
-        anchors.bottomMargin: controls.height
+        anchors.bottomMargin: playerView.controlsVisible ? controls.height : 0
         playerItem: mpv
         onShowOsd: function(txt) { osdText.text = txt; osdBox.visible = true; osdTimer.restart() }
     }
+    TapHandler { acceptedButtons: Qt.LeftButton; onDoubleTapped: playerView.toggleFullScreen() }
     Rectangle {
         id: osdBox
         visible: false
@@ -97,38 +123,63 @@ Item {
         Label { id: osdText; anchors.centerIn: parent; color: "#ffffff"; textFormat: Text.PlainText }
         Timer { id: osdTimer; interval: 1200; onTriggered: osdBox.visible = false }
     }
-    Rectangle {
+    Item {
         id: controls
         anchors.bottom: parent.bottom
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 108
-        color: "#ee161b22"
+        height: 84
+        opacity: playerView.controlsVisible ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 180 } }
+        HoverHandler { id: controlsHover }
+        Rectangle {
+            anchors.fill: parent
+            gradient: Gradient {
+                GradientStop { position: 0; color: "#00000000" }
+                GradientStop { position: 0.45; color: "#99000000" }
+                GradientStop { position: 1; color: "#dd000000" }
+            }
+        }
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 8
-            spacing: 4
-            RowLayout {
+            anchors.leftMargin: 12; anchors.rightMargin: 12; anchors.bottomMargin: 6; anchors.topMargin: 18
+            spacing: 0
+            SeekBar {
                 Layout.fillWidth: true
-                Button { text: mpv.playing ? "暂停" : "播放"; enabled: mpv.source.length > 0; onClicked: mpv.playing ? mpv.pause() : mpv.play() }
-                Button { text: "上一项"; enabled: queue.currentIndex > 0; onClicked: playerView.previousMedia() }
-                Button { text: "下一项"; enabled: queue.currentIndex >= 0 && queue.currentIndex + 1 < queue.entries.length; onClicked: playerView.nextMedia() }
-                Slider { Layout.fillWidth: true; from: 0; to: Math.max(1, mpv.duration); value: mpv.position; enabled: mpv.duration > 0; onMoved: mpv.position = value }
-                Label { text: playerView.timeLabel(mpv.position) + " / " + playerView.timeLabel(mpv.duration); color: "#e6edf3" }
+                from: 0; to: Math.max(1, mpv.duration); value: mpv.position
+                enabled: mpv.duration > 0
+                onMoved: { mpv.position = value; playerView.poke() }
             }
             RowLayout {
                 Layout.fillWidth: true
-                Button { text: "打开文件"; onClicked: mediaDialog.open() }
-                Button { text: "列表 " + (queue.currentIndex + 1) + "/" + queue.entries.length; enabled: queue.entries.length > 0; onClicked: playlistDialog.open() }
-                Button { text: "音轨 / 字幕"; enabled: mpv.duration > 0 || mpv.playing; onClicked: tracksDialog.open() }
-                Label { text: "音量"; color: "#e6edf3" }
-                Slider { Layout.fillWidth: true; Layout.maximumWidth: 180; from: 0; to: 100; value: mpv.volume; onMoved: mpv.volume = value }
-                ComboBox {
-                    Layout.preferredWidth: 100
-                    model: [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
-                    currentIndex: model.indexOf(mpv.playbackRate)
-                    displayText: mpv.playbackRate + "×"
-                    onActivated: function(index) { mpv.playbackRate = model[index] }
+                spacing: 2
+                IconButton { glyph: "prev"; enabled: queue.currentIndex > 0; onClicked: playerView.previousMedia(); ToolTip.text: "上一项" }
+                IconButton { glyph: mpv.playing ? "pause" : "play"; size: 42; enabled: mpv.source.length > 0; onClicked: mpv.playing ? mpv.pause() : mpv.play() }
+                IconButton { glyph: "next"; enabled: queue.currentIndex >= 0 && queue.currentIndex + 1 < queue.entries.length; onClicked: playerView.nextMedia(); ToolTip.text: "下一项" }
+                Label { text: playerView.timeLabel(mpv.position) + " / " + playerView.timeLabel(mpv.duration); color: "#e6edf3"; font.pixelSize: 13; Layout.leftMargin: 8 }
+                Item { Layout.fillWidth: true }
+                IconButton {
+                    glyph: mpv.volume === 0 ? "mute" : "volume"; ToolTip.text: "静音"
+                    onClicked: { if (mpv.volume > 0) { playerView.volumeBeforeMute = mpv.volume; mpv.volume = 0 } else mpv.volume = playerView.volumeBeforeMute }
+                }
+                SeekBar { Layout.preferredWidth: 90; from: 0; to: 100; value: mpv.volume; onMoved: mpv.volume = value }
+                AbstractButton {
+                    id: rateButton
+                    readonly property var rates: [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
+                    implicitWidth: 44; implicitHeight: 36
+                    hoverEnabled: true
+                    contentItem: Label { text: mpv.playbackRate + "×"; color: "#e6edf3"; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { radius: 6; color: rateButton.hovered ? "#26ffffff" : "transparent" }
+                    ToolTip.visible: hovered; ToolTip.text: "倍速（点击切换）"
+                    onClicked: { var i = rates.indexOf(mpv.playbackRate); mpv.playbackRate = rates[(i + 1) % rates.length] }
+                }
+                IconButton { glyph: "subtitles"; enabled: mpv.duration > 0 || mpv.playing; onClicked: tracksDialog.open(); ToolTip.text: "音轨与字幕" }
+                IconButton { glyph: "list"; enabled: queue.entries.length > 0; onClicked: playlistDialog.open(); ToolTip.text: "播放列表 " + (queue.currentIndex + 1) + "/" + queue.entries.length }
+                IconButton { glyph: "folder"; onClicked: mediaDialog.open(); ToolTip.text: "打开文件" }
+                IconButton {
+                    glyph: playerView.Window.window && playerView.Window.window.visibility === Window.FullScreen ? "fullscreen_exit" : "fullscreen"
+                    onClicked: playerView.toggleFullScreen(); ToolTip.text: "全屏（F）"
                 }
             }
         }

@@ -55,6 +55,12 @@ Item {
     function postAt(i) { paged.revision; return paged.item(i) }
 
     // 多联放映时清空浏览数据源，网格格子与缩略图随之释放。
+    // 开发验证：devScroll < 0 时打开作品，每 -devScroll 毫秒切到下一个。
+    Timer {
+        interval: typeof devScroll !== "undefined" && devScroll < 0 ? -devScroll : 1000; repeat: true; triggeredOnStart: true
+        running: typeof devScroll !== "undefined" && devScroll < 0 && paged.total > 0
+        onTriggered: view.openIndex = (view.openIndex + 1) % paged.total
+    }
     PagedModel { id: paged; endpoint: view.mode === "browse" ? view.postsEndpoint() : "" }
 
     Component.onCompleted: {
@@ -203,7 +209,7 @@ Item {
         MpvItem {
             id: video
             anchors.fill: parent
-            anchors.bottomMargin: 96
+            anchors.bottomMargin: 0
             visible: viewer.isVideo
             source: viewer.isVideo ? view.localFile(viewer.post, viewer.post.id) : ""
             onPlaybackEnded: viewer.next()
@@ -211,7 +217,7 @@ Item {
         }
         Image {
             anchors.fill: parent
-            anchors.bottomMargin: 96
+            anchors.bottomMargin: 0
             visible: !viewer.isVideo && !!viewer.post
             fillMode: Image.PreserveAspectFit
             asynchronous: true
@@ -226,34 +232,51 @@ Item {
             onPlaybackEnded: restart()
         }
 
-        ColumnLayout {
+        // 底部渐变控件条（与外部播放器同一套控件）
+        Item {
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-            anchors.margins: 12
-            Label {
-                Layout.fillWidth: true
-                text: viewer.post ? viewer.post.creator_id.split("/")[1] + " · " + viewer.post.published + " · " + viewer.post.title : "加载中…"
-                elide: Text.ElideRight; color: "white"
+            height: 92
+            Rectangle {
+                anchors.fill: parent
+                gradient: Gradient {
+                    GradientStop { position: 0; color: "#00000000" }
+                    GradientStop { position: 1; color: "#dd000000" }
+                }
             }
-            RowLayout {
-                Layout.fillWidth: true
-                Button { text: "返回"; onClicked: view.openIndex = -1 }
-                Button { text: "上一个"; enabled: view.openIndex > 0; onClicked: viewer.prev() }
-                Button { text: "下一个"; enabled: view.openIndex < paged.total - 1; onClicked: viewer.next() }
-                Button { visible: viewer.isVideo; text: video.playing ? "暂停" : "播放"; onClicked: video.playing ? video.pause() : video.play() }
-                Slider {
-                    visible: viewer.isVideo
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 12; anchors.rightMargin: 12; anchors.bottomMargin: 6; anchors.topMargin: 10
+                spacing: 0
+                Label {
                     Layout.fillWidth: true
-                    from: 0; to: Math.max(1, video.duration)
-                    value: video.position
+                    text: viewer.post ? viewer.post.creator_id.split("/")[1] + " · " + viewer.post.published + " · " + viewer.post.title : "加载中…"
+                    elide: Text.ElideRight; color: "white"; font.pixelSize: 13
+                }
+                SeekBar {
+                    Layout.fillWidth: true
+                    visible: viewer.isVideo
+                    from: 0; to: Math.max(1, video.duration); value: video.position
                     onMoved: video.position = value
                 }
-                Label { visible: viewer.isVideo; color: "white"; text: Math.floor(video.position) + " / " + Math.floor(video.duration) + " 秒" }
-                Item { visible: !viewer.isVideo; Layout.fillWidth: true }
-                Button { visible: !viewer.isVideo; text: "上一张"; enabled: viewer.page > 1; onClicked: viewer.page-- }
-                Label { visible: !viewer.isVideo; color: "white"; text: viewer.page + " / " + (viewer.post?.image_count ?? 0) }
-                Button { visible: !viewer.isVideo; text: "下一张"; enabled: viewer.page < (viewer.post?.image_count ?? 1); onClicked: viewer.page++ }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    IconButton { glyph: "back"; onClicked: view.openIndex = -1; ToolTip.text: "返回（Esc）" }
+                    IconButton { glyph: "prev"; enabled: view.openIndex > 0; onClicked: viewer.prev(); ToolTip.text: "上一个（←）" }
+                    IconButton { visible: viewer.isVideo; glyph: video.playing ? "pause" : "play"; size: 42; onClicked: video.playing ? video.pause() : video.play() }
+                    IconButton { glyph: "next"; enabled: view.openIndex < paged.total - 1; onClicked: viewer.next(); ToolTip.text: "下一个（→）" }
+                    Label {
+                        visible: viewer.isVideo; color: "#e6edf3"; font.pixelSize: 13; Layout.leftMargin: 8
+                        text: Math.floor(video.position / 60) + ":" + ("0" + Math.floor(video.position % 60)).slice(-2) + " / " + Math.floor(video.duration / 60) + ":" + ("0" + Math.floor(video.duration % 60)).slice(-2)
+                    }
+                    Item { Layout.fillWidth: true }
+                    Label { text: video.error; visible: viewer.isVideo && text.length > 0; color: "#f85149" }
+                    IconButton { visible: !viewer.isVideo; glyph: "chevron_left"; enabled: viewer.page > 1; onClicked: viewer.page--; ToolTip.text: "上一张（↑）" }
+                    Label { visible: !viewer.isVideo; color: "white"; font.pixelSize: 13; text: viewer.page + " / " + (viewer.post?.image_count ?? 0) }
+                    IconButton { visible: !viewer.isVideo; glyph: "chevron_right"; enabled: viewer.page < (viewer.post?.image_count ?? 1); onClicked: viewer.page++; ToolTip.text: "下一张（↓）" }
+                    IconButton { visible: !viewer.isVideo && !!viewer.post?.music; glyph: "music"; ToolTip.text: "背景音乐播放中" }
+                }
             }
-            Label { text: video.error; visible: viewer.isVideo && text.length > 0; color: "#f85149" }
         }
     }
 }
