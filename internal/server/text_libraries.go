@@ -44,6 +44,11 @@ func (r *Router) listTextLibraries(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	items := make([]textItem, 0, limit+1)
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", 503)
+		return
+	}
 	libraries, ok := r.queryLibraries(w, req)
 	if !ok {
 		return
@@ -78,6 +83,9 @@ func (r *Router) listTextLibraries(w http.ResponseWriter, req *http.Request) {
 			offset = 0
 			for _, path := range paths {
 				logical := lib.ID + ":" + category + "/" + filepath.ToSlash(path)
+				if !access.allows(logical) {
+					continue
+				}
 				physical, err := r.libMgr.ResolveCategoryPath(logical, category)
 				if err != nil {
 					http.Error(w, "text resource boundary changed", 503)

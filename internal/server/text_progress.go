@@ -27,9 +27,8 @@ func (r *Router) handleTextProgress(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	logical, physical, err := r.canonicalText(position.DocumentID)
-	if err != nil {
-		http.Error(w, "document unavailable", 404)
+	logical, physical, ok := r.canonicalTextFor(w, req, position.DocumentID)
+	if !ok {
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(physical))

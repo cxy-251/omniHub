@@ -306,6 +306,7 @@ func (r *Router) registerRoutes() {
 
 	// 权限管理 Admin 接口
 	r.mux.HandleFunc("/api/admin/permissions", r.handleAdminPermissions)
+	r.mux.HandleFunc("/api/admin/subsections", r.handleAdminSubsections)
 	r.mux.HandleFunc("/api/admin/users", r.handleAdminUsers)
 	r.mux.HandleFunc("/api/admin/users/create", r.handleAccountChange)
 	r.mux.HandleFunc("/api/admin/users/status", r.handleAccountChange)
@@ -586,6 +587,9 @@ func (r *Router) handleTextList(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleTextChunk(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
+	if !r.allowPath(w, req, relPath) {
+		return
+	}
 	startLine, limit := 1, 100
 	byteOffset := int64(-1)
 	var err error
@@ -640,6 +644,9 @@ func (r *Router) handleAudioAlbums(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleAudioAlbum(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
+	if !r.allowPath(w, req, relPath) {
+		return
+	}
 	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/audio")
 	if err != nil {
 		http.Error(w, "directory not found", http.StatusNotFound)
@@ -673,6 +680,9 @@ func (r *Router) handleAudioAlbum(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleAudioStream(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
+	if !r.allowPath(w, req, relPath) {
+		return
+	}
 	fullPath, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/audio")
 	if err != nil {
 		http.Error(w, "file not found", http.StatusNotFound)
@@ -711,6 +721,9 @@ func (r *Router) handleAudioProgress(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "bad request", 400)
 			return
 		}
+	}
+	if !r.allowPath(w, req, p.AudioID) {
+		return
 	}
 	physical, err := r.libMgr.ResolveCategoryPath(p.AudioID, "media_library/audio")
 	if err != nil || len(p.AudioID) > 4096 || !audio.SupportedExtensions[strings.ToLower(filepath.Ext(physical))] {

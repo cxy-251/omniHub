@@ -22,6 +22,9 @@ func (r *Router) readAudioMetadata(req *http.Request, picture bool) (metadata au
 }
 
 func (r *Router) handleAudioMetadata(w http.ResponseWriter, req *http.Request) {
+	if !r.allowPath(w, req, req.URL.Query().Get("path")) {
+		return
+	}
 	metadata, err := r.readAudioMetadata(req, false)
 	if err != nil {
 		status := 422

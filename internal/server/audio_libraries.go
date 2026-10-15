@@ -21,6 +21,11 @@ func (r *Router) listAudioLibraries(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", 503)
+		return
+	}
 	albums := make([]*audio.Album, 0, limit+1)
 	for _, lib := range libraries {
 		root, err := r.libMgr.ResolveCategoryPath(lib.ID+":media_library/audio", "media_library/audio")
@@ -46,6 +51,9 @@ func (r *Router) listAudioLibraries(w http.ResponseWriter, req *http.Request) {
 		offset = 0
 		for _, dir := range dirs {
 			logical := lib.ID + ":" + filepath.ToSlash(filepath.Join("media_library/audio", dir.Path))
+			if !access.allows(logical) {
+				continue
+			}
 			albums = append(albums, &audio.Album{ID: logical, Title: filepath.Base(filepath.Join(root, dir.Path)), TrackCount: dir.Count, Tracks: []*audio.Track{}, LibraryID: lib.ID, LibraryName: lib.Name})
 		}
 		if len(albums) > limit {
@@ -61,6 +69,9 @@ func (r *Router) listAudioLibraries(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) handleAudioCover(w http.ResponseWriter, req *http.Request) {
+	if !r.allowPath(w, req, req.URL.Query().Get("path")) {
+		return
+	}
 	path, err := r.libMgr.ResolveCategoryPath(req.URL.Query().Get("path"), "media_library/audio")
 	if err != nil {
 		http.Error(w, "cover not found", 404)

@@ -45,6 +45,11 @@ func (r *Router) allNovels(w http.ResponseWriter, req *http.Request) ([]novel, b
 	if r.libMgr.IsCategoryDisabled(novelCategory) {
 		return nil, true
 	}
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
+		return nil, false
+	}
 	var all []novel
 	for _, lib := range libs {
 		root, err := r.libMgr.ResolveCategoryPath(lib.ID+":"+novelCategory, novelCategory)
@@ -65,6 +70,9 @@ func (r *Router) allNovels(w http.ResponseWriter, req *http.Request) ([]novel, b
 				continue
 			}
 			ext := path.Ext(p)
+			if !access.allows(lib.ID + ":" + novelCategory + "/" + p) {
+				continue // 等级不足的子分类（如 nsfw）不出现在书架上
+			}
 			all = append(all, novel{
 				ID: lib.ID + ":" + novelCategory + "/" + p, Title: strings.TrimSuffix(path.Base(p), ext),
 				Category: novelCategoryOf(p), Format: strings.TrimPrefix(strings.ToLower(ext), "."), LibraryID: lib.ID,
@@ -126,8 +134,11 @@ func (r *Router) handleNovels(w http.ResponseWriter, req *http.Request) {
 
 // handleEpubCover 返回 EPUB 封面图片；没有封面时 404，客户端改用生成式书封。
 func (r *Router) handleEpubCover(w http.ResponseWriter, req *http.Request) {
-	_, physical, err := r.canonicalText(req.URL.Query().Get("path"))
-	if err != nil || !strings.EqualFold(path.Ext(physical), ".epub") {
+	_, physical, ok := r.canonicalTextFor(w, req, req.URL.Query().Get("path"))
+	if !ok {
+		return
+	}
+	if !strings.EqualFold(path.Ext(physical), ".epub") {
 		http.NotFound(w, req)
 		return
 	}
@@ -164,8 +175,16 @@ func (r *Router) handleRecentText(w http.ResponseWriter, req *http.Request) {
 		ChapterIndex int     `json:"chapter_index"`
 		ScrollRatio  float64 `json:"scroll_ratio"`
 	}
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	out := []recent{}
 	for _, p := range list {
+		if !access.allows(p.DocumentID) {
+			continue
+		}
 		if _, physical, err := r.canonicalText(p.DocumentID); err != nil {
 			continue // 所在库离线或文件已移走
 		} else if _, err := os.Stat(physical); err != nil {

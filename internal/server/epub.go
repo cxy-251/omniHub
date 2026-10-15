@@ -25,9 +25,8 @@ func (r *Router) handleTextEpub(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	logical, _, err := r.canonicalText(req.URL.Query().Get("path"))
-	if err != nil {
-		http.Error(w, "document unavailable", 404)
+	logical, _, ok := r.canonicalTextFor(w, req, req.URL.Query().Get("path"))
+	if !ok {
 		return
 	}
 	entry := req.URL.Query().Get("entry")
@@ -37,6 +36,19 @@ func (r *Router) handleTextEpub(w http.ResponseWriter, req *http.Request) {
 	}
 	location := (&url.URL{Path: epubAssetBase(logical) + entry}).String()
 	http.Redirect(w, req, location, http.StatusTemporaryRedirect)
+}
+
+// canonicalTextFor 规范化文档 ID 并校验子分类等级；失败时已写好响应。
+func (r *Router) canonicalTextFor(w http.ResponseWriter, req *http.Request, id string) (string, string, bool) {
+	logical, physical, err := r.canonicalText(id)
+	if err != nil {
+		http.Error(w, "document unavailable", 404)
+		return "", "", false
+	}
+	if !r.allowPath(w, req, logical) {
+		return "", "", false
+	}
+	return logical, physical, true
 }
 
 func (r *Router) canonicalText(id string) (string, string, error) {
@@ -68,9 +80,8 @@ func (r *Router) canonicalText(id string) (string, string, error) {
 }
 
 func (r *Router) handleEpubBook(w http.ResponseWriter, req *http.Request) {
-	logical, physical, err := r.canonicalText(req.URL.Query().Get("path"))
-	if err != nil {
-		http.Error(w, "document unavailable", 404)
+	logical, physical, ok := r.canonicalTextFor(w, req, req.URL.Query().Get("path"))
+	if !ok {
 		return
 	}
 	book, err := text.InspectEpub(req.Context(), physical)
@@ -100,9 +111,8 @@ func (r *Router) handleEpubContent(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "invalid document identity", 400)
 		return
 	}
-	_, physical, err := r.canonicalText(string(logical))
-	if err != nil {
-		http.Error(w, "document unavailable", 404)
+	_, physical, ok := r.canonicalTextFor(w, req, string(logical))
+	if !ok {
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(entry))
