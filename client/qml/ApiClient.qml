@@ -1,6 +1,6 @@
 import QtQuick
 
-// 短视频接口的请求助手：短视频页与多联放映（含独立窗口）共用。
+// 本机服务的请求助手（短视频、多联放映、音声等共用），以及资源库逻辑路径到本机文件的换算。
 QtObject {
     id: api
     property string error: ""
@@ -29,9 +29,16 @@ QtObject {
         for (var i = 0; i < libs.length; i++) if (libs[i].id === id) return libs[i].root_path
         return ""
     }
-    // 磁盘文件的绝对路径：资源库根目录 + 分类目录 + 作品相对路径。
+    // 短视频磁盘文件的绝对路径：资源库根目录 + 分类目录 + 作品相对路径。
     function localFile(post, rel) {
         var root = libraryRoot(post.library_id)
         return root ? root + "/media_library/shortvideo/" + rel : ""
+    }
+    // 逻辑路径「库ID:库内相对路径」→ 本机绝对路径；库不在线时返回空。
+    function localPath(logical) {
+        var colon = logical.indexOf(":")
+        if (colon <= 0) return ""
+        var root = libraryRoot(logical.slice(0, colon))
+        return root ? root + "/" + logical.slice(colon + 1) : ""
     }
 }

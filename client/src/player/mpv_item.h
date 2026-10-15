@@ -24,6 +24,8 @@ class MpvItem : public QQuickFramebufferObject
     Q_PROPERTY(double subtitleDelay READ subtitleDelay WRITE setSubtitleDelay NOTIFY subtitleDelayChanged)
     Q_PROPERTY(double videoBrightness READ videoBrightness WRITE setVideoBrightness NOTIFY videoBrightnessChanged)
     Q_PROPERTY(bool mediaLoaded READ mediaLoaded NOTIFY mediaLoadedChanged)
+    // 纯音频：不解码画面（含封面图轨），不等渲染环境就能加载，窗口隐藏/最小化时照常播放。
+    Q_PROPERTY(bool audioOnly READ audioOnly WRITE setAudioOnly NOTIFY audioOnlyChanged)
 
 public:
     // Creates GUI state; media loading waits for a render-thread GL context.
@@ -67,6 +69,8 @@ public:
     // Bounded observed title/artist/album tags; empty until the file has loaded.
     QVariantMap mediaMetadata() const { return m_mediaMetadata; }
     bool mediaLoaded() const { return m_loaded; }
+    bool audioOnly() const { return m_audioOnly; }
+    void setAudioOnly(bool on);
     // Subtitle timing adjustment in seconds; finite values within +/-60 accepted.
     double subtitleDelay() const { return m_subtitleDelay; }
     void setSubtitleDelay(double seconds);
@@ -113,6 +117,7 @@ signals:
     void playbackEnded();
     void mediaMetadataChanged();
     void mediaLoadedChanged();
+    void audioOnlyChanged();
     // Actual position after an asynchronous seek has resumed rendering.
     void seekCompleted(double position);
     void seekRequested();
@@ -154,6 +159,7 @@ private:
     QVariantMap m_mediaMetadata;
     bool m_loading = false;
     bool m_seekPending = false;
+    bool m_audioOnly = false;
 
     friend class MpvRenderer;
     friend class MpvCore;

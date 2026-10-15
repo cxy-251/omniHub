@@ -237,9 +237,19 @@ void MpvItem::rendererReady(bool egl)
     loadSource();
 }
 
+void MpvItem::setAudioOnly(bool on)
+{
+    if (m_audioOnly == on) return;
+    m_audioOnly = on;
+    if (m_core) mpv_set_property_string(m_core->handle, "vid", on ? "no" : "auto");
+    emit audioOnlyChanged();
+    loadSource();
+}
+
 void MpvItem::rendererUnavailable()
 {
     m_rendererReady = false;
+    if (m_audioOnly) return;   // 纯音频不依赖渲染环境
     m_restorePosition = m_position;
     if (!m_core) return;
     int paused = 1;
@@ -305,7 +315,7 @@ void MpvItem::onMpvEvents()
             // Losing the scene graph deliberately disables libmpv's VO. The
             // next renderer reloads the saved position instead of surfacing
             // that expected teardown as a corrupt-media error.
-            if (end->reason == MPV_END_FILE_REASON_ERROR && m_core->renderAvailable.load())
+            if (end->reason == MPV_END_FILE_REASON_ERROR && (m_core->renderAvailable.load() || m_audioOnly))
                 { m_loading = false; m_loaded = false; emit mediaLoadedChanged(); setError(QString::fromUtf8(mpv_error_string(end->error))); }
         }
     }
@@ -314,7 +324,7 @@ void MpvItem::onMpvEvents()
 
 void MpvItem::loadSource()
 {
-    if (!m_rendererReady || !m_core || m_source.isEmpty()) return;
+    if ((!m_rendererReady && !m_audioOnly) || !m_core || m_source.isEmpty() || m_loading) return;
     m_loaded = false;
     m_loading = true;
     m_seekPending = false;

@@ -42,6 +42,11 @@ void MprisService::bind(QObject *view) {
 }
 void MprisService::refreshArtwork() {
     m_artwork.clear();
+    // 视图可以直接给出封面（如音声页的专辑封面文件）。
+    if (m_view) {
+        const QString art = m_view->property("artUrl").toString();
+        if (!art.isEmpty()) { m_artwork = art; return; }
+    }
     if (!m_player || m_player->source().isEmpty()) return;
     const QUrl uri(m_player->source());
     if (!uri.scheme().isEmpty() && !uri.isLocalFile()) return;
@@ -86,8 +91,9 @@ double MprisPlayer::volume() const { auto *p=m_service->player(); return p?p->vo
 qlonglong MprisPlayer::position() const { auto *p=m_service->player(); return p?static_cast<qlonglong>(qBound(0.0,p->position(),31536000.0)*1000000):0; }
 bool MprisPlayer::canPlay() const { return m_service->player()&&!m_service->player()->source().isEmpty(); }
 bool MprisPlayer::canSeek() const { return canPlay()&&m_service->player()->mediaLoaded()&&m_service->player()->duration()>0; }
-bool MprisPlayer::canNext() const { auto *q=m_service->queue(); return q&&q->currentIndex()>=0&&q->currentIndex()+1<q->entries().size(); }
-bool MprisPlayer::canPrevious() const { auto *q=m_service->queue(); return q&&q->currentIndex()>0; }
+// 没有 MediaQueue 的视图（音声播放器按序号向服务取分集）用 hasNext/hasPrevious 属性回答。
+bool MprisPlayer::canNext() const { auto *q=m_service->queue(); if (!q) { auto *v=m_service->view(); return v&&m_service->player()&&v->property("hasNext").toBool(); } return q->currentIndex()>=0&&q->currentIndex()+1<q->entries().size(); }
+bool MprisPlayer::canPrevious() const { auto *q=m_service->queue(); if (!q) { auto *v=m_service->view(); return v&&m_service->player()&&v->property("hasPrevious").toBool(); } return q->currentIndex()>0; }
 void MprisPlayer::setRate(double value) { if (!std::isfinite(value)) return; if (value==0) Pause(); else if (value>=minimumRate()&&value<=maximumRate()) if (auto *p=m_service->player()) p->setPlaybackRate(value); }
 void MprisPlayer::setVolume(double value) { if (std::isfinite(value)) if (auto *p=m_service->player()) p->setVolume(qBound(0.0,value,1.0)*100); }
 void MprisPlayer::Play() { if (canPlay()) m_service->player()->play(); }

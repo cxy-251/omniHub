@@ -289,6 +289,8 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/audio/cover", r.handleAudioCover)
 	r.mux.HandleFunc("/api/media/audio/metadata", r.handleAudioMetadata)
 	r.mux.HandleFunc("/api/media/audio/progress", r.handleAudioProgress)
+	r.mux.HandleFunc("/api/media/audio/tracks", r.handleAudioTracks)
+	r.mux.HandleFunc("/api/media/audio/recent", r.handleAudioRecent)
 
 	// 漫画业务接口
 	r.mux.HandleFunc("/api/media/manga/list", r.handleMangaList)
@@ -727,8 +729,9 @@ func (r *Router) handleAudioProgress(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var p struct {
-		AudioID string  `json:"audio_id"`
-		Offset  float64 `json:"offset"`
+		AudioID  string  `json:"audio_id"`
+		Offset   float64 `json:"offset"`
+		Duration float64 `json:"duration"`
 	}
 	p.AudioID = req.URL.Query().Get("audio_id")
 	if req.Method == http.MethodPost {
@@ -767,7 +770,7 @@ func (r *Router) handleAudioProgress(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "login required to save progress", 403)
 		return
 	}
-	if err := r.progressDB.SaveProgress(user.ID, p.AudioID, p.Offset); err != nil {
+	if err := r.progressDB.SaveProgress(user.ID, p.AudioID, p.Offset, p.Duration); err != nil {
 		if errors.Is(err, audio.ErrInvalidProgress) {
 			http.Error(w, "invalid progress", 400)
 		} else {

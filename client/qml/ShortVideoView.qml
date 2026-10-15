@@ -23,7 +23,7 @@ Item {
     readonly property var platforms: creators.map(function (c) { return c.platform }).filter(function (p, i, a) { return a.indexOf(p) === i })
     readonly property var shownCreators: creators.filter(function (c) { return !platform || c.platform === platform })
 
-    ShortVideoApi { id: api; onErrorChanged: view.error = error }
+    ApiClient { id: api; onErrorChanged: view.error = error }
     function getJSON(path, done) { api.getJSON(path, done) }
     function apiQuery(path, post, extra) {
         var q = "library_id=" + encodeURIComponent(post.library_id) + "&id=" + encodeURIComponent(post.id)

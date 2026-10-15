@@ -150,6 +150,18 @@ func OpenProgressDB(dbPath string) (*ProgressDB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// 后加的时长列：列表据此显示进度条与「已听完」。
+	var hasDuration int
+	if err := db.QueryRow("SELECT count(*) FROM pragma_table_info('audio_progress') WHERE name='duration_sec'").Scan(&hasDuration); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if hasDuration == 0 {
+		if _, err := db.Exec("ALTER TABLE audio_progress ADD COLUMN duration_sec REAL NOT NULL DEFAULT 0"); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
 	return &ProgressDB{db: db}, nil
 }
 
@@ -158,21 +170,84 @@ func (p *ProgressDB) Close() error {
 	return p.db.Close()
 }
 
-// SaveProgress 记录指定用户的音轨断点时间戳。
-func (p *ProgressDB) SaveProgress(userID int64, audioID string, offsetSec float64) error {
-	if userID <= 0 || audioID == "" || len(audioID) > 4096 || offsetSec < 0 || offsetSec > 31536000 || math.IsNaN(offsetSec) || math.IsInf(offsetSec, 0) {
+func validSeconds(v float64) bool {
+	return v >= 0 && v <= 31536000 && !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
+// SaveProgress 记录指定用户的音轨断点与时长（时长未知时传 0，保留已有值）。
+func (p *ProgressDB) SaveProgress(userID int64, audioID string, offsetSec, durationSec float64) error {
+	if userID <= 0 || audioID == "" || len(audioID) > 4096 || !validSeconds(offsetSec) || !validSeconds(durationSec) {
 		return ErrInvalidProgress
 	}
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	_, err := p.db.Exec(`
-		INSERT INTO audio_progress (user_id, audio_id, offset_sec, updated_at)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO audio_progress (user_id, audio_id, offset_sec, duration_sec, updated_at)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, audio_id) DO UPDATE SET
 			offset_sec = excluded.offset_sec,
+			duration_sec = CASE WHEN excluded.duration_sec > 0 THEN excluded.duration_sec ELSE audio_progress.duration_sec END,
 			updated_at = excluded.updated_at WHERE audio_progress.offset_sec != excluded.offset_sec`,
-		userID, audioID, offsetSec, nowStr,
+		userID, audioID, offsetSec, durationSec, nowStr,
 	)
 	return err
+}
+
+// Progress 是一条断点记录。
+type Progress struct {
+	AudioID   string  `json:"audio_id"`
+	Offset    float64 `json:"offset"`
+	Duration  float64 `json:"duration"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
+// ProgressFor 批量读取一组音轨的断点（最多 200 个）。
+func (p *ProgressDB) ProgressFor(userID int64, audioIDs []string) (map[string]Progress, error) {
+	out := map[string]Progress{}
+	if userID <= 0 || len(audioIDs) == 0 {
+		return out, nil
+	}
+	if len(audioIDs) > 200 {
+		return nil, ErrInvalidProgress
+	}
+	query := "SELECT audio_id, offset_sec, duration_sec, updated_at FROM audio_progress WHERE user_id=? AND audio_id IN (?" + strings.Repeat(",?", len(audioIDs)-1) + ")"
+	args := []any{userID}
+	for _, id := range audioIDs {
+		args = append(args, id)
+	}
+	rows, err := p.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pr Progress
+		if err := rows.Scan(&pr.AudioID, &pr.Offset, &pr.Duration, &pr.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out[pr.AudioID] = pr
+	}
+	return out, rows.Err()
+}
+
+// Recent 按最近更新时间返回用户的断点（含已听完的），最多 limit 条。
+func (p *ProgressDB) Recent(userID int64, limit int) ([]Progress, error) {
+	if userID <= 0 {
+		return nil, nil
+	}
+	rows, err := p.db.Query("SELECT audio_id, offset_sec, duration_sec, updated_at FROM audio_progress WHERE user_id=? ORDER BY updated_at DESC LIMIT ?", userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Progress
+	for rows.Next() {
+		var pr Progress
+		if err := rows.Scan(&pr.AudioID, &pr.Offset, &pr.Duration, &pr.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, pr)
+	}
+	return out, rows.Err()
 }
 
 // GetProgress 读取用户的音频断点。

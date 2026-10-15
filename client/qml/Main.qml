@@ -13,7 +13,10 @@ DarkWindow {
     onClosing: {
         if (typeof nativeResume !== "undefined") nativeResume.flush()
         if (textLoader.item) textLoader.item.flush()
+        audio.save()
     }
+    // 音声播放引擎：全局一份，切换页面不中断。
+    AudioEngine { id: audio }
     // 记住上次打开的页面。
     Settings { id: uiPrefs; category: "main"; property int page: 4 }
 
@@ -78,7 +81,7 @@ DarkWindow {
                 spacing: 4
                 Repeater {
                     model: [{page: 4, label: "短视频"}, {page: 5, label: "相册"},
-                            {page: 1, label: "游戏"}, {page: 3, label: "小说"}, {page: 2, label: "资源库"}]
+                            {page: 1, label: "游戏"}, {page: 3, label: "小说"}, {page: 6, label: "音声"}, {page: 2, label: "资源库"}]
                     delegate: Chip {
                         required property var modelData
                         text: modelData.label
@@ -97,7 +100,7 @@ DarkWindow {
         StackLayout {
             id: stack
             width: parent.width
-            height: parent.height - 40
+            height: parent.height - 40 - (audioBar.visible ? audioBar.height : 0)
             currentIndex: Math.max(1, uiPrefs.page)
 
             // 页 0 原为内嵌播放器。播放器改为系统「打开方式」调用的独立外部窗口（规格 9.2/9.3），这里留空占位以保持页码。
@@ -124,6 +127,14 @@ DarkWindow {
                 }
             }
             Loader { active: mainWindow.pagesReady && stack.currentIndex === 5; sourceComponent: Component { GalleryView { } } }
+            Loader { active: mainWindow.pagesReady && stack.currentIndex === 6; sourceComponent: Component { AudioView { engine: audio } } }
+        }
+        AudioBar {
+            id: audioBar
+            width: parent.width
+            engine: audio
+            visible: audio.active
+            onOpenRequested: mainWindow.selectPage(6)
         }
     }
 }

@@ -34,7 +34,7 @@ FocusScope {
         for (var i = 0; i < repeater.count; i++) { var item = repeater.itemAt(i); if (item) item.setPaused(!on) }
     }
 
-    ShortVideoApi { id: api }
+    ApiClient { id: api }
 
     // 开发验证：OMNIHUB_DEV_MATRIX=<秒> 自动全部播放，并按这个间隔打印各屏丢帧统计。
     Timer {
@@ -252,7 +252,7 @@ FocusScope {
                             slot.load()
                         })
                     }
-                    ShortVideoApi { id: slotApi; onErrorChanged: slot.error = error }
+                    ApiClient { id: slotApi; onErrorChanged: slot.error = error }
                     Component.onDestruction: savePosition()
                     // 频道、顺序、序号或种子变化时重新取片；静音和位置变化不重新加载。
                     readonly property string sequenceKey: cfg.channel + "|" + cfg.shuffle + "|" + cfg.seed + "|" + cfg.index
