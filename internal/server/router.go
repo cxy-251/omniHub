@@ -50,6 +50,7 @@ type Router struct {
 	userState      *userstate.DB
 	megaClient     *mega.Client
 	textCatalog    *catalog.Catalog
+	novelCatalog   *catalog.Catalog
 	audioCatalog   *catalog.Catalog
 	audioMetadata  *audio.MetadataCache
 	mangaReaders   *manga.ReaderCache
@@ -111,6 +112,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		userState:      readingDB,
 		megaClient:     mega.NewClient("", 5*time.Minute),
 		textCatalog:    catalog.New(".txt", ".epub", ".md", ".rst"),
+		novelCatalog:   catalog.New(".epub", ".txt"),
 		audioCatalog:   catalog.New(audio.FileExtensions()...),
 		audioMetadata:  audio.NewMetadataCache(),
 		mangaReaders:   manga.NewReaderCache(),
@@ -263,6 +265,10 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/text/chunk", r.handleTextChunk)
 	r.mux.HandleFunc("/api/media/text/epub", r.handleTextEpub)
 	r.mux.HandleFunc("/api/media/text/epub/book", r.handleEpubBook)
+	r.mux.HandleFunc("/api/media/text/epub/cover", r.handleEpubCover)
+	r.mux.HandleFunc("/api/media/text/novels", r.handleNovels)
+	r.mux.HandleFunc("/api/media/text/novel-categories", r.handleNovelCategories)
+	r.mux.HandleFunc("/api/media/text/recent", r.handleRecentText)
 	r.mux.HandleFunc("/api/media/text/epub-content/", r.handleEpubContent)
 
 	// 音频业务接口

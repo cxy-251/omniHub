@@ -16,12 +16,14 @@ type TextPosition struct {
 	StartLine    int       `json:"start_line"`
 	ByteOffset   int64     `json:"byte_offset"`
 	ChapterIndex int       `json:"chapter_index"`
+	// ScrollRatio 是章节（或文本块）内的滚动位置，0~1。
+	ScrollRatio float64 `json:"scroll_ratio"`
 	FileVersion  string    `json:"file_version"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func validTextPosition(p *TextPosition) bool {
-	return p != nil && p.UserID > 0 && strings.IndexByte(p.DocumentID, ':') >= 1 && len(p.DocumentID) <= 4096 && p.StartLine >= 1 && p.StartLine <= 10000000 && p.ByteOffset >= 0 && p.ByteOffset <= 1<<50 && p.ChapterIndex >= 0 && p.ChapterIndex <= 20000 && p.FileVersion != "" && len(p.FileVersion) <= 128
+	return p != nil && p.UserID > 0 && strings.IndexByte(p.DocumentID, ':') >= 1 && len(p.DocumentID) <= 4096 && p.StartLine >= 1 && p.StartLine <= 10000000 && p.ByteOffset >= 0 && p.ByteOffset <= 1<<50 && p.ChapterIndex >= 0 && p.ChapterIndex <= 20000 && p.ScrollRatio >= 0 && p.ScrollRatio <= 1 && p.FileVersion != "" && len(p.FileVersion) <= 128
 }
 
 // SaveText stores a single authenticated account's bounded, revision-specific position.
@@ -30,11 +32,11 @@ func (d *DB) SaveText(ctx context.Context, p *TextPosition) error {
 	if !validTextPosition(p) {
 		return ErrInvalidProgress
 	}
-	_, err := d.db.ExecContext(ctx, `INSERT INTO text_progress(user_id,document_id,start_line,byte_offset,chapter_index,file_version,updated_at)
-		VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id,document_id) DO UPDATE SET start_line=excluded.start_line,
-		byte_offset=excluded.byte_offset,chapter_index=excluded.chapter_index,file_version=excluded.file_version,updated_at=excluded.updated_at
-		WHERE text_progress.start_line!=excluded.start_line OR text_progress.byte_offset!=excluded.byte_offset OR text_progress.chapter_index!=excluded.chapter_index OR text_progress.file_version!=excluded.file_version`,
-		p.UserID, p.DocumentID, p.StartLine, p.ByteOffset, p.ChapterIndex, p.FileVersion, time.Now().UTC().Format(time.RFC3339))
+	_, err := d.db.ExecContext(ctx, `INSERT INTO text_progress(user_id,document_id,start_line,byte_offset,chapter_index,scroll_ratio,file_version,updated_at)
+		VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(user_id,document_id) DO UPDATE SET start_line=excluded.start_line,
+		byte_offset=excluded.byte_offset,chapter_index=excluded.chapter_index,scroll_ratio=excluded.scroll_ratio,file_version=excluded.file_version,updated_at=excluded.updated_at
+		WHERE text_progress.start_line!=excluded.start_line OR text_progress.byte_offset!=excluded.byte_offset OR text_progress.chapter_index!=excluded.chapter_index OR text_progress.scroll_ratio!=excluded.scroll_ratio OR text_progress.file_version!=excluded.file_version`,
+		p.UserID, p.DocumentID, p.StartLine, p.ByteOffset, p.ChapterIndex, p.ScrollRatio, p.FileVersion, time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
@@ -45,8 +47,8 @@ func (d *DB) Text(ctx context.Context, userID int64, id string) (*TextPosition, 
 	}
 	var p TextPosition
 	var updated string
-	err := d.db.QueryRowContext(ctx, `SELECT user_id,document_id,start_line,byte_offset,chapter_index,file_version,updated_at FROM text_progress WHERE user_id=? AND document_id=?`, userID, id).
-		Scan(&p.UserID, &p.DocumentID, &p.StartLine, &p.ByteOffset, &p.ChapterIndex, &p.FileVersion, &updated)
+	err := d.db.QueryRowContext(ctx, `SELECT user_id,document_id,start_line,byte_offset,chapter_index,scroll_ratio,file_version,updated_at FROM text_progress WHERE user_id=? AND document_id=?`, userID, id).
+		Scan(&p.UserID, &p.DocumentID, &p.StartLine, &p.ByteOffset, &p.ChapterIndex, &p.ScrollRatio, &p.FileVersion, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -58,4 +60,25 @@ func (d *DB) Text(ctx context.Context, userID int64, id string) (*TextPosition, 
 	}
 	p.UpdatedAt, err = time.Parse(time.RFC3339, updated)
 	return &p, err
+}
+
+// RecentText 返回某账号最近阅读的文档（按更新时间倒序，最多 limit 条）。
+func (d *DB) RecentText(ctx context.Context, userID int64, limit int) ([]TextPosition, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT user_id,document_id,start_line,byte_offset,chapter_index,scroll_ratio,file_version,updated_at
+		FROM text_progress WHERE user_id=? ORDER BY updated_at DESC LIMIT ?`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []TextPosition
+	for rows.Next() {
+		var p TextPosition
+		var updated string
+		if err := rows.Scan(&p.UserID, &p.DocumentID, &p.StartLine, &p.ByteOffset, &p.ChapterIndex, &p.ScrollRatio, &p.FileVersion, &updated); err != nil {
+			return nil, err
+		}
+		p.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
+		list = append(list, p)
+	}
+	return list, rows.Err()
 }

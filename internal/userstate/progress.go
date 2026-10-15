@@ -87,6 +87,10 @@ func Open(path string) (*DB, error) {
 			return nil, errors.Join(err, db.Close())
 		}
 	}
+	// text_progress.scroll_ratio（章内位置）为后加列。
+	if _, err := db.Exec("ALTER TABLE text_progress ADD COLUMN scroll_ratio REAL NOT NULL DEFAULT 0"); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return nil, errors.Join(err, db.Close())
+	}
 	return &DB{db: db}, nil
 }
 

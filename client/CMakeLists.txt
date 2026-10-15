@@ -33,8 +33,6 @@ endif()
 
 set(SOURCES
     src/main.cpp
-    src/readers/text_reader.cpp
-    src/readers/text_reader.h
     src/host/external_router.cpp
     src/host/external_router.h
     src/backend_api.cpp

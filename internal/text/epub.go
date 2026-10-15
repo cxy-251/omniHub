@@ -26,6 +26,7 @@ type EpubChapter struct {
 type EpubBook struct {
 	Title    string        `json:"title"`
 	Author   string        `json:"author"`
+	Cover    string        `json:"cover,omitempty"` // 封面图片在容器内的条目路径
 	Chapters []EpubChapter `json:"chapters"`
 }
 
@@ -38,10 +39,15 @@ type epubContainer struct {
 type epubPackage struct {
 	Title  string `xml:"metadata>title"`
 	Author string `xml:"metadata>creator"`
-	Items  []struct {
-		ID   string `xml:"id,attr"`
-		Href string `xml:"href,attr"`
-		Type string `xml:"media-type,attr"`
+	Metas  []struct {
+		Name    string `xml:"name,attr"`
+		Content string `xml:"content,attr"`
+	} `xml:"metadata>meta"`
+	Items []struct {
+		ID         string `xml:"id,attr"`
+		Href       string `xml:"href,attr"`
+		Type       string `xml:"media-type,attr"`
+		Properties string `xml:"properties,attr"`
 	} `xml:"manifest>item"`
 	Spine []struct {
 		ID     string `xml:"idref,attr"`
@@ -155,5 +161,144 @@ func InspectEpub(ctx context.Context, filePath string) (_ *EpubBook, result erro
 	if len(book.Chapters) == 0 {
 		return nil, errors.New("EPUB has no readable spine chapters")
 	}
+	base := path.Dir(opf)
+	book.Cover = findCover(&document, base, entries)
+	// 章节标题：优先 NCX（EPUB2），其次 nav 文档（EPUB3）；找不到的保留 manifest ID。
+	titles := map[string]string{}
+	for _, item := range document.Items {
+		entry, err := epubEntry(base, item.Href)
+		if err != nil || entries[entry] == nil {
+			continue
+		}
+		if item.Type == "application/x-dtbncx+xml" {
+			if data, err := read(entry, 2<<20); err == nil {
+				ncxTitles(data, path.Dir(entry), titles)
+			}
+		} else if strings.Contains(item.Properties, "nav") && len(titles) == 0 {
+			if data, err := read(entry, 2<<20); err == nil {
+				navTitles(data, path.Dir(entry), titles)
+			}
+		}
+	}
+	for i := range book.Chapters {
+		if t := titles[book.Chapters[i].Entry]; t != "" {
+			book.Chapters[i].Title = t
+		} else if i == 0 && book.Chapters[i].Entry == book.Cover {
+			book.Chapters[i].Title = "封面"
+		}
+	}
 	return book, nil
+}
+
+func findCover(doc *epubPackage, base string, entries map[string]*zip.File) string {
+	isImage := func(t string) bool { return strings.HasPrefix(t, "image/") }
+	resolve := func(href string) string {
+		entry, err := epubEntry(base, href)
+		if err != nil || entries[entry] == nil {
+			return ""
+		}
+		return entry
+	}
+	coverID := ""
+	for _, m := range doc.Metas {
+		if m.Name == "cover" {
+			coverID = m.Content
+		}
+	}
+	for _, item := range doc.Items {
+		if isImage(item.Type) && (item.ID == coverID && coverID != "" || strings.Contains(item.Properties, "cover-image")) {
+			if e := resolve(item.Href); e != "" {
+				return e
+			}
+		}
+	}
+	for _, item := range doc.Items {
+		if isImage(item.Type) && (strings.Contains(strings.ToLower(item.ID), "cover") || strings.Contains(strings.ToLower(item.Href), "cover")) {
+			if e := resolve(item.Href); e != "" {
+				return e
+			}
+		}
+	}
+	return ""
+}
+
+// ncxTitles 读取 NCX navPoint 的标签与指向的条目（去掉 #片段），同一条目取第一个标题。
+func ncxTitles(data []byte, base string, titles map[string]string) {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec.Strict = false
+	var label string
+	inText := false
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "text":
+				inText = true
+			case "content":
+				for _, a := range t.Attr {
+					if a.Name.Local == "src" {
+						addTitle(titles, base, a.Value, label)
+					}
+				}
+			}
+		case xml.EndElement:
+			if t.Name.Local == "text" {
+				inText = false
+			}
+		case xml.CharData:
+			if inText {
+				label = strings.TrimSpace(string(t))
+			}
+		}
+	}
+}
+
+// navTitles 读取 EPUB3 nav 文档里的 <a href>标题</a>。
+func navTitles(data []byte, base string, titles map[string]string) {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec.Strict = false
+	dec.AutoClose = xml.HTMLAutoClose
+	href := ""
+	var text strings.Builder
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "a" {
+				href = ""
+				text.Reset()
+				for _, a := range t.Attr {
+					if a.Name.Local == "href" {
+						href = a.Value
+					}
+				}
+			}
+		case xml.CharData:
+			if href != "" {
+				text.Write(t)
+			}
+		case xml.EndElement:
+			if t.Name.Local == "a" && href != "" {
+				addTitle(titles, base, href, strings.TrimSpace(text.String()))
+				href = ""
+			}
+		}
+	}
+}
+
+func addTitle(titles map[string]string, base, href, label string) {
+	if label == "" || len(label) > 512 {
+		return
+	}
+	href, _, _ = strings.Cut(href, "#")
+	if entry, err := epubEntry(base, href); err == nil && titles[entry] == "" {
+		titles[entry] = label
+	}
 }
