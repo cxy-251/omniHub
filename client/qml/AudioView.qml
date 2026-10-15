@@ -11,6 +11,9 @@ Item {
     property var albums: []
     property var recent: []
     property string error: ""
+    // 其它页面（如下载完成后的「去收听」）要求打开并播放的专辑。
+    property string request: ""
+    property bool pendingPlay: false
     readonly property var selected: albums.find(function (a) { return a.id === prefs.album }) || null
 
     Settings { id: prefs; category: "audioView"; property string album: ""; property string query: "" }
@@ -20,10 +23,14 @@ Item {
         api.getJSON("/api/media/audio/albums?limit=100", function (list) {
             view.albums = list
             if (!view.selected && list.length) prefs.album = list[0].id
+            if (view.pendingPlay && view.selected) { view.pendingPlay = false; view.continueAlbum(view.selected) }
         })
         api.getJSON("/api/media/audio/recent?limit=6", function (list) { view.recent = list })
     }
-    Component.onCompleted: refresh()
+    Component.onCompleted: {
+        if (request) { prefs.album = request; pendingPlay = true }
+        refresh()
+    }
     property bool devStarted: false
     // 开发验证：devScroll < 0 时自动「继续收听」所选专辑，每 -devScroll 毫秒打印播放状态。
     Timer {

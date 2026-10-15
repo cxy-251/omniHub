@@ -165,6 +165,7 @@ func (a *Application) build() *generation {
 	router.ConfigureShortVideo(a.cfg.ShortVideoThumbnails, a.saveShortVideoThumbnails)
 	router.ConfigureGames(resolveGameTools(a.cfg.GameTools, a.configDir))
 	router.ConfigureMega(resolveMegaCmd(a.cfg.MegaCmdDir))
+	router.ConfigureDownloads(a.cfg.Downloads, a.configDir, a.saveDownloadSettings)
 	if !a.cfg.StateInitialized {
 		a.cfg.StateInitialized = true
 		if err := config.Save(a.cfg); err != nil {
@@ -420,6 +421,24 @@ func cloneConfig(cfg *config.Config) (*config.Config, error) {
 		return nil, fmt.Errorf("copy configuration: %w", err)
 	}
 	return &copy, nil
+}
+
+// saveDownloadSettings 持久化下载任务的代理与 Cookie 设置。
+func (a *Application) saveDownloadSettings(settings config.DownloadSettings) error {
+	if !a.operation.TryLock() {
+		return errors.New("configuration change in progress; retry later")
+	}
+	defer a.operation.Unlock()
+	next, err := cloneConfig(a.cfg)
+	if err != nil {
+		return err
+	}
+	next.Downloads = settings
+	if err := config.Save(next); err != nil && !config.WriteWasCommitted(err) {
+		return err
+	}
+	a.cfg = next
+	return nil
 }
 
 // saveShortVideoThumbnails 持久化缩略图开关。该回调在业务请求内执行，

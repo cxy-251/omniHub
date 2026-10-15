@@ -413,3 +413,22 @@ func (m *Manager) List() []*Task {
 	sort.Slice(result, func(i, j int) bool { return result[i].StartedAt.After(result[j].StartedAt) })
 	return result
 }
+
+// Done 在任务进程与输出都结束后关闭。
+func (t *Task) Done() <-chan struct{} { return t.done }
+
+// Logs 返回有限日志缓冲的快照（按 ID 递增）。
+func (t *Task) Logs() []LogEntry {
+	t.logsMu.RLock()
+	defer t.logsMu.RUnlock()
+	out := make([]LogEntry, 0, len(t.logs))
+	out = append(out, t.logs[t.logNext:]...)
+	return append(out, t.logs[:t.logNext]...)
+}
+
+// State 返回运行状态快照：是否运行、开始与结束时间、退出码。
+func (t *Task) State() (running bool, started time.Time, ended *time.Time, exitCode int) {
+	t.logsMu.RLock()
+	defer t.logsMu.RUnlock()
+	return t.Running, t.StartedAt, t.EndedAt, t.ExitCode
+}

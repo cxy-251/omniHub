@@ -52,6 +52,7 @@ type Router struct {
 	progressDB     *audio.ProgressDB
 	userState      *userstate.DB
 	megaClient     *mega.Client
+	downloads      dlState
 	textCatalog    *catalog.Catalog
 	novelCatalog   *catalog.Catalog
 	audioCatalog   *catalog.Catalog
@@ -348,6 +349,7 @@ func (r *Router) registerRoutes() {
 
 	// MEGA 客户端接口 (第 10.2 节)
 	r.mux.HandleFunc("/api/mega/", r.handleMega)
+	r.mux.HandleFunc("/api/downloads/", r.handleDownloads)
 
 	// Legacy primary-only paths cannot safely host game scripts in the UI origin.
 	r.mux.HandleFunc("/standalone_games/", func(w http.ResponseWriter, req *http.Request) {

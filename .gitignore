@@ -4,3 +4,4 @@ omnihub-server
 node_modules/
 build/
 features/sc2/.venv/
+__pycache__/

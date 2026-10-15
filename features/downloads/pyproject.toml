@@ -1,0 +1,16 @@
+[project]
+name = "omnihub-downloads"
+version = "0.1.0"
+description = "omniHub 下载任务脚本（有声书 yt-dlp、漫画 jmcomic），由 Go 服务按需调用"
+requires-python = ">=3.10"
+dependencies = [
+    "yt-dlp==2026.8.19",
+    "jmcomic==2.7.9",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

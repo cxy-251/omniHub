@@ -17,6 +17,8 @@
         <file>qml/AudioBar.qml</file>
         <file>qml/AudioView.qml</file>
         <file>qml/MegaPanel.qml</file>
+        <file>qml/DownloadsView.qml</file>
+        <file>qml/DownloadForm.qml</file>
         <file>qml/PagedModel.qml</file>
         <file>qml/Chip.qml</file>
         <file>qml/WheelScroll.qml</file>

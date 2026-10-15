@@ -54,6 +54,14 @@ type Config struct {
 	GameTools GameTools `json:"game_tools,omitzero"`
 	// MegaCmdDir 是 MEGAcmd 安装目录（含 bin/mega-exec）；留空时找 ~/Applications/mega-cmd，再找 PATH。
 	MegaCmdDir string `json:"mega_cmd_dir,omitempty"`
+	// Downloads 是下载任务（yt-dlp 等）的代理与 Cookie 设置。
+	Downloads DownloadSettings `json:"downloads,omitzero"`
+}
+
+// DownloadSettings 是下载脚本的网络设置；Cookie 文件复制在配置目录里（仅本人可读）。
+type DownloadSettings struct {
+	YtdlpProxy   string `json:"ytdlp_proxy,omitempty"`
+	YtdlpCookies string `json:"ytdlp_cookies,omitempty"`
 }
 
 // GameTools 是 Proton、Wine 容器、Lime3DS、Ren'Py SDK 的位置。

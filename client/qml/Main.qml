@@ -15,6 +15,8 @@ DarkWindow {
         if (textLoader.item) textLoader.item.flush()
         audio.save()
     }
+    // 其它页面要求音声页打开并播放的专辑（逻辑路径），音声页创建时读取一次。
+    property string audioRequest: ""
     // 音声播放引擎：全局一份，切换页面不中断。
     AudioEngine { id: audio }
     // 记住上次打开的页面。
@@ -127,9 +129,20 @@ DarkWindow {
                 }
             }
             Loader { active: mainWindow.pagesReady && stack.currentIndex === 5; sourceComponent: Component { GalleryView { } } }
-            Loader { active: mainWindow.pagesReady && stack.currentIndex === 6; sourceComponent: Component { AudioView { engine: audio } } }
-            // 下载：目前是 MEGA；之后加入有声书（yt-dlp）与漫画下载。
-            Loader { active: mainWindow.pagesReady && stack.currentIndex === 7; sourceComponent: Component { MegaPanel { } } }
+            Loader { active: mainWindow.pagesReady && stack.currentIndex === 6; sourceComponent: Component { AudioView { engine: audio; request: mainWindow.audioRequest } } }
+                        Loader {
+                active: mainWindow.pagesReady && stack.currentIndex === 7
+                sourceComponent: Component {
+                    DownloadsView {
+                        // 「去收听」：切到音声页打开该专辑并开始播放。
+                        onOpenAudioAlbum: function (album) {
+                            mainWindow.audioRequest = album
+                            mainWindow.selectPage(6)
+                            Qt.callLater(function () { mainWindow.audioRequest = "" })
+                        }
+                    }
+                }
+            }
         }
         AudioBar {
             id: audioBar
