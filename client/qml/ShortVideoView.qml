@@ -19,6 +19,7 @@ Item {
     property alias mode: viewPrefs.mode   // browse | matrix，记住上次的模式
     // 多联放映已在独立窗口中：本页不再内嵌一份，点「多联放映」只把窗口提到前面。
     property bool matrixWindowOpen: false
+    property var audioEngine: null        // 全局音声引擎，交给多联放映做伴听
     signal matrixWindowRequested()
     Settings { id: viewPrefs; category: "shortvideo"; property string mode: "browse" }
 
@@ -182,6 +183,7 @@ Item {
         active: view.mode === "matrix" && !view.matrixWindowOpen
         sourceComponent: Component {
             MatrixView {
+                audioEngine: view.audioEngine
                 onExitRequested: view.mode = "browse"
                 // 先销毁内嵌的这份（记下位置），再由主窗口打开独立窗口。
                 onDetachRequested: { view.mode = "browse"; Qt.callLater(view.matrixWindowRequested) }

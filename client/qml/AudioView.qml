@@ -57,13 +57,9 @@ Item {
         }
     }
 
-    // 「继续」：本专辑最近听过的那集；没有就从第一集开始。
-    function continueAlbum(album) {
-        var last = recent.find(function (r) { return r.album_id === album.id })
-        if (last) playId(album, last.audio_id)
-        else engine.open(album.id, album.title, 0, true)
-    }
-    // 按分集 ID 找序号：分集文件名的自然序号由服务端给出（index 从 1 起）。
+    // 「继续」：本专辑最近听过的那集的断点；没有就从第一集开始（逻辑在播放引擎里，多联放映伴听也用）。
+    function continueAlbum(album) { engine.continueAlbum(album.id, album.title) }
+    // 播放「继续收听」里的某一集：按分集 ID 找序号（index 从 1 起）。
     function playId(album, audioId) {
         var name = audioId.slice(audioId.lastIndexOf("/") + 1)
         var stem = name.slice(0, name.lastIndexOf("."))

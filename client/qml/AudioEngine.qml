@@ -91,6 +91,20 @@ Item {
             engine.load(list[0], autoplay)
         })
     }
+    // 继续一张专辑：从这张专辑最近听过的那集的断点接着放；没听过就从第一集开始。
+    function continueAlbum(album, title) {
+        api.getJSON("/api/media/audio/recent?limit=50", function (recent) {
+            var last = recent.find(function (r) { return r.album_id === album })
+            if (!last) { engine.open(album, title, 0, true); return }
+            var name = last.audio_id.slice(last.audio_id.lastIndexOf("/") + 1)
+            var stem = name.slice(0, name.lastIndexOf("."))
+            api.getJSON("/api/media/audio/tracks?path=" + encodeURIComponent(album) + "&limit=100&q=" + encodeURIComponent(stem), function (list) {
+                var hit = list.find(function (t) { return t.id === last.audio_id })
+                engine.open(album, title, hit ? hit.index - 1 : 0, true)
+            })
+        })
+    }
+
     function load(t, autoplay) {
         var file = api.localPath(t.id)
         if (!file) { error = "资源库不在线"; return }

@@ -12,6 +12,10 @@ import omniHub.Media 1.0
 FocusScope {
     id: matrix
     property bool detached: false
+    // 全局音声播放引擎（伴听用）；伴听进行时所有视频屏静音。
+    property var audioEngine: null
+    property var audioAlbums: []
+    readonly property bool accompanying: !!(audioEngine && audioEngine.player.playing)
     property bool fullscreen: false
     signal exitRequested()
     signal detachRequested()
@@ -81,6 +85,7 @@ FocusScope {
         ready = true
         api.getJSON("/api/media/shortvideo/creators", function (list) { matrix.creators = list })
         api.getJSON("/api/media/shortvideo/pins", function (list) { matrix.pins = list })
+        if (audioEngine) api.getJSON("/api/media/audio/albums?limit=100", function (list) { matrix.audioAlbums = list })
     }
     function setSlot(i, changes) {
         var all = prefs.slots.slice()
@@ -171,6 +176,24 @@ FocusScope {
                     onClicked: { if (armed) { armed = false; bar.slotItem.trash() } else { armed = true; disarm.restart() } }
                     Timer { id: disarm; interval: 3000; onTriggered: trashChip.armed = false }
                 }
+                // 伴听：选一张音声专辑，从上次听到的地方接着放；选「关」暂停。底部播放条可切集、调倍速。
+                ComboBox {
+                    visible: !!matrix.audioEngine && matrix.audioAlbums.length > 0
+                    Layout.preferredWidth: 170
+                    implicitHeight: 28
+                    font.pixelSize: 13
+                    textRole: "label"; valueRole: "value"
+                    model: [{value: "", label: "🎧 伴听：关"}].concat(matrix.audioAlbums.map(function (a) { return {value: a.id, label: "🎧 " + a.title} }))
+                    currentIndex: matrix.accompanying ? Math.max(0, indexOfValue(matrix.audioEngine.albumId)) : 0
+                    onActivated: {
+                        if (!currentValue) { matrix.audioEngine.player.pause(); return }
+                        var album = matrix.audioAlbums.find(function (a) { return a.id === currentValue })
+                        if (matrix.audioEngine.albumId === currentValue && matrix.audioEngine.active) matrix.audioEngine.player.play()
+                        else matrix.audioEngine.continueAlbum(album.id, album.title)
+                    }
+                    ToolTip.visible: hovered && matrix.accompanying
+                    ToolTip.text: matrix.accompanying && matrix.audioEngine.track ? "正在伴听：" + matrix.audioEngine.track.title + "（视频已静音）" : ""
+                }
                 Item { Layout.fillWidth: true }
                 Chip { text: "📌"; selected: matrix.barPinned; onClicked: matrix.barPinned = !matrix.barPinned }
             }
@@ -194,7 +217,7 @@ FocusScope {
                     id: slot
                     required property int index
                     readonly property var cfg: matrix.slotConfig(index)
-                    readonly property bool audible: !cfg.muted && (!prefs.focusAudio || matrix.focused === index)
+                    readonly property bool audible: !matrix.accompanying && !cfg.muted && (!prefs.focusAudio || matrix.focused === index)
                     property var post: null
                     property int total: 0
                     property bool paused: !matrix.playing
@@ -290,7 +313,7 @@ FocusScope {
                             elide: Text.ElideRight
                             font.pixelSize: 12
                             color: slot.error ? "#f85149" : "#e6edf3"
-                            text: (slot.audible ? "" : "🔇 ") + (slot.post && slot.post.liked ? "♥ " : "") + slot.caption
+                            text: (slot.audible ? "" : matrix.accompanying ? "🎧 " : "🔇 ") + (slot.post && slot.post.liked ? "♥ " : "") + slot.caption
                         }
                     }
                 }

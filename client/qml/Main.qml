@@ -85,7 +85,7 @@ DarkWindow {
     Loader {
         id: matrixWindow
         active: false
-        sourceComponent: Component { MatrixWindow { onClosing: Qt.callLater(function () { matrixWindow.active = false }) } }
+        sourceComponent: Component { MatrixWindow { audioEngine: audio; onClosing: Qt.callLater(function () { matrixWindow.active = false }) } }
     }
 
     Column {
@@ -146,6 +146,7 @@ DarkWindow {
                 active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 4
                 sourceComponent: Component {
                     ShortVideoView {
+                        audioEngine: audio
                         matrixWindowOpen: matrixWindow.active
                         onMatrixWindowRequested: {
                             if (matrixWindow.item) { matrixWindow.item.raise(); matrixWindow.item.requestActivate() }

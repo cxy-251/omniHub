@@ -6,10 +6,12 @@ DarkWindow {
     width: 1280; height: 760
     visible: true
     title: "omniHub 多联放映"
+    property var audioEngine: null
     MatrixView {
         id: matrixView
         anchors.fill: parent
         detached: true
+        audioEngine: window.audioEngine
         fullscreen: window.visibility === Window.FullScreen
         onExitRequested: window.close()
         onFullscreenToggled: window.visibility = window.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen
