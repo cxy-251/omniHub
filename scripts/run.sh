@@ -48,10 +48,17 @@ fi
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
 # 标准错误不是终端时 Qt 默认把日志写进 journald，这里强制输出到终端。
 export QT_FORCE_STDERR_LOGGING=1
+# 标记由本脚本启动的客户端：关窗口后只看这类客户端是否还开着（开发时单独运行的测试客户端不算）。
+export OMNIHUB_LAUNCHED_BY=run.sh
 build/client/omnihub_client "$@"
 # 窗口关闭后：没有其他客户端窗口、也没有正在运行的游戏（服务退出会结束它管理的游戏）时，一并停止服务。
 sleep 0.5
-if ! pgrep -x omnihub_client > /dev/null \
+launched_clients() {
+    for pid in $(pgrep -x omnihub_client); do
+        tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -qx 'OMNIHUB_LAUNCHED_BY=run.sh' && echo "$pid"
+    done
+}
+if [ -z "$(launched_clients)" ] \
         && [ -z "$(systemctl --user list-units --type=scope --state=running --no-legend 'app-omnihub-game-*' 2>/dev/null)" ]; then
     pkill -x omnihub-server
 fi

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,22 +33,21 @@ import (
 type feedSource interface {
 	// snapshotKey 标识当前数据版本（数据库文件修改时间等），变化时重建条目列表。
 	snapshotKey(req *http.Request) (string, error)
-	items(req *http.Request) ([]feed.Item, error)
+	items(req *http.Request) (*feed.Catalog, error)
 	render(req *http.Request, items []feed.Item, liked map[string]bool) (any, error)
-	groups(req *http.Request, items []feed.Item) any
+	groups(req *http.Request, cat *feed.Catalog) any
 	trash(req *http.Request, it feed.Item) error
 }
 
 type feedSnapshot struct {
-	key   string
-	items []feed.Item
-	index map[string]int
-	used  time.Time
+	key  string
+	cat  *feed.Catalog
+	used time.Time
 }
 
 type feedOrder struct {
 	key   string
-	order []int
+	order []int32 // 10 万条用 int32 存，比 int 省一半
 }
 
 type feedState struct {
@@ -81,14 +81,13 @@ func (r *Router) feedSnapshot(req *http.Request, domain string, src feedSource) 
 		return s, nil
 	}
 	r.feed.mu.Unlock()
-	items, err := src.items(req)
+	cat, err := src.items(req)
 	if err != nil {
 		return nil, err
 	}
-	s := &feedSnapshot{key: key, items: items, index: make(map[string]int, len(items)), used: time.Now()}
-	for i, it := range items {
-		s.index[it.ID] = i
-	}
+	s := &feedSnapshot{key: key, cat: cat, used: time.Now()}
+	// 建列表时的临时内存（数据库查询结果等）立即还给系统，常驻的只有紧凑的条目表。
+	debug.FreeOSMemory()
 	r.feed.mu.Lock()
 	r.feed.snapshots[domain] = s
 	r.feed.mu.Unlock()
@@ -109,17 +108,8 @@ func parseFeedQuery(req *http.Request) feedQuery {
 	return feedQuery{channel: q.Get("channel"), seed: seed, portrait: q.Get("portrait") == "1", kind: q.Get("kind"), shuffle: q.Get("order") == "shuffle"}
 }
 
-func hasTag(it *feed.Item, tag string) bool {
-	for _, t := range it.Tags {
-		if t == tag {
-			return true
-		}
-	}
-	return false
-}
-
 // feedOrderFor 返回频道里的条目顺序（snapshot.items 的下标）。推荐结果按种子缓存，翻页时顺序不变。
-func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapshot, q feedQuery) ([]int, error) {
+func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapshot, q feedQuery) ([]int32, error) {
 	ctx := req.Context()
 	user := auth.UserFromContext(ctx)
 	cacheKey := fmt.Sprintf("%d|%s|%s|%s|%d|%t|%s|%t", user.ID, domain, snap.key, q.channel, q.seed, q.portrait, q.kind, q.shuffle)
@@ -136,11 +126,13 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 	if err != nil {
 		return nil, err
 	}
+	cat := snap.cat
+	kindTag := cat.Lookup("kind:" + q.kind)
 	keep := func(it *feed.Item) bool {
 		if q.portrait && it.Ratio > 0 && it.Ratio <= 1000 { // 竖屏：高大于宽（方形也排除）
 			return false
 		}
-		if q.kind != "" && !hasTag(it, "kind:"+q.kind) {
+		if q.kind != "" && !cat.HasTag(it, kindTag) {
 			return false
 		}
 		return true
@@ -148,8 +140,8 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 	var order []int
 	switch {
 	case q.channel == "hidden":
-		for i := range snap.items {
-			if _, ok := hidden[snap.items[i].ID]; ok {
+		for i := range cat.Items {
+			if _, ok := hidden[cat.Items[i].ID]; ok {
 				order = append(order, i)
 			}
 		}
@@ -158,23 +150,32 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 		if err != nil {
 			return nil, err
 		}
+		liked := map[string]bool{}
 		for _, id := range likes {
-			if i, ok := snap.index[id]; ok && keep(&snap.items[i]) {
-				if _, h := hidden[id]; !h {
-					order = append(order, i)
-				}
+			liked[id] = true
+		}
+		// 按点赞先后（最近的在前）。
+		pos := map[string]int{}
+		for k, id := range likes {
+			pos[id] = k
+		}
+		for i := range cat.Items {
+			it := &cat.Items[i]
+			if _, h := hidden[it.ID]; liked[it.ID] && !h && keep(it) {
+				order = append(order, i)
 			}
 		}
+		sort.Slice(order, func(a, b int) bool { return pos[cat.Items[order[a]].ID] < pos[cat.Items[order[b]].ID] })
 	default:
-		for i := range snap.items {
-			it := &snap.items[i]
+		group, byGroup := strings.CutPrefix(q.channel, "group:")
+		tag, byTag := strings.CutPrefix(q.channel, "tag:")
+		groupID, tagID := cat.Lookup(group), cat.Lookup(tag)
+		for i := range cat.Items {
+			it := &cat.Items[i]
 			if _, h := hidden[it.ID]; h || !keep(it) {
 				continue
 			}
-			if g, ok := strings.CutPrefix(q.channel, "group:"); ok && it.Group != g {
-				continue
-			}
-			if t, ok := strings.CutPrefix(q.channel, "tag:"); ok && !hasTag(it, t) {
+			if (byGroup && it.Group != groupID) || (byTag && !cat.HasTag(it, tagID)) {
 				continue
 			}
 			order = append(order, i)
@@ -184,28 +185,26 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 			if err != nil {
 				return nil, err
 			}
-			subset := make([]feed.Item, len(order))
-			for k, i := range order {
-				subset[k] = snap.items[i]
-			}
-			ranked := feed.Rank(subset, sig, q.seed, time.Now())
-			for k, j := range ranked {
-				ranked[k] = order[j]
-			}
-			order = ranked
+			order = feed.Rank(cat, order, sig, q.seed, time.Now())
+			// 排序的临时数组（10 万条约几 MB）用完就还给系统；只在换种子时发生，耗时几十毫秒。
+			defer debug.FreeOSMemory()
 		}
 	}
 	if q.shuffle && q.channel != "recommend" {
 		rng := rand.New(rand.NewPCG(uint64(q.seed), 0x5eed))
 		rng.Shuffle(len(order), func(a, b int) { order[a], order[b] = order[b], order[a] })
 	}
+	compact := make([]int32, len(order))
+	for k, i := range order {
+		compact[k] = int32(i)
+	}
 	r.feed.mu.Lock()
-	r.feed.orders = append(r.feed.orders, feedOrder{cacheKey, order})
+	r.feed.orders = append(r.feed.orders, feedOrder{cacheKey, compact})
 	if len(r.feed.orders) > 8 {
 		r.feed.orders = r.feed.orders[1:]
 	}
 	r.feed.mu.Unlock()
-	return order, nil
+	return compact, nil
 }
 
 func (r *Router) feedSignals(ctx context.Context, userID int64, domain string) (feed.Signals, error) {
@@ -285,9 +284,9 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 		}
 		switch action {
 		case "ratios":
-			ratios := make([]int, len(order))
+			ratios := make([]int32, len(order))
 			for k, i := range order {
-				ratios[k] = snap.items[i].Ratio
+				ratios[k] = snap.cat.Items[i].Ratio
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"ratios": ratios})
 		case "items":
@@ -300,7 +299,7 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 			page := order[min(offset, len(order)):min(offset+limit, len(order))]
 			items := make([]feed.Item, len(page))
 			for k, i := range page {
-				items[k] = snap.items[i]
+				items[k] = snap.cat.Items[i]
 			}
 			out, err := src.render(req, items, r.likedSet(ctx, domain))
 			if err != nil {
@@ -316,7 +315,7 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 			}
 			index, _ := strconv.Atoi(req.URL.Query().Get("index"))
 			index = ((index % len(order)) + len(order)) % len(order)
-			out, err := src.render(req, []feed.Item{snap.items[order[index]]}, r.likedSet(ctx, domain))
+			out, err := src.render(req, []feed.Item{snap.cat.Items[order[index]]}, r.likedSet(ctx, domain))
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusServiceUnavailable)
 				return
@@ -330,7 +329,7 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 		}
 	case "groups":
 		pins, _ := r.userState.Pins(ctx, user.ID, domain)
-		writeJSON(w, http.StatusOK, map[string]any{"groups": src.groups(req, snap.items), "pins": pins})
+		writeJSON(w, http.StatusOK, map[string]any{"groups": src.groups(req, snap.cat), "pins": pins})
 	case "like", "event", "pin", "trash", "restore":
 		if req.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -360,12 +359,13 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 			writeJSON(w, http.StatusOK, pins)
 			return
 		}
-		i, ok := snap.index[in.ID]
-		if !ok {
+		i := snap.cat.Find(in.ID)
+		if i < 0 {
 			http.Error(w, "unknown item", http.StatusNotFound)
 			return
 		}
-		it := snap.items[i]
+		it := snap.cat.Items[i]
+		tags := snap.cat.TagNames(&it)
 		switch action {
 		case "like":
 			if user.ID <= 0 {
@@ -380,7 +380,7 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 			if !in.Liked {
 				delta = feedDeltas["unlike"]
 			}
-			_ = r.userState.AdjustProfile(ctx, user.ID, domain, it.Tags, delta)
+			_ = r.userState.AdjustProfile(ctx, user.ID, domain, tags, delta)
 			writeJSON(w, http.StatusOK, map[string]bool{"liked": in.Liked})
 		case "event":
 			// view：展示过（记为看过）；complete / dwell / skip：看完、停留较久、很快划走（计入偏好）。
@@ -392,7 +392,7 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 			if user.ID > 0 {
 				_ = r.userState.MarkSeen(ctx, user.ID, domain, it.ID)
 				if known && in.Type != "like" && in.Type != "unlike" && in.Type != "trash" {
-					_ = r.userState.AdjustProfile(ctx, user.ID, domain, it.Tags, delta)
+					_ = r.userState.AdjustProfile(ctx, user.ID, domain, tags, delta)
 				}
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -404,7 +404,7 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 			if action == "restore" {
 				err = r.userState.SetHidden(ctx, domain, it.ID, it.Lib, false)
 			} else if err = src.trash(req, it); err == nil {
-				_ = r.userState.AdjustProfile(ctx, user.ID, domain, it.Tags, feedDeltas["trash"])
+				_ = r.userState.AdjustProfile(ctx, user.ID, domain, tags, feedDeltas["trash"])
 			}
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusConflict)
@@ -467,12 +467,18 @@ func durationTag(d float64) string {
 	}
 }
 
-func (s svFeed) items(req *http.Request) ([]feed.Item, error) {
+func (s svFeed) items(req *http.Request) (*feed.Catalog, error) {
 	libs, err := s.r.onlineLibraries()
 	if err != nil {
 		return nil, err
 	}
-	var out []feed.Item
+	type row struct {
+		id, lib, creator string
+		tags             []string
+		date             int64
+		ratio            int
+	}
+	var rows []row
 	for _, lib := range libs {
 		store, _, err := s.r.svStore(lib)
 		if err != nil {
@@ -492,18 +498,23 @@ func (s svFeed) items(req *http.Request) ([]feed.Item, error) {
 			if t := durationTag(k.Duration); t != "" {
 				tags = append(tags, t)
 			}
-			it := feed.Item{ID: k.ID, Lib: lib.ID, Group: creator, Tags: tags}
+			r := row{id: k.ID, lib: lib.ID, creator: creator, tags: tags}
 			if t, err := time.Parse("2006-01-02", k.Published); err == nil {
-				it.Date = t.Unix()
+				r.date = t.Unix()
 			}
 			if k.Width > 0 && k.Height > 0 {
-				it.Ratio = k.Height * 1000 / k.Width
+				r.ratio = k.Height * 1000 / k.Width
 			}
-			out = append(out, it)
+			rows = append(rows, r)
 		}
 	}
-	sort.SliceStable(out, func(a, b int) bool { return out[a].Date > out[b].Date })
-	return out, nil
+	// 多个库合并后按发布时间倒序（「全部」与分组频道的默认顺序）。
+	sort.SliceStable(rows, func(a, b int) bool { return rows[a].date > rows[b].date })
+	cat := &feed.Catalog{Items: make([]feed.Item, 0, len(rows))}
+	for _, r := range rows {
+		cat.Add(r.id, r.lib, r.creator, r.tags, r.date, r.ratio)
+	}
+	return cat, nil
 }
 
 func (s svFeed) render(req *http.Request, items []feed.Item, liked map[string]bool) (any, error) {
@@ -542,7 +553,7 @@ func (s svFeed) render(req *http.Request, items []feed.Item, liked map[string]bo
 	return out, nil
 }
 
-func (s svFeed) groups(req *http.Request, items []feed.Item) any {
+func (s svFeed) groups(req *http.Request, cat *feed.Catalog) any {
 	type group struct {
 		ID       string `json:"id"`
 		Label    string `json:"label"`
@@ -551,11 +562,12 @@ func (s svFeed) groups(req *http.Request, items []feed.Item) any {
 	}
 	counts := map[string]int{}
 	var ids []string
-	for _, it := range items {
-		if counts[it.Group] == 0 {
-			ids = append(ids, it.Group)
+	for i := range cat.Items {
+		g := cat.GroupName(&cat.Items[i])
+		if counts[g] == 0 {
+			ids = append(ids, g)
 		}
-		counts[it.Group]++
+		counts[g]++
 	}
 	sort.Strings(ids)
 	out := make([]group, 0, len(ids))
@@ -638,12 +650,12 @@ func hexTags(hex string) []string {
 	return []string{fmt.Sprintf("hue:%d", int(h/30)%12), light}
 }
 
-func (g galleryFeed) items(req *http.Request) ([]feed.Item, error) {
+func (g galleryFeed) items(req *http.Request) (*feed.Catalog, error) {
 	libs, err := g.r.onlineLibraries()
 	if err != nil {
 		return nil, err
 	}
-	var out []feed.Item
+	cat := &feed.Catalog{}
 	for _, lib := range libs {
 		dir, err := g.r.moduleDirectory(lib.RootPath, "media_library/gallery", "gallery.db")
 		if err != nil {
@@ -660,6 +672,9 @@ func (g galleryFeed) items(req *http.Request) ([]feed.Item, error) {
 		if err != nil {
 			return nil, err
 		}
+		if cat.Items == nil {
+			cat.Items = make([]feed.Item, 0, len(rows))
+		}
 		for _, p := range rows {
 			ratio := 1000
 			if p.Width > 0 && p.Height > 0 {
@@ -672,11 +687,10 @@ func (g galleryFeed) items(req *http.Request) ([]feed.Item, error) {
 				shape = "shape:landscape"
 			}
 			color := fmt.Sprintf("color:%d", p.ColorFamily)
-			tags := append([]string{color, shape}, hexTags(p.ColorHex)...)
-			out = append(out, feed.Item{ID: p.ID, Lib: lib.ID, Group: color, Tags: tags, Ratio: ratio})
+			cat.Add(p.ID, lib.ID, color, append([]string{color, shape}, hexTags(p.ColorHex)...), 0, ratio)
 		}
 	}
-	return out, nil
+	return cat, nil
 }
 
 func (g galleryFeed) render(req *http.Request, items []feed.Item, liked map[string]bool) (any, error) {
@@ -720,17 +734,22 @@ func (g galleryFeed) render(req *http.Request, items []feed.Item, liked map[stri
 	return out, nil
 }
 
-func (g galleryFeed) groups(req *http.Request, items []feed.Item) any {
+func (g galleryFeed) groups(req *http.Request, cat *feed.Catalog) any {
 	type group struct {
 		ID    string `json:"id"`
 		Label string `json:"label"`
 		Count int    `json:"count"`
 	}
 	counts := make([]int, len(colorNames))
-	for _, it := range items {
+	// 按分组编号计数，再换成色系号（避免对 10 万条逐个解析字符串）。
+	byGroup := map[int32]int{}
+	for i := range cat.Items {
+		byGroup[cat.Items[i].Group]++
+	}
+	for gid, n := range byGroup {
 		var c int
-		if _, err := fmt.Sscanf(it.Group, "color:%d", &c); err == nil && c >= 0 && c < len(counts) {
-			counts[c]++
+		if _, err := fmt.Sscanf(cat.Names[gid], "color:%d", &c); err == nil && c >= 0 && c < len(counts) {
+			counts[c] += n
 		}
 	}
 	out := []group{}

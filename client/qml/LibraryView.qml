@@ -48,7 +48,7 @@ ScrollView {
             Layout.fillWidth: true; Layout.margins: 16
             TextField { id: libraryPath; placeholderText: "点「浏览」选择资源库根目录"; Layout.fillWidth: true; maximumLength: 4096 }
             Button { text: "浏览…"; onClicked: folderDialog.open() }
-            CheckBox { id: libraryReadOnly; text: "只读" }
+            Toggle { id: libraryReadOnly; text: "只读" }
             Button { text: "添加"; enabled: !backendApi.libraryBusy && libraryPath.text.length > 0; onClicked: backendApi.addLibrary(libraryPath.text, libraryReadOnly.checked) }
         }
         Repeater {

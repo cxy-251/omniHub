@@ -98,7 +98,7 @@ ColumnLayout {
                 font.pixelSize: 13
                 onTextEdited: form.set(fieldBox.modelData.name, text)
             }
-            CheckBox {
+            Toggle {
                 visible: fieldBox.modelData.type === "toggle"
                 text: fieldBox.modelData.label
                 checked: !!form.values[fieldBox.modelData.name]
