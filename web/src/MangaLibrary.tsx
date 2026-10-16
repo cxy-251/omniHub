@@ -7,6 +7,7 @@ type Page = { index: number; chapter_index: number; entry: string };
 type PageList = { pages: Page[]; total: number; file_version: string };
 type Position = { page_index: number; chapter_index: number; scroll_offset_ratio: number; position_mode?: string };
 type Mode = 'strip' | 'single' | 'double';
+type Recent = { title: string; logical_path: string; page_index: number };
 type Boot = { total: number; version: string; userID: number };
 const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
 
@@ -245,7 +246,7 @@ function BookReader({ book, active, onBack }: { book: Book; active: boolean; onB
     {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
     {saveError ? <p role="alert" className="whitespace-pre-wrap text-danger">{saveError}</p> : null}
     {!boot && !error ? <p role="status">正在打开书包…</p> : null}
-    {boot && model ? <div ref={viewport} className="h-[70vh] overflow-auto overscroll-contain rounded-lg border border-line bg-black" onScroll={scroll} onWheel={() => { restore.current = undefined; }} onTouchStart={() => { restore.current = undefined; }}>
+    {boot && model ? <div ref={viewport} className="h-[calc(100vh-10rem)] min-h-80 overflow-auto overscroll-contain rounded-lg border border-line bg-black" onScroll={scroll} onWheel={() => { restore.current = undefined; }} onTouchStart={() => { restore.current = undefined; }}>
       {mode !== 'single' ? <div style={{ height: model.prefix(window.start) }} /> : null}
       {Array.from({ length: window.end - window.start }, (_, rowOffset) => {
         const row = window.start + rowOffset;
@@ -277,6 +278,13 @@ export default function MangaLibrary({ active }: { active: boolean }) {
   const [more, setMore] = useState(false);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
+  const [recent, setRecent] = useState<Recent[]>([]);
+  useEffect(() => {
+    if (!active || selected) return;
+    const controller = new AbortController();
+    api<Recent[]>('/api/media/manga/recent', { signal: controller.signal }).then(setRecent).catch(() => undefined);
+    return () => controller.abort();
+  }, [active, selected]);
   useEffect(() => {
     if (!active || selected) return;
     const controller = new AbortController(); setError('');
@@ -288,6 +296,12 @@ export default function MangaLibrary({ active }: { active: boolean }) {
   }, [active, selected, offset, revision]);
   if (selected) return <BookReader key={selected.logical_path} book={selected} active={active} onBack={() => { setSelected(undefined); setRevision(value => value + 1); }} />;
   return <section className="space-y-4"><button className={button} onClick={() => setRevision(value => value + 1)}>刷新书架</button>
+    {recent.length ? <div className="space-y-1"><p className="text-sm text-muted">继续阅读</p>
+      <div className="flex gap-2 overflow-x-auto pb-1">{recent.map(r => <button key={r.logical_path} className="w-28 shrink-0 overflow-hidden rounded-lg border border-line bg-surface text-left hover:border-primary"
+        onClick={() => setSelected({ title: r.title, logical_path: r.logical_path, library_name: '', read_only: true, total_pages: 0 })}>
+        <img className="aspect-[3/4] w-full object-cover" loading="lazy" decoding="async" src={`/api/media/manga/cover?path=${encodeURIComponent(r.logical_path)}&revision=${revision}`} alt="" />
+        <span className="block truncate px-1.5 pt-1 text-xs">{r.title}</span><span className="block px-1.5 pb-1 text-xs text-muted">读到第 {r.page_index + 1} 页</span>
+      </button>)}</div></div> : null}
     {error ? <p role="alert" className="text-danger">{error}</p> : null}
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">{books.map(book => <button key={book.logical_path} className="overflow-hidden rounded-lg border border-line bg-surface text-left" onClick={() => setSelected(book)}>
       <img className="aspect-[3/4] w-full object-cover" loading="lazy" decoding="async" src={active ? `/api/media/manga/cover?path=${encodeURIComponent(book.logical_path)}&revision=${revision}` : undefined} alt={book.title} />

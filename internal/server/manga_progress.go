@@ -159,3 +159,42 @@ func (r *Router) handleMangaProgress(w http.ResponseWriter, req *http.Request) {
 	}
 	writeJSON(w, 200, positionStored)
 }
+
+// handleMangaRecent 返回当前账号最近读过的漫画（最多 12 本），附读到的页；文件已不在的跳过。
+func (r *Router) handleMangaRecent(w http.ResponseWriter, req *http.Request) {
+	if !r.checkSectionAccess(w, req, "manga", auth.TargetAll) {
+		return
+	}
+	type recent struct {
+		Title       string `json:"title"`
+		LogicalPath string `json:"logical_path"`
+		PageIndex   int    `json:"page_index"`
+	}
+	out := []recent{}
+	user := auth.UserFromContext(req.Context())
+	if user.ID <= 0 || r.userState == nil {
+		writeJSON(w, 200, out)
+		return
+	}
+	list, err := r.userState.RecentManga(req.Context(), user.ID, 12)
+	if err != nil {
+		http.Error(w, "progress storage unavailable", 503)
+		return
+	}
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", 503)
+		return
+	}
+	for _, p := range list {
+		if !access.allows(p.MangaID) {
+			continue
+		}
+		if _, _, err := r.mangaIdentity(p.MangaID); err != nil {
+			continue // 所在库离线或文件已移走
+		}
+		name := p.MangaID[strings.LastIndex(p.MangaID, "/")+1:]
+		out = append(out, recent{Title: strings.TrimSuffix(name, filepath.Ext(name)), LogicalPath: p.MangaID, PageIndex: p.PageIndex})
+	}
+	writeJSON(w, 200, out)
+}

@@ -134,6 +134,26 @@ func (d *DB) SaveManga(ctx context.Context, p *manga.MangaProgress) error {
 	return err
 }
 
+// RecentManga 返回账号最近读过的书（按更新时间倒序）。
+func (d *DB) RecentManga(ctx context.Context, userID int64, limit int) ([]manga.MangaProgress, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT manga_id,chapter_index,page_index,scroll_offset_ratio,updated_at FROM manga_progress WHERE user_id=? ORDER BY updated_at DESC LIMIT ?`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []manga.MangaProgress
+	for rows.Next() {
+		p := manga.MangaProgress{UserID: userID}
+		var updated string
+		if err := rows.Scan(&p.MangaID, &p.ChapterIndex, &p.PageIndex, &p.ScrollOffsetRatio, &updated); err != nil {
+			return nil, err
+		}
+		p.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
+		list = append(list, p)
+	}
+	return list, rows.Err()
+}
+
 // Manga reads a single user's book position; an unseen book returns nil.
 func (d *DB) Manga(ctx context.Context, userID int64, id string) (*manga.MangaProgress, error) {
 	if userID <= 0 || id == "" || len(id) > 4096 {
