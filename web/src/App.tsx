@@ -7,7 +7,7 @@ const PasswordChange = lazy(() => import('./PasswordChange'));
 const ShortVideoPage = lazy(() => import('./ShortVideoPage'));
 const GalleryPage = lazy(() => import('./GalleryPage'));
 const AudioPage = lazy(() => import('./AudioPage'));
-const TextLibrary = lazy(() => import('./TextLibrary'));
+const TextPage = lazy(() => import('./TextPage'));
 const MangaLibrary = lazy(() => import('./MangaLibrary'));
 const GameLibrary = lazy(() => import('./GameLibrary'));
 const LegacyTools = lazy(() => import('./LegacyTools'));
@@ -82,11 +82,11 @@ function Shell() {
     <header className="sticky top-0 z-30 border-b border-line bg-background">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1">
         <h1 className="text-lg font-semibold text-primary">omniHub</h1>
-        <nav className="flex min-w-0 flex-1 gap-1 overflow-x-auto" aria-label="主要导航">
+        <nav className="order-last flex min-w-0 basis-full gap-1 overflow-x-auto sm:order-none sm:flex-1 sm:basis-auto" aria-label="主要导航">
           {visible.map(([id, label]) => <button key={id} className={tabStyle(current === id)} onClick={() => choose(id)}>{label}</button>)}
         </nav>
-        <span className="text-xs text-muted">{library}</span>
-        <span className="text-sm text-muted">{status?.user.username ?? '访客'}{status ? ` · Lv.${status.user.level}` : ''}</span>
+        <span className="ml-auto hidden text-xs text-muted sm:inline">{library}</span>
+        <span className="ml-auto text-sm text-muted sm:ml-0">{status?.user.username ?? '访客'}{status ? ` · Lv.${status.user.level}` : ''}</span>
         {status?.logged_in
           ? <><button className={headerButton} onClick={() => setPasswordOpen(v => !v)}>修改密码</button>
             <button className={headerButton} onClick={() => { void post('/api/auth/logout', {}).then(() => window.location.reload()).catch((e: Error) => setError(e.message)); }}>退出</button></>
@@ -107,7 +107,7 @@ function Shell() {
         {current === 'shortvideo' ? <ShortVideoPage active /> : null}
         {current === 'gallery' ? <GalleryPage active isAdmin={status?.user.role === 'admin'} /> : null}
         {current === 'audio' ? <AudioPage active /> : null}
-        {current === 'text' ? <TextLibrary active /> : null}
+        {current === 'text' ? <TextPage active /> : null}
         {current === 'manga' ? <MangaLibrary active /> : null}
         {current === 'games' ? <GameLibrary /> : null}
         {current === 'tools' ? <LegacyTools /> : null}

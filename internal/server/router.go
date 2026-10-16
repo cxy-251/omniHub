@@ -284,6 +284,8 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/text/novels", r.handleNovels)
 	r.mux.HandleFunc("/api/media/text/novel-categories", r.handleNovelCategories)
 	r.mux.HandleFunc("/api/media/text/recent", r.handleRecentText)
+	r.mux.HandleFunc("/api/media/text/docs", r.handleDocsTree)
+	r.mux.HandleFunc("/api/media/text/raw", r.handleDocRaw)
 	r.mux.HandleFunc("/api/media/text/epub-content/", r.handleEpubContent)
 
 	// 音频业务接口
