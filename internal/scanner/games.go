@@ -110,7 +110,8 @@ func ReadGameMetadata(ctx context.Context, standaloneGamesDir string, categories
 			continue
 		}
 		target := "gui_only"
-		if name == "rpg" || name == "slg" || name == "retro" || name == "flash" {
+		// Flash 不支持（Ruffle 已移除），flash_games 目录不再当网页游戏。
+		if name == "rpg" || name == "slg" || name == "retro" {
 			target = "web_only"
 		}
 		entries, err := gameEntries(root, category.Name())

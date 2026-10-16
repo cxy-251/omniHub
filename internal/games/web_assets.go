@@ -22,16 +22,13 @@ func WebEntry(directory string, game *Game) (kind, entry string, resultErr error
 	}
 	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
 	kind = "html"
-	if game.Category == "retro" || game.Category == "flash" {
+	if game.Category == "retro" {
 		kind = game.Category
 	}
 	matches := func(name string) bool {
 		ext := strings.ToLower(path.Ext(name))
 		if kind == "html" {
 			return ext == ".html" || ext == ".htm"
-		}
-		if kind == "flash" {
-			return ext == ".swf"
 		}
 		switch ext {
 		case ".nes", ".sfc", ".smc", ".gb", ".gbc", ".gba", ".n64", ".z64", ".v64", ".nds", ".md", ".gen", ".sms", ".gg", ".pce", ".zip":

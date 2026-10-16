@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { api, request } from './api';
 
 type Game = { id: string; name: string; category: string; library_id: string; library_name: string; target: 'web_only' };
-type Grant = { token: string; kind: 'html' | 'retro' | 'flash'; url: string; expires_at: string };
-const categories = [['', '全部'], ['rpg', 'RPG'], ['slg', 'SLG'], ['retro', '模拟器'], ['flash', 'Flash']] as const;
+type Grant = { token: string; kind: 'html' | 'retro'; url: string; expires_at: string };
+const categories = [['', '全部'], ['rpg', 'RPG'], ['slg', 'SLG'], ['retro', '模拟器']] as const;
 // Stable per browser tab, also on LAN HTTP where randomUUID is unavailable.
 const clientID = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('');
 const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
@@ -64,7 +64,7 @@ export default function GameLibrary() {
     const controller = new AbortController(); openRequest.current = controller;
     try {
       const grant = await api<Grant>('/api/games/web/open', { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ library_id: game.library_id, id: game.id, client_id: clientID }) });
-      if (!grant.token || !['html', 'retro', 'flash'].includes(grant.kind) || !grant.url.startsWith(`/game-content/${grant.token}/`)) throw new Error('游戏入口响应无效');
+      if (!grant.token || !['html', 'retro'].includes(grant.kind) || !grant.url.startsWith(`/game-content/${grant.token}/`)) throw new Error('游戏入口响应无效');
       if (controller.signal.aborted || !mounted.current) { revoke(grant); return; }
       activeGrant.current = grant; setPlaying({ game, grant });
     } catch (failure) { if (!controller.signal.aborted && mounted.current) setError((failure as Error).message); }

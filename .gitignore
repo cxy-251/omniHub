@@ -5,3 +5,5 @@ node_modules/
 build/
 features/sc2/.venv/
 __pycache__/
+web/dist/
+web/vendor/

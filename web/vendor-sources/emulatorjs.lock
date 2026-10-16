@@ -1,0 +1,13 @@
+# 网页端离线运行器（EmulatorJS 4.2.3）按固定版本从 npm 下载；第二列是 npm 登记的 sha512 完整性校验值。
+# 改版本时同时更新这里与补丁文件，由 scripts/fetch-web-vendor.sh 读取。
+@emulatorjs/emulatorjs 4.2.3 sha512-7z3qaA4LwyurhuGvdMUDF9xJpEbxC3SNy9+E9tSaOsRo8FCS2QXam/0k/lc9kqHWRFIlLKWahNjPAStyL0rFnw==
+@emulatorjs/core-fceumm 4.2.3 sha512-XX9Vv2N/hzp0TstNMCTSppEs+sg+1lpJpPdSDuRqIO/cwdt7dUcF+WjNX1yQJLRbP5+XwcNHZ6K4BKy8CJpndQ==
+@emulatorjs/core-snes9x 4.2.3 sha512-JTe9Rv9eOuCkgkG4ILwuCZUqNcVI3m9ju1NHTTjridUlFgJSqL4DUqF/vLKN9olCpsqlJFfcCayAOoikJxefwA==
+@emulatorjs/core-gambatte 4.2.3 sha512-Oq3AJL9SKnMsNAmtAP2eN934TQts3NHeaAe0z1BO9Lx/L3xDZKLpxL+XwgcSXIrl4Sx1oXxYEUwD7JjPEQ0DGg==
+@emulatorjs/core-mgba 4.2.3 sha512-daiHzZQKEr+P9fra7j5YoEAXiyYUEtBhFQ8EAV/SeCtrkvqtayU7GQ9LYgoSgzkKSwsbNSskApqGuA9EGARYPA==
+@emulatorjs/core-mupen64plus_next 4.2.3 sha512-HnnEXbOEpYxD7f2wUJQLxWUpEB0bT2kC56u5s7PLyj/xNI5ckQKka5+ay1QhU2fOv2BuPRwjjhlzmVJmk5e3hw==
+@emulatorjs/core-melonds 4.2.3 sha512-IjsEBNLPPbqU2GSeWEoEkOgAonK3JEyzvoYR3ucgOXu6InzDNdfuA5kP/mMh3d6DwCUbOwfnqGZuZXMTyNE2wA==
+@emulatorjs/core-genesis_plus_gx 4.2.3 sha512-D1e2XA2CPRAjfr0JurpXJgR9dePxl/xHtaE8v1T9BqD9A3DLfobIFWsWU9jCFS4NfUxCvcLdTYdY/We3QzvcTw==
+@emulatorjs/core-smsplus 4.2.3 sha512-93G2pY9HJVl5pImoIQbDhtswVkX9aIgrrihdGTFHqurhisYHl74XCpzmCoMzdB5UMx09nFW12S+n+bLTIuiLrA==
+@emulatorjs/core-mednafen_pce 4.2.3 sha512-PwnQAKKxWT8m8dUscH4VX8jcClvgxgR/NkE6FxNE8qiRDyBH3Jze7+tF9+UdWLoJRBwssR5knd7o/Es9xIlU6A==
+@emulatorjs/core-fbneo 4.2.3 sha512-54Yx8Kcq8DH42caTakws3pMUZc6UkBNqtZgg7Q04lNmWWc/W0wPGN0gHxG90xmlOFGHHtxp9QnicBb1NXMjGWg==
