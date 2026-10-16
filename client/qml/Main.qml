@@ -117,7 +117,7 @@ DarkWindow {
                 spacing: 4
                 Repeater {
                     model: [{page: 4, label: "短视频"}, {page: 5, label: "相册"},
-                            {page: 1, label: "游戏"}, {page: 3, label: "小说"}, {page: 6, label: "音声"}, {page: 7, label: "下载"}, {page: 2, label: "资源库"}]
+                            {page: 1, label: "游戏"}, {page: 3, label: "小说"}, {page: 6, label: "音声"}, {page: 7, label: "下载"}, {page: 2, label: "设置"}]
                     delegate: Chip {
                         required property var modelData
                         text: modelData.label
@@ -154,7 +154,7 @@ DarkWindow {
             }
             Loader {
                 active: mainWindow.pagesReady && stack.currentIndex === 2
-                sourceComponent: Component { LibraryView { } }
+                sourceComponent: Component { SettingsView { } }
             }
             Loader { id: textLoader; active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 3; sourceComponent: Component { NovelView { } } }
             Loader {

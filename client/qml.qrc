@@ -9,6 +9,9 @@
         <file>qml/SC2Panel.qml</file>
         <file>qml/TouchControls.qml</file>
         <file>qml/LibraryView.qml</file>
+        <file>qml/SettingsView.qml</file>
+        <file>qml/ShortVideoAdmin.qml</file>
+        <file>qml/AccountsAdmin.qml</file>
         <file>qml/ShortVideoView.qml</file>
         <file>qml/MatrixView.qml</file>
         <file>qml/MatrixWindow.qml</file>
