@@ -10,3 +10,6 @@
   --color-primary: var(--accent);
   --color-danger: var(--danger);
 }
+
+/* 深色细滚动条（默认的浅色滚动条在深色界面里很扎眼） */
+* { scrollbar-width: thin; scrollbar-color: #30363d transparent; }

@@ -290,12 +290,13 @@ type Key struct {
 	Width     int
 	Height    int
 	Duration  float64
+	Codec     string
 }
 
 // Keys 返回符合筛选的全部作品键，按发布日期倒序。跨库分页与多联放映序列据此合并排序。
 func (s *Store) Keys(f Filter) ([]Key, error) {
 	where, args := f.clause()
-	rows, err := s.index.Query("SELECT id, published, kind, width, height, duration FROM posts"+where+" ORDER BY published DESC, id DESC", args...)
+	rows, err := s.index.Query("SELECT id, published, kind, width, height, duration, codec FROM posts"+where+" ORDER BY published DESC, id DESC", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +304,7 @@ func (s *Store) Keys(f Filter) ([]Key, error) {
 	var keys []Key
 	for rows.Next() {
 		var k Key
-		if err := rows.Scan(&k.ID, &k.Published, &k.Kind, &k.Width, &k.Height, &k.Duration); err != nil {
+		if err := rows.Scan(&k.ID, &k.Published, &k.Kind, &k.Width, &k.Height, &k.Duration, &k.Codec); err != nil {
 			return nil, err
 		}
 		keys = append(keys, k)

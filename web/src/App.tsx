@@ -1,30 +1,50 @@
 import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { api, post, type Status } from './api';
+import { AudioBar, AudioProvider } from './AudioEngine';
+import { store, stored } from './ui';
 
 const PasswordChange = lazy(() => import('./PasswordChange'));
-const ModulePage = lazy(() => import('./ModulePage'));
-const modules = [
-  { id: 'media', title: '媒体专区', description: '相册、漫画、文本、音频与短视频' },
-  { id: 'games', title: '网页游戏', description: 'RPG、模拟器与 SLG' },
-  { id: 'tools', title: '局域网工具', description: '文件共享、剪贴板与只读状态看板' },
-  { id: 'tasks', title: '任务调试台', description: '脚本任务与实时日志' },
-  { id: 'admin', title: '管理', description: '用户权限、资源库与短视频索引' },
+const ShortVideoPage = lazy(() => import('./ShortVideoPage'));
+const GalleryPage = lazy(() => import('./GalleryPage'));
+const AudioPage = lazy(() => import('./AudioPage'));
+const TextLibrary = lazy(() => import('./TextLibrary'));
+const MangaLibrary = lazy(() => import('./MangaLibrary'));
+const GameLibrary = lazy(() => import('./GameLibrary'));
+const LegacyTools = lazy(() => import('./LegacyTools'));
+const TaskConsole = lazy(() => import('./TaskConsole'));
+const AdminCenter = lazy(() => import('./AdminCenter'));
+
+// 导航与桌面端一致；只显示当前账号有权限的分区（服务端 /api/sections 决定）。
+const tabs = [
+  ['shortvideo', '短视频'], ['gallery', '相册'], ['audio', '音声'], ['text', '文本'], ['manga', '漫画'],
+  ['games', '游戏'], ['tools', '工具'], ['tasks', '任务'], ['admin', '设置'],
 ] as const;
-export type ModuleID = typeof modules[number]['id'];
+type Tab = typeof tabs[number][0];
 type Libraries = { primary: { name: string } | null };
 
 export default function App() {
+  return <AudioProvider><Shell /></AudioProvider>;
+}
+
+function Shell() {
   const [status, setStatus] = useState<Status>();
   const [sections, setSections] = useState<string[]>([]);
-  const [library, setLibrary] = useState<string>('加载资源库…');
-  const [active, setActive] = useState<ModuleID | 'portal'>('portal');
+  const [library, setLibrary] = useState('');
+  // 当前标签记在网址 #后（可前进/后退、可直接打开某页），没有时用上次的。
+  const fromHash = () => tabs.find(([id]) => window.location.hash.split('/')[0] === `#${id}`)?.[0];   // #gallery/matrix 直接打开多联放映
+  const [tab, setTab] = useState<Tab>(() => fromHash() ?? stored('omnihub.tab', 'shortvideo'));
+  useEffect(() => {
+    const changed = () => { const t = fromHash(); if (t) setTab(t); };
+    window.addEventListener('hashchange', changed);
+    return () => window.removeEventListener('hashchange', changed);
+  }, []);
   const [error, setError] = useState('');
   const [loginOpen, setLoginOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [libraryRevision, setLibraryRevision] = useState(0);
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -34,56 +54,67 @@ export default function App() {
       api<Libraries>('/api/library/list', { signal: controller.signal }),
     ]).then(([nextStatus, access, libraries]) => {
       setStatus(nextStatus); setSections(access.sections);
-      setLibrary(libraries.primary ? `主库：${libraries.primary.name}` : '尚未配置资源库');
+      setLibrary(libraries.primary ? libraries.primary.name : '尚未配置资源库');
     }).catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
-  }, [libraryRevision]);
+  }, [revision]);
   useEffect(() => {
-    const changed = () => setLibraryRevision(value => value + 1);
+    const changed = () => setRevision(v => v + 1);
     window.addEventListener('omni-library-changed', changed);
     return () => window.removeEventListener('omni-library-changed', changed);
   }, []);
-
-  const visible = modules.filter(m => m.id === 'media'
-    ? sections.some(s => ['gallery', 'shortvideo', 'text', 'audio', 'manga'].includes(s))
-    : sections.includes(m.id));
+  const visible = tabs.filter(([id]) => sections.includes(id));
+  // 记住的标签没有权限时，退到第一个可见标签。
+  const current: Tab | undefined = visible.some(([id]) => id === tab) ? tab : visible[0]?.[0];
+  const choose = (id: Tab) => { setTab(id); store('omnihub.tab', id); window.location.hash = id; };
 
   async function login(event: FormEvent) {
     event.preventDefault(); setPending(true); setError('');
     try {
       await post('/api/auth/login', { username, password });
-      const [next, access] = await Promise.all([api<Status>('/api/auth/status'), api<{ sections: string[] }>('/api/sections')]);
-      setStatus(next); setSections(access.sections); setPassword(''); setLoginOpen(false); setActive('portal');
+      setPassword(''); setLoginOpen(false); setRevision(v => v + 1);
     } catch (e) { setError((e as Error).message); } finally { setPending(false); }
   }
 
-  const navigationStyle = (selected: boolean) => `shrink-0 rounded-md px-3 py-1 text-sm ${selected ? 'bg-panel text-primary' : 'text-muted hover:bg-panel hover:text-foreground'}`;
-  return <div className="min-h-screen bg-background text-foreground antialiased">
-    <header className="sticky top-0 z-20 flex h-auto min-h-11 flex-wrap items-center justify-between gap-2 border-b border-line bg-panel px-3 py-1.5">
-      <div className="flex flex-wrap items-center gap-3"><h1 className="text-lg font-semibold text-primary">omniHub</h1><span className="text-sm text-muted">{library}</span></div>
-      <div className="flex items-center gap-3"><span className="text-sm text-muted">{status?.user.username ?? '访客'}{status ? ` · Lv.${status.user.level}` : ''}</span>
-        <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => setLoginOpen(!loginOpen)}>登录账号</button>
- {status?.logged_in ? <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => setPasswordOpen(value => !value)}>修改密码</button> : null}
- {status?.logged_in ? <button className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary" onClick={() => { void post('/api/auth/logout', {}).then(() => window.location.reload()).catch((e: Error) => setError(e.message)); }}>退出登录</button> : null}</div>
+  const tabStyle = (selected: boolean) => `shrink-0 rounded-md px-3 py-1 text-sm ${selected ? 'bg-panel text-primary' : 'text-muted hover:bg-panel hover:text-foreground'}`;
+  const headerButton = 'rounded-md border border-line px-2.5 py-1 text-sm hover:border-primary';
+  return <div className="min-h-screen bg-background pb-16 text-foreground antialiased">
+    <header className="sticky top-0 z-30 border-b border-line bg-background">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1">
+        <h1 className="text-lg font-semibold text-primary">omniHub</h1>
+        <nav className="flex min-w-0 flex-1 gap-1 overflow-x-auto" aria-label="主要导航">
+          {visible.map(([id, label]) => <button key={id} className={tabStyle(current === id)} onClick={() => choose(id)}>{label}</button>)}
+        </nav>
+        <span className="text-xs text-muted">{library}</span>
+        <span className="text-sm text-muted">{status?.user.username ?? '访客'}{status ? ` · Lv.${status.user.level}` : ''}</span>
+        {status?.logged_in
+          ? <><button className={headerButton} onClick={() => setPasswordOpen(v => !v)}>修改密码</button>
+            <button className={headerButton} onClick={() => { void post('/api/auth/logout', {}).then(() => window.location.reload()).catch((e: Error) => setError(e.message)); }}>退出</button></>
+          : <button className={headerButton} onClick={() => setLoginOpen(v => !v)}>登录</button>}
+      </div>
     </header>
-    <nav className="flex gap-1 overflow-x-auto border-b border-line px-3 py-1" aria-label="主要导航">
-      <button className={navigationStyle(active === 'portal')} onClick={() => setActive('portal')}>门户大厅</button>
-      {visible.map(m => <button key={m.id} className={navigationStyle(active === m.id)} onClick={() => setActive(m.id)}>{m.title}</button>)}
-    </nav>
     <main className="mx-auto max-w-screen-2xl px-3 py-2">
-      {error ? <p role="alert" className="mb-4 whitespace-pre-wrap text-danger">{error}</p> : null}
-      {passwordOpen && status?.logged_in ? <Suspense fallback={<p role="status">正在加载…</p>}><PasswordChange onCancel={() => setPasswordOpen(false)} /></Suspense> : null}
-      {loginOpen ? <form className="mb-6 flex flex-wrap items-end gap-3 rounded-lg border border-line bg-panel p-4" onSubmit={login}>
-        <label className="flex flex-col gap-2 text-sm">用户名<input className="min-w-40 rounded-md border border-line bg-background px-3 py-2" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} required maxLength={64} /></label>
-        <label className="flex flex-col gap-2 text-sm">密码<input className="min-w-40 rounded-md border border-line bg-background px-3 py-2" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required maxLength={72} /></label>
-        <button className="rounded-md border border-primary px-4 py-2 text-primary disabled:opacity-50" disabled={pending}>{pending ? '登录中…' : '登录'}</button>
+      {error ? <p role="alert" className="mb-3 whitespace-pre-wrap text-danger">{error}</p> : null}
+      {passwordOpen && status?.logged_in ? <Suspense fallback={null}><PasswordChange onCancel={() => setPasswordOpen(false)} /></Suspense> : null}
+      {loginOpen ? <form className="mb-4 flex flex-wrap items-end gap-3 rounded-lg border border-line bg-panel p-4" onSubmit={login}>
+        <label className="flex flex-col gap-1 text-sm">用户名<input className="min-w-40 rounded-md border border-line bg-background px-3 py-1.5" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} required maxLength={64} /></label>
+        <label className="flex flex-col gap-1 text-sm">密码<input className="min-w-40 rounded-md border border-line bg-background px-3 py-1.5" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required maxLength={72} /></label>
+        <button className="rounded-md border border-primary px-4 py-1.5 text-primary disabled:opacity-50" disabled={pending}>{pending ? '登录中…' : '登录'}</button>
       </form> : null}
-      {active === 'portal' ? <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {visible.map(m => <button key={m.id} className="rounded-lg border border-line bg-panel p-5 text-left transition-colors hover:border-primary focus-visible:outline-2 focus-visible:outline-primary" onClick={() => setActive(m.id)}><h3 className="mb-2 text-lg font-semibold">{m.title}</h3><p className="text-sm text-muted">{m.description}</p></button>)}
-        {!status && !error ? <p role="status">正在连接服务…</p> : null}
-      </section> : <Suspense fallback={<p role="status">正在加载模块…</p>}>
-        <ModulePage key={`${active}-${status?.user.id}`} id={active} sections={sections} />
-      </Suspense>}
+      {!status && !error ? <p role="status">正在连接服务…</p> : null}
+      {status && !visible.length ? <p className="text-muted">当前账号没有可访问的内容，请登录。</p> : null}
+      <Suspense fallback={<p role="status">正在加载…</p>}>
+        {current === 'shortvideo' ? <ShortVideoPage active /> : null}
+        {current === 'gallery' ? <GalleryPage active isAdmin={status?.user.role === 'admin'} /> : null}
+        {current === 'audio' ? <AudioPage active /> : null}
+        {current === 'text' ? <TextLibrary active /> : null}
+        {current === 'manga' ? <MangaLibrary active /> : null}
+        {current === 'games' ? <GameLibrary /> : null}
+        {current === 'tools' ? <LegacyTools /> : null}
+        {current === 'tasks' ? <TaskConsole /> : null}
+        {current === 'admin' ? <AdminCenter /> : null}
+      </Suspense>
     </main>
+    <AudioBar onOpen={() => choose('audio')} />
   </div>;
 }

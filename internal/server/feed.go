@@ -100,19 +100,24 @@ type feedQuery struct {
 	portrait bool
 	kind     string
 	shuffle  bool
+	codecs   string // 逗号分隔；非空时只要这些编码（网页端：浏览器能播的），未探测编码的排除
 }
 
 func parseFeedQuery(req *http.Request) feedQuery {
 	q := req.URL.Query()
 	seed, _ := strconv.ParseInt(q.Get("seed"), 10, 64)
-	return feedQuery{channel: q.Get("channel"), seed: seed, portrait: q.Get("portrait") == "1", kind: q.Get("kind"), shuffle: q.Get("order") == "shuffle"}
+	codecs := q.Get("codecs")
+	if len(codecs) > 200 {
+		codecs = codecs[:200]
+	}
+	return feedQuery{channel: q.Get("channel"), seed: seed, portrait: q.Get("portrait") == "1", kind: q.Get("kind"), shuffle: q.Get("order") == "shuffle", codecs: codecs}
 }
 
 // feedOrderFor 返回频道里的条目顺序（snapshot.items 的下标）。推荐结果按种子缓存，翻页时顺序不变。
 func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapshot, q feedQuery) ([]int32, error) {
 	ctx := req.Context()
 	user := auth.UserFromContext(ctx)
-	cacheKey := fmt.Sprintf("%d|%s|%s|%s|%d|%t|%s|%t", user.ID, domain, snap.key, q.channel, q.seed, q.portrait, q.kind, q.shuffle)
+	cacheKey := fmt.Sprintf("%d|%s|%s|%s|%d|%t|%s|%t|%s", user.ID, domain, snap.key, q.channel, q.seed, q.portrait, q.kind, q.shuffle, q.codecs)
 	r.feed.mu.Lock()
 	for _, o := range r.feed.orders {
 		if o.key == cacheKey {
@@ -128,7 +133,18 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 	}
 	cat := snap.cat
 	kindTag := cat.Lookup("kind:" + q.kind)
+	var codecTags []int32
+	if q.codecs != "" {
+		for _, c := range strings.Split(q.codecs, ",") {
+			codecTags = append(codecTags, cat.Lookup("codec:"+strings.TrimSpace(c)))
+		}
+	}
+	videoTag := cat.Lookup("kind:video")
 	keep := func(it *feed.Item) bool {
+		// 编码过滤只针对视频（图集没有编码）；未探测编码的视频也排除。
+		if len(codecTags) > 0 && cat.HasTag(it, videoTag) && !hasAnyTag(cat, it, codecTags) {
+			return false
+		}
 		if q.portrait && it.Ratio > 0 && it.Ratio <= 1000 { // 竖屏：高大于宽（方形也排除）
 			return false
 		}
@@ -498,6 +514,9 @@ func (s svFeed) items(req *http.Request) (*feed.Catalog, error) {
 			if t := durationTag(k.Duration); t != "" {
 				tags = append(tags, t)
 			}
+			if k.Codec != "" {
+				tags = append(tags, "codec:"+k.Codec)
+			}
 			r := row{id: k.ID, lib: lib.ID, creator: creator, tags: tags}
 			if t, err := time.Parse("2006-01-02", k.Published); err == nil {
 				r.date = t.Unix()
@@ -789,4 +808,13 @@ func (r *Router) WarmFeeds() {
 		return
 	}
 	_, _ = r.feedSnapshot(req, "shortvideo", svFeed{r})
+}
+
+func hasAnyTag(cat *feed.Catalog, it *feed.Item, tags []int32) bool {
+	for _, t := range tags {
+		if cat.HasTag(it, t) {
+			return true
+		}
+	}
+	return false
 }

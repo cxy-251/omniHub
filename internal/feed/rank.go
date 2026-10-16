@@ -129,7 +129,7 @@ type Signals struct {
 // TagWeight 是各类标签对推荐的影响力：具体的（博主、色调）高，宽泛的（平台、类型、明暗）低，
 // 否则人人都有的宽泛标签会把所有条目一起抬高，拉不开差距。
 var TagWeight = map[string]float64{
-	"creator": 2.0, "platform": 0.25, "kind": 0.2, "dur": 0.3,
+	"creator": 2.0, "platform": 0.25, "kind": 0.2, "dur": 0.3, "codec": 0, // codec 只用于网页端按浏览器能播的编码过滤
 	"color": 0.8, "hue": 0.8, "light": 0.3, "shape": 0.4,
 }
 
