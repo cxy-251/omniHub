@@ -21,6 +21,7 @@
         <file>qml/DownloadForm.qml</file>
         <file>qml/PagedModel.qml</file>
         <file>qml/Chip.qml</file>
+        <file>qml/Toggle.qml</file>
         <file>qml/WheelScroll.qml</file>
         <file>qml/DarkWindow.qml</file>
         <file>qml/GalleryView.qml</file>

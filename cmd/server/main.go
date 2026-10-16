@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -112,12 +113,26 @@ func run(options launchOptions) (result error) {
 		return fmt.Errorf("write local connection: %w", err)
 	}
 
-	// 7. 启动 mDNS 广播
-	mdns, err := network.StartMDNS(port)
-	if err == nil {
-		defer mdns.Shutdown()
-		log.Printf("mDNS service broadcasted on omnihub.local:%d", port)
+	// 7. mDNS 广播：只在允许局域网访问时广播；开关变化时随之启停。
+	var mdnsMu sync.Mutex
+	var mdns *network.MDNSService
+	setMDNS := func(enabled bool) {
+		mdnsMu.Lock()
+		defer mdnsMu.Unlock()
+		if !enabled && mdns != nil {
+			mdns.Shutdown()
+			mdns = nil
+			log.Printf("LAN access disabled; mDNS stopped")
+		} else if enabled && mdns == nil {
+			if service, err := network.StartMDNS(port); err == nil {
+				mdns = service
+				log.Printf("mDNS service broadcasted on omnihub.local:%d", port)
+			}
+		}
 	}
+	setMDNS(app.LANEnabled())
+	app.OnLANChanged = setMDNS
+	defer setMDNS(false)
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", cfg.Server.Host, port),

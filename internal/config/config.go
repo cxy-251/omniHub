@@ -23,6 +23,8 @@ type ServerConfig struct {
 	Port int `json:"port"`
 	// Host 是服务监听的主机地址，默认 "0.0.0.0" 供局域网访问。
 	Host string `json:"host"`
+	// LANDisabled 为 true 时只接受本机直连请求，局域网访问返回 403，并停止 mDNS 广播。
+	LANDisabled bool `json:"lan_disabled,omitempty"`
 }
 
 // Config 是 omniHub 的根配置结构体。

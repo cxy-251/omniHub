@@ -17,6 +17,24 @@ ScrollView {
         width: libraryView.availableWidth
         spacing: 14
         Label { text: "资源库与全局状态"; font.pixelSize: 24; color: "#c9d1d9"; Layout.margins: 16 }
+        // 局域网访问：关闭后手机、电脑等其它设备连不上，只有本机能用（立即生效，不用重启）。
+        RowLayout {
+            Layout.leftMargin: 16; Layout.rightMargin: 16
+            spacing: 8
+            ApiClient { id: lanApi }
+            Toggle {
+                id: lanSwitch
+                text: "允许局域网访问"
+                property bool loaded: false
+                Component.onCompleted: lanApi.getJSON("/api/network/lan", function (r) { lanSwitch.checked = r.enabled; lanSwitch.loaded = true })
+                onToggled: lanApi.send("POST", "/api/network/lan", {enabled: checked}, function (r) { lanSwitch.checked = r.enabled })
+                enabled: loaded
+            }
+            Label {
+                text: lanApi.error || (lanSwitch.checked ? "手机、电脑可以通过局域网访问（omnihub.local）" : "只有这台 Deck 能访问，局域网设备会被拒绝")
+                color: lanApi.error ? "#f85149" : "#8b949e"; font.pixelSize: 12
+            }
+        }
         Label {
             text: backendApi.stateReady ? "账号服务可用" : "全局状态离线：请重新接入原库，然后重新检测。不会创建替代账号库。"
             color: backendApi.stateReady ? "#3fb950" : "#f85149"
@@ -75,7 +93,7 @@ ScrollView {
                     Layout.fillWidth: true
                     Repeater {
                         model: libraryView.allCategories
-                        delegate: Switch {
+                        delegate: Toggle {
                             required property string modelData
                             text: modelData
                             enabled: !backendApi.libraryBusy
