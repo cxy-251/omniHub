@@ -1,19 +1,33 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtCore
 import omniHub.Media 1.0
 
-// 相册（只读）：按色系筛选的缩略图网格 + 原图查看。
+// 相册（只读）：频道（推荐、我的点赞、色系、回收站）的瀑布流 + 原图查看 + 多联放映（图片自动轮播）。
+// 推荐、点赞、回收站、行为上报与短视频共用 FeedApi / ChannelBar / MatrixView。回收站只在 omniHub 里隐藏，不改原图库。
 // 网格数据由 PagedModel 按页懒加载，只保留附近若干页；缩略图按格子尺寸解码。
 // 原图按窗口尺寸解码，切走即释放；页面隐藏时整个视图由 Main.qml 的 Loader 销毁。
 Item {
     id: view
-    property int color: -1
-    property var colorCounts: ({})
     property int openIndex: -1
+    property var audioEngine: null          // 全局音声引擎，交给多联放映做伴听
+    property bool matrixWindowOpen: false
+    signal matrixWindowRequested()
+    Settings { id: viewPrefs; category: "gallery"; property string channel: "recommend"; property string mode: "browse" }
+    property alias channel: viewPrefs.channel
+    property alias mode: viewPrefs.mode       // browse | matrix
 
-    // gallery.db 的 color_family 0~9（定义见 gallery 项目 color_service.ClassifyColor）。
-    readonly property var colorNames: ["红", "橙", "黄", "绿", "蓝", "紫", "粉", "白", "黑", "灰"]
+    FeedApi { id: feed; domain: "gallery" }
+    property var likedOverride: ({})
+    function isLiked(photo) { return photo && (photo.id in likedOverride ? likedOverride[photo.id] : !!photo.liked) }
+    function toggleLike(photo) {
+        var on = !isLiked(photo)
+        feed.like(photo, on, function () { var m = Object.assign({}, view.likedOverride); m[photo.id] = on; view.likedOverride = m })
+    }
+    // 移到回收站 / 从回收站恢复后，列表与排版都要重取（序号变了）。
+    function reload() { paged.reset(); layout.source = ""; layout.source = view.ratiosUrl() }
+    function ratiosUrl() { return backendApi.apiUrl(feed.path("ratios") + "?channel=" + encodeURIComponent(view.channel) + "&seed=" + feed.seed) }
 
     function apiQuery(path, photo) {
         return backendApi.apiUrl(path + "?library_id=" + encodeURIComponent(photo.library_id) + "&id=" + encodeURIComponent(photo.id))
@@ -22,45 +36,38 @@ Item {
     PagedModel {
         id: paged
         pageSize: 100
-        endpoint: "/api/media/gallery/list" + (view.color >= 0 ? "?color=" + view.color : "")
+        endpoint: view.mode === "browse" ? feed.itemsPath(view.channel) : ""
     }
 
-    Component.onCompleted: {
-        var url = backendApi.apiUrl("/api/media/gallery/colors")
-        if (!url) return
-        var xhr = new XMLHttpRequest()
-        xhr.onreadystatechange = function () {
-            if (view && xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) view.colorCounts = JSON.parse(xhr.responseText)
-        }
-        xhr.open("GET", url)
-        xhr.send()
-    }
+    Component.onCompleted: feed.loadGroups()
 
 
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 8
         spacing: 6
-        visible: view.openIndex < 0
+        visible: view.openIndex < 0 && view.mode === "browse"
 
         RowLayout {
             Layout.fillWidth: true
             spacing: 4
-            Repeater {
-                model: 11
-                delegate: Chip {
-                    required property int index
-                    readonly property int family: index - 1
-                    text: family < 0 ? "全部" : view.colorNames[family] + " · " + (view.colorCounts[family] || 0)
-                    selected: view.color === family
-                    onClicked: view.color = family
-                }
-            }
+            Chip { text: "浏览"; selected: true }
+            Chip { text: view.matrixWindowOpen ? "多联放映（窗口）" : "多联放映"; onClicked: if (view.matrixWindowOpen) view.matrixWindowRequested(); else view.mode = "matrix" }
             Item { Layout.fillWidth: true }
+            Chip { text: "换一批"; visible: view.channel === "recommend"; onClicked: feed.reshuffle() }
             Label {
-                text: paged.error || (paged.total + " 张 · 只读")
-                color: paged.error ? "#f85149" : "#8b949e"; font.pixelSize: 12
+                text: paged.error || feed.error || (paged.total + " 张" + (view.channel === "hidden" ? "（回收站，可恢复）" : ""))
+                color: paged.error || feed.error ? "#f85149" : "#8b949e"; font.pixelSize: 12
             }
+        }
+        // 推荐 | 我的点赞 | 色系 | 回收站
+        ChannelBar {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 28
+            feed: feed
+            channel: view.channel
+            showHidden: true
+            onPicked: function (ch) { view.channel = ch }
         }
 
         // 瀑布流：每张照片放进当前最矮的一列，纵坐标随序号单调不减，可二分查找可视范围。
@@ -87,7 +94,7 @@ Item {
             // 排版在 C++ 里做（MasonryLayout）：它自己取全部高宽比，筛选变化时重新取并回到顶部。
             MasonryLayout {
                 id: layout
-                source: backendApi.apiUrl("/api/media/gallery/ratios" + (view.color >= 0 ? "?color=" + view.color : ""))
+                source: view.mode === "browse" ? view.ratiosUrl() : ""
                 columns: masonry.columns
                 columnWidth: masonry.colWidth
                 gap: masonry.gap
@@ -131,6 +138,11 @@ Item {
                             sourceSize.width: masonry.colWidth
                             source: cell.photo ? view.apiQuery("/api/media/gallery/thumbnail", cell.photo) : ""
                         }
+                        Label {
+                            anchors.left: parent.left; anchors.top: parent.top; anchors.margins: 4
+                            visible: view.isLiked(cell.photo)
+                            text: "♥"; color: "#f778ba"; font.pixelSize: 15
+                        }
                         TapHandler { onTapped: if (cell.photo) view.openIndex = cell.photoIndex }
                     }
                 }
@@ -147,7 +159,34 @@ Item {
                 readonly property var photo: { paged.revision; return paged.item(view.openIndex) }
                 // 翻页时先只显示缩略图；停下 250ms 后才加载原图，按住方向键快速翻时不会逐张解码原图。
                 property string originalSource: ""
-                onPhotoChanged: { originalSource = ""; originalTimer.restart() }
+                // 行为上报：展示即 view；离开时 1 秒内划走算 skip，停留 4 秒以上算 dwell。
+                property var shown: null
+                property double shownAt: 0
+                function finish() {
+                    if (!shown) return
+                    var ms = Date.now() - shownAt
+                    if (ms < 1000) feed.event(shown, "skip")
+                    else if (ms >= 4000) feed.event(shown, "dwell")
+                    shown = null
+                }
+                onPhotoChanged: {
+                    originalSource = ""; originalTimer.restart()
+                    finish()
+                    if (photo) { shown = photo; shownAt = Date.now(); viewTimer.restart() }
+                }
+                // 停留 0.6 秒以上才算看过（按住方向键快速翻过的不算）。
+                Timer { id: viewTimer; interval: 600; onTriggered: if (viewer.shown) feed.event(viewer.shown, "view") }
+                Component.onDestruction: finish()
+                property bool trashArmed: false
+                Timer { id: trashDisarm; interval: 3000; onTriggered: viewer.trashArmed = false }
+                function trash() {
+                    if (!trashArmed) { trashArmed = true; trashDisarm.restart(); return }
+                    trashArmed = false
+                    var target = photo
+                    shown = null
+                    var done = function () { view.reload(); if (view.openIndex >= paged.total - 1) view.openIndex = -1 }
+                    if (view.channel === "hidden") feed.restore(target, done); else feed.trash(target, done)
+                }
                 Timer { id: originalTimer; interval: 250; onTriggered: viewer.originalSource = viewer.photo ? view.apiQuery("/api/media/gallery/original", viewer.photo) : "" }
                 color: "black"
                 focus: true
@@ -157,6 +196,7 @@ Item {
                     if (event.key === Qt.Key_Escape || event.key === Qt.Key_Back) view.openIndex = -1
                     else if (event.key === Qt.Key_Right || event.key === Qt.Key_Down) step(1)
                     else if (event.key === Qt.Key_Left || event.key === Qt.Key_Up) step(-1)
+                    else if (event.key === Qt.Key_L && photo) view.toggleLike(photo)
                     else return
                     event.accepted = true
                 }
@@ -201,9 +241,37 @@ Item {
                             text: viewer.photo ? viewer.photo.filename + "  ·  " + viewer.photo.width + "×" + viewer.photo.height : ""
                         }
                         BusyIndicator { running: original.status === Image.Loading || viewer.originalSource === ""; visible: running; implicitHeight: 28; implicitWidth: 28 }
+                        IconButton {
+                            glyph: view.isLiked(viewer.photo) ? "favorite-fill" : "favorite"
+                            enabled: !!viewer.photo
+                            onClicked: view.toggleLike(viewer.photo)
+                            ToolTip.text: view.isLiked(viewer.photo) ? "取消点赞（L）" : "点赞（L）"
+                        }
+                        IconButton {
+                            glyph: "delete"; checked: viewer.trashArmed
+                            enabled: !!viewer.photo
+                            onClicked: viewer.trash()
+                            ToolTip.text: view.channel === "hidden" ? (viewer.trashArmed ? "再点一次：恢复" : "从回收站恢复")
+                                : viewer.trashArmed ? "再点一次：移到回收站（只在 omniHub 里隐藏，可恢复）" : "移到回收站"
+                        }
                     }
                 }
             }
         }
+    }
+
+    // 多联放映（图片自动轮播），与短视频同一个组件
+    Loader {
+        anchors.fill: parent
+        active: view.mode === "matrix" && !view.matrixWindowOpen
+        sourceComponent: Component {
+            MatrixView {
+                domain: "gallery"
+                audioEngine: view.audioEngine
+                onExitRequested: view.mode = "browse"
+                onDetachRequested: { view.mode = "browse"; Qt.callLater(view.matrixWindowRequested) }
+            }
+        }
+        onLoaded: item.forceActiveFocus()
     }
 }

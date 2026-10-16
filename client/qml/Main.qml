@@ -85,7 +85,16 @@ DarkWindow {
     Loader {
         id: matrixWindow
         active: false
-        sourceComponent: Component { MatrixWindow { audioEngine: audio; onClosing: Qt.callLater(function () { matrixWindow.active = false }) } }
+        sourceComponent: Component { MatrixWindow { domain: "shortvideo"; audioEngine: audio; onClosing: Qt.callLater(function () { matrixWindow.active = false }) } }
+    }
+    Loader {
+        id: galleryMatrixWindow
+        active: false
+        sourceComponent: Component { MatrixWindow { domain: "gallery"; audioEngine: audio; onClosing: Qt.callLater(function () { galleryMatrixWindow.active = false }) } }
+    }
+    function openMatrixWindow(loader) {
+        if (loader.item) { loader.item.raise(); loader.item.requestActivate() }
+        else loader.active = true
     }
 
     Column {
@@ -148,14 +157,20 @@ DarkWindow {
                     ShortVideoView {
                         audioEngine: audio
                         matrixWindowOpen: matrixWindow.active
-                        onMatrixWindowRequested: {
-                            if (matrixWindow.item) { matrixWindow.item.raise(); matrixWindow.item.requestActivate() }
-                            else matrixWindow.active = true
-                        }
+                        onMatrixWindowRequested: mainWindow.openMatrixWindow(matrixWindow)
                     }
                 }
             }
-            Loader { active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 5; sourceComponent: Component { GalleryView { } } }
+            Loader {
+                active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 5
+                sourceComponent: Component {
+                    GalleryView {
+                        audioEngine: audio
+                        matrixWindowOpen: galleryMatrixWindow.active
+                        onMatrixWindowRequested: mainWindow.openMatrixWindow(galleryMatrixWindow)
+                    }
+                }
+            }
             Loader { active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 6; sourceComponent: Component { AudioView { engine: audio; request: mainWindow.audioRequest } } }
                         Loader {
                 active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 7

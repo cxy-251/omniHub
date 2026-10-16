@@ -137,7 +137,7 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 		return nil, err
 	}
 	keep := func(it *feed.Item) bool {
-		if q.portrait && it.Ratio > 0 && it.Ratio < 1000 {
+		if q.portrait && it.Ratio > 0 && it.Ratio <= 1000 { // 竖屏：高大于宽（方形也排除）
 			return false
 		}
 		if q.kind != "" && !hasTag(it, "kind:"+q.kind) {

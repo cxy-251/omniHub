@@ -9,11 +9,6 @@ import omniHub.Media 1.0
 Item {
     id: view
     readonly property int pageSize: 60
-    property var creators: []
-    property string platform: ""
-    property string creator: ""
-    property bool liked: false          // 只看我点赞的作品
-    property var pins: []               // 固定的博主 ID（按固定先后）
     property string error: ""
     property int openIndex: -1
     property alias mode: viewPrefs.mode   // browse | matrix，记住上次的模式
@@ -21,19 +16,22 @@ Item {
     property bool matrixWindowOpen: false
     property var audioEngine: null        // 全局音声引擎，交给多联放映做伴听
     signal matrixWindowRequested()
-    Settings { id: viewPrefs; category: "shortvideo"; property string mode: "browse" }
+    Settings { id: viewPrefs; category: "shortvideo"; property string mode: "browse"; property string channel: "recommend" }
+    property alias channel: viewPrefs.channel
 
-    readonly property var platforms: creators.map(function (c) { return c.platform }).filter(function (p, i, a) { return a.indexOf(p) === i })
-    // 博主条：固定的博主排在前面（按固定先后），其余按原顺序。
-    readonly property var shownCreators: {
-        var inPlatform = creators.filter(function (c) { return !platform || c.platform === platform })
-        var byId = {}
-        inPlatform.forEach(function (c) { byId[c.id] = c })
-        var pinned = pins.filter(function (id) { return byId[id] }).map(function (id) { return Object.assign({pinned: true}, byId[id]) })
-        return pinned.concat(inPlatform.filter(function (c) { return pins.indexOf(c.id) < 0 }))
+    // 推荐、点赞、回收站、行为上报与频道（博主分组）——与相册共用 FeedApi。
+    FeedApi { id: feed; domain: "shortvideo"; onErrorChanged: view.error = error }
+    readonly property var platformFilters: {
+        var seen = {}, out = []
+        feed.groups.forEach(function (g) { if (!seen[g.platform]) { seen[g.platform] = true; out.push({channel: "tag:platform:" + g.platform, label: g.platform}) } })
+        return out
     }
-    function setPinned(id, on) {
-        api.send("POST", "/api/media/shortvideo/pins", {creator: id, pinned: on}, function (list) { view.pins = list })
+    // 点赞状态在本地先改，列表数据（按页缓存）不必重取。
+    property var likedOverride: ({})
+    function isLiked(post) { return post && (post.id in likedOverride ? likedOverride[post.id] : !!post.liked) }
+    function toggleLike(post) {
+        var on = !isLiked(post)
+        feed.like(post, on, function () { var m = Object.assign({}, view.likedOverride); m[post.id] = on; view.likedOverride = m })
     }
 
     ApiClient { id: api; onErrorChanged: view.error = error }
@@ -43,12 +41,6 @@ Item {
         return backendApi.apiUrl(path + "?" + q + (extra || ""))
     }
     function localFile(post, rel) { return api.localFile(post, rel) }
-    function postsEndpoint() {
-        if (liked) return "/api/media/shortvideo/posts?liked=1" + (platform ? "&platform=" + encodeURIComponent(platform) : "")
-        if (creator) return "/api/media/shortvideo/posts?creator=" + encodeURIComponent(creator)
-        if (platform) return "/api/media/shortvideo/posts?platform=" + encodeURIComponent(platform)
-        return "/api/media/shortvideo/posts"
-    }
     function postAt(i) { paged.revision; return paged.item(i) }
 
     // 多联放映时清空浏览数据源，网格格子与缩略图随之释放。
@@ -58,12 +50,11 @@ Item {
         running: typeof devScroll !== "undefined" && devScroll < 0 && paged.total > 0
         onTriggered: view.openIndex = (view.openIndex + 1) % paged.total
     }
-    PagedModel { id: paged; endpoint: view.mode === "browse" ? view.postsEndpoint() : "" }
+    PagedModel { id: paged; endpoint: view.mode === "browse" ? feed.itemsPath(view.channel) : "" }
 
     Component.onCompleted: {
         backendApi.refreshLibraries()
-        getJSON("/api/media/shortvideo/creators", function (list) { creators = list })
-        getJSON("/api/media/shortvideo/pins", function (list) { pins = list })
+        feed.loadGroups()
     }
 
 
@@ -79,23 +70,15 @@ Item {
             spacing: 4
             Chip { text: "浏览"; selected: true }
             Chip { text: view.matrixWindowOpen ? "多联放映（窗口）" : "多联放映"; onClicked: if (view.matrixWindowOpen) view.matrixWindowRequested(); else view.mode = "matrix" }
-            Rectangle { width: 1; height: 20; color: "#30363d"; Layout.leftMargin: 4; Layout.rightMargin: 4 }
-            Repeater {
-                model: [""].concat(view.platforms)
-                delegate: Chip {
-                    required property string modelData
-                    text: modelData || "全部平台"
-                    selected: view.platform === modelData
-                    onClicked: { view.platform = modelData; view.creator = "" }
-                }
-            }
             Item { Layout.fillWidth: true }
+            Chip { text: "换一批"; visible: view.channel === "recommend"; onClicked: feed.reshuffle() }
             Chip {
-                readonly property bool isPinned: view.pins.indexOf(view.creator) >= 0
-                visible: view.creator !== "" && !view.liked
+                readonly property string group: view.channel.indexOf("group:") === 0 ? view.channel.slice(6) : ""
+                readonly property bool isPinned: feed.pins.indexOf(group) >= 0
+                visible: group !== ""
                 text: isPinned ? "取消固定博主" : "📌 固定这个博主"
                 selected: isPinned
-                onClicked: view.setPinned(view.creator, !isPinned)
+                onClicked: feed.setPinned(group, !isPinned)
             }
             Label {
                 text: view.error || paged.error || (paged.total > 0 ? paged.total + " 个作品" : (paged.loading ? "" : "没有作品，需先由管理员扫描建立索引"))
@@ -103,21 +86,14 @@ Item {
                 font.pixelSize: 12
             }
         }
-        // 第二行：博主（横向滚动）
-        ListView {
-            WheelScroll { horizontal: true }
+        // 第二行：推荐 | 我的点赞 | 平台 | 📌 固定的博主 | 其余博主
+        ChannelBar {
             Layout.fillWidth: true
             Layout.preferredHeight: 28
-            orientation: ListView.Horizontal
-            spacing: 4
-            clip: true
-            model: [{id: "", name: "全部博主", posts: -1}, {id: "", name: "♥ 我的点赞", posts: -1, liked: true}].concat(view.shownCreators)
-            delegate: Chip {
-                required property var modelData
-                text: (modelData.pinned ? "📌 " : "") + (modelData.posts < 0 ? modelData.name : modelData.name + " · " + modelData.posts)
-                selected: modelData.liked ? view.liked : (!view.liked && view.creator === modelData.id)
-                onClicked: { view.liked = !!modelData.liked; view.creator = modelData.id }
-            }
+            feed: feed
+            channel: view.channel
+            filters: view.platformFilters
+            onPicked: function (ch) { view.channel = ch }
         }
 
         GridView {
@@ -166,6 +142,11 @@ Item {
                         color: "white"; font.pixelSize: 12
                         background: Rectangle { color: "#99000000"; radius: 3 }
                     }
+                    Label {
+                        anchors.left: parent.left; anchors.top: parent.top; anchors.margins: 4
+                        visible: view.isLiked(modelData)
+                        text: "♥"; color: "#f778ba"; font.pixelSize: 16
+                    }
                     Column {
                         anchors.top: thumb.bottom; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 4; anchors.topMargin: 3
                         Label { width: parent.width; text: modelData.title; elide: Text.ElideRight; color: "#c9d1d9"; font.pixelSize: 12 }
@@ -206,7 +187,38 @@ Item {
         readonly property bool isVideo: post?.kind === "video"
         color: "black"
         focus: true
-        onPostChanged: page = 1
+        // 行为上报：展示即 view；离开时按停留与播放进度判断 skip（2 秒内划走）/ complete（看完或 80%）/ dwell（停留 8 秒以上）。
+        property var shown: null
+        property double shownAt: 0
+        property int pagesSeen: 1
+        function finish() {
+            if (!shown) return
+            var ms = Date.now() - shownAt
+            var type = ""
+            if (shown.kind === "video" && video.duration > 0 && (video.position >= video.duration * 0.8)) type = "complete"
+            else if (ms < 2000) type = "skip"
+            else if (ms >= 8000 || pagesSeen >= 3) type = "dwell"
+            if (type) feed.event(shown, type)
+            shown = null
+        }
+        onPostChanged: {
+            finish()
+            page = 1
+            pagesSeen = 1
+            if (post) { shown = post; shownAt = Date.now(); feed.event(post, "view") }
+        }
+        onPageChanged: pagesSeen = Math.max(pagesSeen, page)
+        Component.onDestruction: finish()
+        property bool trashArmed: false
+        Timer { id: trashDisarm; interval: 3000; onTriggered: viewer.trashArmed = false }
+        function trash() {
+            if (!trashArmed) { trashArmed = true; trashDisarm.restart(); return }
+            trashArmed = false
+            var target = post
+            shown = null
+            video.source = ""
+            feed.trash(target, function () { paged.reset(); if (view.openIndex >= paged.total) view.openIndex = -1 })
+        }
         function next() { if (view.openIndex < paged.total - 1) view.openIndex++ }
         function prev() { if (view.openIndex > 0) view.openIndex-- }
         Keys.onPressed: function (event) {
@@ -216,6 +228,7 @@ Item {
             else if (event.key === Qt.Key_Down) page = Math.min(post?.image_count ?? 1, page + 1)
             else if (event.key === Qt.Key_Up) page = Math.max(1, page - 1)
             else if (event.key === Qt.Key_Space && isVideo) video.playing ? video.pause() : video.play()
+            else if (event.key === Qt.Key_L && post) view.toggleLike(post)
             else return
             event.accepted = true
         }
@@ -226,7 +239,7 @@ Item {
             anchors.bottomMargin: 0
             visible: viewer.isVideo
             source: viewer.isVideo ? view.localFile(viewer.post, viewer.post.id) : ""
-            onPlaybackEnded: viewer.next()
+            onPlaybackEnded: { feed.event(viewer.post, "complete"); viewer.shown = null; viewer.next() }
             TapHandler { onTapped: video.playing ? video.pause() : video.play() }
         }
         Image {
@@ -285,6 +298,18 @@ Item {
                     }
                     Item { Layout.fillWidth: true }
                     Label { text: video.error; visible: viewer.isVideo && text.length > 0; color: "#f85149" }
+                    IconButton {
+                        glyph: view.isLiked(viewer.post) ? "favorite-fill" : "favorite"
+                        enabled: !!viewer.post
+                        onClicked: view.toggleLike(viewer.post)
+                        ToolTip.text: view.isLiked(viewer.post) ? "取消点赞（L）" : "点赞（L）"
+                    }
+                    IconButton {
+                        glyph: "delete"; checked: viewer.trashArmed
+                        enabled: !!viewer.post
+                        onClicked: viewer.trash()
+                        ToolTip.text: viewer.trashArmed ? "再点一次：移到系统回收站" : "移到回收站"
+                    }
                     IconButton { visible: !viewer.isVideo; glyph: "chevron_left"; enabled: viewer.page > 1; onClicked: viewer.page--; ToolTip.text: "上一张（↑）" }
                     Label { visible: !viewer.isVideo; color: "white"; font.pixelSize: 13; text: viewer.page + " / " + (viewer.post?.image_count ?? 0) }
                     IconButton { visible: !viewer.isVideo; glyph: "chevron_right"; enabled: viewer.page < (viewer.post?.image_count ?? 1); onClicked: viewer.page++; ToolTip.text: "下一张（↓）" }

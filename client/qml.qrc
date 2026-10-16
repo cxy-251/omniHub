@@ -13,6 +13,8 @@
         <file>qml/MatrixView.qml</file>
         <file>qml/MatrixWindow.qml</file>
         <file>qml/ApiClient.qml</file>
+        <file>qml/FeedApi.qml</file>
+        <file>qml/ChannelBar.qml</file>
         <file>qml/AudioEngine.qml</file>
         <file>qml/AudioBar.qml</file>
         <file>qml/AudioView.qml</file>

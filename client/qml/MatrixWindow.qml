@@ -5,12 +5,14 @@ DarkWindow {
     id: window
     width: 1280; height: 760
     visible: true
-    title: "omniHub 多联放映"
+    property string domain: "shortvideo"
+    title: domain === "gallery" ? "omniHub 相册轮播" : "omniHub 多联放映"
     property var audioEngine: null
     MatrixView {
         id: matrixView
         anchors.fill: parent
         detached: true
+        domain: window.domain
         audioEngine: window.audioEngine
         fullscreen: window.visibility === Window.FullScreen
         onExitRequested: window.close()
