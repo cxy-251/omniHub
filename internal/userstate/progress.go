@@ -103,6 +103,9 @@ func Open(path string) (*DB, error) {
 	if _, err := db.Exec("ALTER TABLE text_progress ADD COLUMN scroll_ratio REAL NOT NULL DEFAULT 0"); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 		return nil, errors.Join(err, db.Close())
 	}
+	if _, err := db.Exec(feedSchema); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
 	return &DB{db: db}, nil
 }
 

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"errors"
 	"math/rand/v2"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 
 	"omnihub/internal/auth"
 	"omnihub/internal/library"
-	"omnihub/internal/platform"
 	"omnihub/internal/shortvideo"
 )
 
@@ -73,11 +71,15 @@ type svPost struct {
 // svLikes 返回当前账号的点赞集合；未登录（游客）为空。
 func (r *Router) svLikes(req *http.Request) map[string]bool {
 	user := auth.UserFromContext(req.Context())
-	likes, err := r.userState.ShortVideoLikes(req.Context(), user.ID)
+	out := map[string]bool{}
+	likes, err := r.userState.Likes(req.Context(), user.ID, "shortvideo")
 	if err != nil {
-		return map[string]bool{}
+		return out
 	}
-	return likes
+	for _, id := range likes {
+		out[id] = true
+	}
+	return out
 }
 
 // onlyLiked 保留点赞过的作品键（liked=1 时用，多联放映的「我的点赞」频道）。
@@ -345,80 +347,4 @@ func (r *Router) handleShortVideoSequence(w http.ResponseWriter, req *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"total": len(all), "index": index, "post": svPost{Post: post, LibraryID: e.lib, Liked: likes[e.ID]}})
-}
-
-// handleShortVideoLike 点赞或取消：POST {"id": 作品ID, "liked": true|false}，需要登录账号。
-func (r *Router) handleShortVideoLike(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	user := auth.UserFromContext(req.Context())
-	if user.ID <= 0 {
-		http.Error(w, "login required", http.StatusForbidden)
-		return
-	}
-	var in struct {
-		ID    string `json:"id"`
-		Liked bool   `json:"liked"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&in); err != nil || !validPostID(in.ID) {
-		http.Error(w, "invalid like", http.StatusBadRequest)
-		return
-	}
-	if err := r.userState.SetShortVideoLike(req.Context(), user.ID, in.ID, in.Liked); err != nil {
-		http.Error(w, "like store unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"liked": in.Liked})
-}
-
-// svTrash 把一条视频移到系统回收站并从索引中去掉（管理员接口 admin/trash?library_id=&id=）。
-func (r *Router) svTrash(w http.ResponseWriter, req *http.Request) {
-	store, dir, post, ok := r.svPostFromRequest(w, req)
-	if !ok {
-		return
-	}
-	if err := store.TrashPost(dir, post, platform.Trash); err != nil {
-		http.Error(w, "move to trash failed: "+err.Error(), http.StatusConflict)
-		return
-	}
-	_ = r.userState.RemoveShortVideoLikes(req.Context(), post.ID)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "trashed"})
-}
-
-// handleShortVideoPins：GET 返回固定的博主（按固定先后）；POST {"creator": ID, "pinned": bool} 固定或取消。
-func (r *Router) handleShortVideoPins(w http.ResponseWriter, req *http.Request) {
-	user := auth.UserFromContext(req.Context())
-	if req.Method == http.MethodGet {
-		pins, err := r.userState.ShortVideoPins(req.Context(), user.ID)
-		if err != nil {
-			http.Error(w, "pin store unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		writeJSON(w, http.StatusOK, pins)
-		return
-	}
-	if req.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if user.ID <= 0 {
-		http.Error(w, "login required", http.StatusForbidden)
-		return
-	}
-	var in struct {
-		Creator string `json:"creator"`
-		Pinned  bool   `json:"pinned"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&in); err != nil || strings.Count(in.Creator, "/") != 1 || strings.ContainsAny(in.Creator, "\\\x00") || strings.Contains(in.Creator, "..") {
-		http.Error(w, "invalid creator", http.StatusBadRequest)
-		return
-	}
-	if err := r.userState.SetShortVideoPin(req.Context(), user.ID, in.Creator, in.Pinned); err != nil {
-		http.Error(w, "pin store unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	pins, _ := r.userState.ShortVideoPins(req.Context(), user.ID)
-	writeJSON(w, http.StatusOK, pins)
 }

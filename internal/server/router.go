@@ -54,6 +54,7 @@ type Router struct {
 	megaClient     *mega.Client
 	downloads      dlState
 	galleryRatios  ratioCache
+	feed           feedState
 	textCatalog    *catalog.Catalog
 	novelCatalog   *catalog.Catalog
 	audioCatalog   *catalog.Catalog
@@ -269,8 +270,6 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/shortvideo/posts", r.handleShortVideoPosts)
 	r.mux.HandleFunc("/api/media/shortvideo/creators", r.handleShortVideoCreators)
 	r.mux.HandleFunc("/api/media/shortvideo/sequence", r.handleShortVideoSequence)
-	r.mux.HandleFunc("/api/media/shortvideo/like", r.handleShortVideoLike)
-	r.mux.HandleFunc("/api/media/shortvideo/pins", r.handleShortVideoPins)
 	r.mux.HandleFunc("/api/media/shortvideo/admin/", r.handleShortVideoAdmin)
 	r.mux.HandleFunc("/api/media/shortvideo/album/image", r.handleShortVideoAlbumImage)
 	r.mux.HandleFunc("/api/media/shortvideo/thumbnail", r.handleShortVideoThumbnail)
@@ -352,6 +351,7 @@ func (r *Router) registerRoutes() {
 	// MEGA 客户端接口 (第 10.2 节)
 	r.mux.HandleFunc("/api/mega/", r.handleMega)
 	r.mux.HandleFunc("/api/downloads/", r.handleDownloads)
+	r.mux.HandleFunc("/api/feed/", r.handleFeed)
 
 	// Legacy primary-only paths cannot safely host game scripts in the UI origin.
 	r.mux.HandleFunc("/standalone_games/", func(w http.ResponseWriter, req *http.Request) {

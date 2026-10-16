@@ -297,3 +297,45 @@ func (m *MetaDB) Ratios(f PhotoFilter) ([]int, error) {
 	}
 	return ratios, rows.Err()
 }
+
+// FeedRow 是推荐用的照片概要。
+type FeedRow struct {
+	ID          string
+	Width       int
+	Height      int
+	ColorFamily int
+	ColorHex    string
+}
+
+// FeedRows 按 ListPhotos 的顺序返回全部照片的概要（推荐排序与多联放映用）。
+func (m *MetaDB) FeedRows() ([]FeedRow, error) {
+	rows, err := m.db.Query("SELECT id, COALESCE(width,0), COALESCE(height,0), COALESCE(color_family,-1), COALESCE(color_hex,'') FROM photos WHERE deleted_at IS NULL ORDER BY created_at DESC, id ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FeedRow
+	for rows.Next() {
+		var r FeedRow
+		if err := rows.Scan(&r.ID, &r.Width, &r.Height, &r.ColorFamily, &r.ColorHex); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// PhotosByID 按给定顺序返回照片，不存在的跳过。
+func (m *MetaDB) PhotosByID(ids []string) ([]*Photo, error) {
+	out := make([]*Photo, 0, len(ids))
+	for _, id := range ids {
+		p, err := m.GetPhoto(id)
+		if err != nil {
+			return nil, err
+		}
+		if p != nil && p.DeletedAt == nil {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
