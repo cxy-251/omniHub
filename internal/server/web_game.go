@@ -1,7 +1,7 @@
 package server
 
 import (
-	"database/sql"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -62,54 +62,32 @@ func (r *Router) handleWebGameOpen(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "library not found", 404)
 		return
 	}
-	directory, err := r.gameStorageDirectory(selected.RootPath)
-	if err != nil {
-		http.Error(w, "game library unavailable", 503)
+	if !selected.IsOnline {
+		http.Error(w, "library offline", 404)
 		return
 	}
-	db, err := r.openGameSource(req.Context(), directory)
+	// 与游戏清单同一套模型：游戏 = 分类目录下的一个子目录（不再读旧的 games.db 索引；
+	// 那个文件现在也用来缓存封面，没有旧索引的表）。
+	gameCategory, gameDir, err := r.gameDir(selected.ID, input.ID)
 	if err != nil {
-		http.Error(w, "game index unavailable", 503)
-		return
-	}
-	game, readErr := db.GetGame(req.Context(), input.ID)
-	closeErr := db.Close()
-	if errors.Is(readErr, sql.ErrNoRows) && closeErr == nil {
 		http.Error(w, "game not found", 404)
 		return
 	}
-	if err := errors.Join(readErr, closeErr); err != nil {
-		http.Error(w, "game index read failed", 503)
-		return
+	webCategory := false
+	for _, c := range webGameCategories {
+		webCategory = webCategory || c == gameCategory
 	}
-	if !game.Available {
-		http.Error(w, "game is missing from its library", 404)
-		return
-	}
-	if game.Target != "web_only" {
+	if !webCategory {
 		http.Error(w, "native game unavailable to web client", 403)
 		return
 	}
-	if err := games.ValidateIndexGame(game); err != nil {
-		http.Error(w, "invalid game metadata", 422)
-		return
-	}
-	category := "standalone_games/" + game.Category + "_games"
+	category := "standalone_games/" + gameCategory + "_games"
 	if r.libMgr.IsCategoryDisabled(category) {
 		http.Error(w, "game category disabled", 403)
 		return
 	}
-	relative, err := games.ResolveIndexedDirectory(req.Context(), directory, game)
-	if err != nil {
-		http.Error(w, "indexed game directory unavailable", 422)
-		return
-	}
-	gameDir, err := r.libMgr.ResolveCategoryPath(selected.ID+":standalone_games/"+relative, category)
-	if err != nil {
-		http.Error(w, "game directory boundary invalid", 503)
-		return
-	}
-	kind, entry, err := games.WebEntry(gameDir, game)
+	relative := gameCategory + "_games/" + filepath.Base(gameDir)
+	kind, entry, err := games.WebEntry(gameDir, &games.Game{Target: "web_only", Category: gameCategory})
 	if err != nil {
 		http.Error(w, "web entry unavailable: "+err.Error(), 422)
 		return
@@ -261,6 +239,41 @@ func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 	}
 	if ext := strings.ToLower(path.Ext(parts[1])); ext == ".html" || ext == ".htm" {
 		w.Header().Set("Content-Security-Policy", "sandbox allow-scripts allow-pointer-lock allow-modals allow-forms allow-downloads; default-src * data: blob:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob:; frame-ancestors 'self'; base-uri 'none'")
+		if info.Size() <= maxGamePageBytes {
+			page, err := io.ReadAll(io.LimitReader(file, maxGamePageBytes))
+			if err != nil {
+				http.Error(w, "game asset read failed", 503)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			http.ServeContent(w, req, filepath.Base(parts[1]), info.ModTime(), bytes.NewReader(withCORSImages(page)))
+			return
+		}
 	}
 	http.ServeContent(w, req, filepath.Base(parts[1]), info.ModTime(), file)
+}
+
+const maxGamePageBytes = 1 << 20
+
+// 游戏页面运行在沙箱的不透明源里，同服务器的图片对它来说是跨源的：不带 crossOrigin 加载的图片
+// 画进 canvas 后 getImageData 会报 SecurityError（RPG Maker 就是这样）。资源响应带
+// Access-Control-Allow-Origin: *，所以在页面最前面插一段脚本，让没指定 crossOrigin 的图片默认用 anonymous。
+const corsImageScript = `<script>(()=>{const d=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src');` +
+	`Object.defineProperty(HTMLImageElement.prototype,'src',{configurable:true,enumerable:d.enumerable,get(){return d.get.call(this)},` +
+	`set(v){if(this.getAttribute('crossorigin')===null&&!/^(data|blob):/i.test(String(v)))this.crossOrigin='anonymous';d.set.call(this,v)}})})();</script>`
+
+func withCORSImages(page []byte) []byte {
+	lower := bytes.ToLower(page)
+	at := 0
+	if i := bytes.Index(lower, []byte("<head")); i >= 0 {
+		if j := bytes.IndexByte(page[i:], '>'); j >= 0 {
+			at = i + j + 1
+		}
+	} else if i := bytes.Index(lower, []byte("<html")); i >= 0 {
+		if j := bytes.IndexByte(page[i:], '>'); j >= 0 {
+			at = i + j + 1
+		}
+	}
+	out := make([]byte, 0, len(page)+len(corsImageScript))
+	return append(append(append(out, page[:at]...), corsImageScript...), page[at:]...)
 }

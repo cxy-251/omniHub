@@ -22,7 +22,6 @@ import (
 	"omnihub/internal/library"
 	"omnihub/internal/manga"
 	"omnihub/internal/mega"
-	"omnihub/internal/scanner"
 	"omnihub/internal/shortvideo"
 	"omnihub/internal/tasks"
 	"omnihub/internal/text"
@@ -45,7 +44,6 @@ type Router struct {
 	sc2            sc2State
 	stateDir       string
 	cacheDir       string // 可重新生成的数据（SC2 助手与虚拟环境、只读库的游戏日志），不放进主库的全局状态目录
-	gameDiscovery  *scanner.GameDiscovery
 	webGames       *webGameGrants
 	webGameReads   chan struct{}
 	webGameOpens   chan struct{}
@@ -114,7 +112,6 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		gameRuns:       games.NewManagerWithRecorder(gamePlayRecorder(readingDB)),
 		stateDir:       stateDir,
 		cacheDir:       userCacheDir(),
-		gameDiscovery:  scanner.NewGameDiscovery(),
 		webGames:       newWebGameGrants(),
 		webGameReads:   make(chan struct{}, 16),
 		webGameOpens:   make(chan struct{}, 2),
@@ -213,7 +210,6 @@ func (r *Router) Close() error {
 	r.audioMetadata.Close()
 	r.mangaDiscovery.Close()
 	r.webGames.close()
-	r.gameDiscovery.Close()
 	if r.megaClient != nil {
 		r.megaClient.Close()
 	}
