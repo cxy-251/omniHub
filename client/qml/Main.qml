@@ -48,7 +48,13 @@ DarkWindow {
     // 依赖本机服务的页面等服务连上（地址与凭证已知）后再创建；否则页面创建时发的请求拿不到地址、直接放弃。
     // 只置位一次：之后服务短暂断开不销毁已打开的页面（页面自己显示请求失败）。
     property bool serviceReady: false
-    function checkService() { if (!serviceReady && backendApi.connected && backendApi.stateReady) serviceReady = true }
+    function checkService() {
+        if (!serviceReady && backendApi.connected && backendApi.stateReady) {
+            serviceReady = true
+            if (typeof devStartup !== "undefined" && devStartup) console.log("startup service ready at", Date.now() - devStartupAt, "ms after QML start")
+        }
+    }
+    readonly property double devStartupAt: Date.now()
     Component.onCompleted: { pagesReady = true; backendApi.refresh() }
     Connections {
         target: backendApi

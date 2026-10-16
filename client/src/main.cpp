@@ -10,6 +10,8 @@
 #include <QEvent>
 #include <QPalette>
 #include <QTimer>
+#include <QElapsedTimer>
+#include <QNetworkProxyFactory>
 #include <algorithm>
 #include "player/mpv_item.h"
 #include "gallery/masonry_layout.h"
@@ -22,8 +24,16 @@
 #include "player/native_resume.h"
 #include "host/external_router.h"
 
+// 开发验证：OMNIHUB_DEV_STARTUP=1 时打印启动各阶段距进程开始的毫秒数。
+static QElapsedTimer startupClock;
+static void startupMark(const char *what)
+{
+    if (qEnvironmentVariableIsSet("OMNIHUB_DEV_STARTUP")) fprintf(stderr, "startup %6lld ms  %s\n", startupClock.elapsed(), what);
+}
+
 int main(int argc, char *argv[])
 {
+    startupClock.start();
 #ifdef __GLIBC__
     // 图片解码/视频帧会反复分配大小不一的大块内存。glibc 默认的 mmap 阈值会动态上调，
     // 之后大块改从堆里分配，释放后留在进程里不还给系统，浏览原图时内存只涨不降。
@@ -44,6 +54,9 @@ int main(int argc, char *argv[])
     if (qEnvironmentVariableIsEmpty("QT_XCB_GL_INTEGRATION")) qputenv("QT_XCB_GL_INTEGRATION", "xcb_egl");
 #endif
     QGuiApplication app(argc, argv);
+    startupMark("QGuiApplication");
+    // 客户端只连本机服务，不需要系统代理；查询系统代理（libproxy）在首次请求时要花几百毫秒。
+    QNetworkProxyFactory::setUseSystemConfiguration(false);
     {
         QPalette dark;
         const QColor window(0x0d, 0x11, 0x17), base(0x16, 0x1b, 0x22), text(0xc9, 0xd1, 0xd9), accent(0x58, 0xa6, 0xff);
@@ -109,6 +122,7 @@ int main(int argc, char *argv[])
         // 开发验证用：OMNIHUB_DEV_SCROLL=<像素> 让列表每 100ms 自动下滚，用于测量滚动时的内存。
         engine.rootContext()->setContextProperty("devScroll", qEnvironmentVariableIntValue("OMNIHUB_DEV_SCROLL"));
         // 开发验证：OMNIHUB_DEV_MATRIX=<秒> 打开多联放映并全部播放，每隔这么多秒打印各屏丢帧统计。
+        engine.rootContext()->setContextProperty("devStartup", qEnvironmentVariableIsSet("OMNIHUB_DEV_STARTUP"));
         engine.rootContext()->setContextProperty("devSwitch", qEnvironmentVariableIntValue("OMNIHUB_DEV_SWITCH"));
         engine.rootContext()->setContextProperty("devMatrix", qEnvironmentVariableIntValue("OMNIHUB_DEV_MATRIX"));
 
@@ -127,7 +141,13 @@ int main(int argc, char *argv[])
                 QCoreApplication::exit(-1);
         }, Qt::QueuedConnection);
 
+        startupMark("engine ready, loading QML");
         engine.load(url);
+        startupMark("QML loaded");
+        if (!engine.rootObjects().isEmpty())
+            if (auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().first())) {
+                QObject::connect(w, &QQuickWindow::frameSwapped, w, [] { static bool once = false; if (!once) { once = true; startupMark("first frame"); } });
+            }
         if(!externalFiles.isEmpty()&&!engine.rootObjects().isEmpty()){
             auto *window=engine.rootObjects().first();
             QObject::connect(&externalRouter,&ExternalRouter::filesRequested,window,[window](const QStringList &files){

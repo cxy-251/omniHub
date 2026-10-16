@@ -44,14 +44,18 @@ func NewClient(dir string, idle time.Duration) *Client {
 	return c
 }
 
-// Close 停止空闲检查，并在没有传输时关闭 MEGA 服务。
+// Close 停止空闲检查；本次用过 MEGA 且服务在跑、没有传输时关闭它。
+// 没用过就什么都不做：服务不在跑时调用 mega-exec 会把它拉起来，也不关用户自己在外面开的 MEGA。
 func (c *Client) Close() {
 	select {
 	case <-c.stop:
 	default:
 		close(c.stop)
 	}
-	if c.serverRunning() && !c.busy() {
+	c.mu.Lock()
+	used := !c.lastUse.IsZero()
+	c.mu.Unlock()
+	if used && c.serverRunning() && !c.busy() {
 		c.quit()
 	}
 }
@@ -136,14 +140,22 @@ func (c *Client) touch() {
 	c.mu.Unlock()
 }
 
-// serverRunning 看 MEGAcmd 的套接字是否存在（服务退出时会删掉它）。
+// serverRunning 看有没有 mega-cmd-server 进程。不能看套接字文件：服务退出后它可能还留着，
+// 据此去调 mega-exec 反而会把服务拉起来。
 func (c *Client) serverRunning() bool {
-	home, err := os.UserHomeDir()
+	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return false
 	}
-	_, err = os.Stat(filepath.Join(home, ".megaCmd", "megacmd.socket"))
-	return err == nil
+	for _, e := range entries {
+		if e.Name()[0] < '0' || e.Name()[0] > '9' {
+			continue
+		}
+		if comm, err := os.ReadFile(filepath.Join("/proc", e.Name(), "comm")); err == nil && strings.TrimSpace(string(comm)) == "mega-cmd-server" {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) quit() {

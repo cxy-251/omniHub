@@ -780,3 +780,13 @@ var (
 	shortvideoAll = shortvideo.Filter{}
 	trashFile     = platform.Trash
 )
+
+// WarmFeeds 在后台预先建好短视频的条目表（约 0.2 秒、几 MB），打开短视频页时不用现等。
+// 相册的表较大（10 万条），只在用到时再建。
+func (r *Router) WarmFeeds() {
+	req, err := http.NewRequest(http.MethodGet, "/", nil)
+	if err != nil {
+		return
+	}
+	_, _ = r.feedSnapshot(req, "shortvideo", svFeed{r})
+}

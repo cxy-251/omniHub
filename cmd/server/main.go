@@ -122,7 +122,7 @@ func run(options launchOptions) (result error) {
 		if !enabled && mdns != nil {
 			mdns.Shutdown()
 			mdns = nil
-			log.Printf("LAN access disabled; mDNS stopped")
+			log.Printf("mDNS stopped")
 		} else if enabled && mdns == nil {
 			if service, err := network.StartMDNS(port); err == nil {
 				mdns = service

@@ -31,10 +31,19 @@ fi
 
 source "$ROOT/scripts/steamdeck-env.sh"
 cd "$ROOT"
+CONNECTION="${OMNIHUB_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/omnihub}/local-client.json"
 start_server() {
     mkdir -p build/logs
+    touch build/logs/.server-starting
     setsid nohup build/omnihub-server >> build/logs/server.log 2>&1 &
-    sleep 1.5
+    # 等服务写出新的连接文件并能响应（通常几十毫秒），最多 5 秒；不再固定等 1.5 秒。
+    for _ in $(seq 50); do
+        if [ "$CONNECTION" -nt build/logs/.server-starting ]; then
+            url=$(sed -n 's/.*"url":"\([^"]*\)".*/\1/p' "$CONNECTION")
+            [ -n "$url" ] && curl -s -o /dev/null --max-time 1 "$url/api/auth/status" && break
+        fi
+        sleep 0.1
+    done
 }
 SERVER=$(pgrep -x omnihub-server | head -1)
 if [ -z "$SERVER" ]; then

@@ -171,6 +171,10 @@ func (a *Application) build() *generation {
 	router.ConfigureGames(resolveGameTools(a.cfg.GameTools, a.configDir))
 	router.ConfigureMega(resolveMegaCmd(a.cfg.MegaCmdDir))
 	router.ConfigureDownloads(a.cfg.Downloads, a.configDir, a.saveDownloadSettings)
+	go func() {
+		time.Sleep(time.Second)
+		router.WarmFeeds()
+	}()
 	if !a.cfg.StateInitialized {
 		a.cfg.StateInitialized = true
 		if err := config.Save(a.cfg); err != nil {
