@@ -223,10 +223,25 @@ def install_hotkeys() -> None:
             path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     else:
         path.write_text(HOTKEYS_INI, encoding="utf-8")
+    restore_cancel(path)
     var = docs / "Variables.txt"
     lines = var.read_text(encoding="utf-8", errors="replace").splitlines() if var.exists() else []
     lines = [ln for ln in lines if not ln.lower().startswith("hotkeyprofile=")] + [f"hotkeyProfile={HOTKEY_PROFILE}"]
     var.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def restore_cancel(path: Path) -> None:
+    """「取消」命令被清空（Cancel=）时恢复成 Esc。
+    在游戏的快捷键设置里给它重新绑键时，按 Esc 会被当成「清除」，结果 Cancel 变成空，游戏里 Esc 就失灵了。"""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    section, changed = "", False
+    for i, ln in enumerate(lines):
+        if ln.startswith("[") and ln.endswith("]"):
+            section = ln
+        elif section == "[Commands]" and ln.strip() == "Cancel=":
+            lines[i], changed = "Cancel=Escape", True
+    if changed:
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def sync_mods_to_pfx() -> None:
