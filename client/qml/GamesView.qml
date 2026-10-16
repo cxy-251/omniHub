@@ -228,11 +228,10 @@ Item {
                         onClicked: view.toggleFavorite(view.selected)
                     }
                     Item { Layout.fillHeight: true }
-                    Button {
+                    PrimaryButton {
                         Layout.fillWidth: true
                         text: view.busy ? "启动中…" : (view.active ? "已有游戏在运行" : "开始游戏")
                         enabled: !view.busy && !view.active
-                        highlighted: true
                         onClicked: view.launch(view.selected)
                     }
                     Label { Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 11; text: "游戏在独立进程组中运行，内存不计入 omniHub。" }

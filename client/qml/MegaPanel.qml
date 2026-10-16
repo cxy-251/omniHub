@@ -107,8 +107,8 @@ Item {
             TextField { id: email; placeholderText: "邮箱"; Layout.preferredWidth: 220; implicitHeight: 30 }
             TextField { id: password; placeholderText: "密码"; echoMode: TextInput.Password; Layout.preferredWidth: 180; implicitHeight: 30 }
             TextField { id: authCode; placeholderText: "两步验证码（没开可不填）"; Layout.preferredWidth: 180; implicitHeight: 30 }
-            Button {
-                text: "登录"; highlighted: true
+            PrimaryButton {
+                text: "登录"
                 enabled: email.text && password.text
                 onClicked: { panel.say("正在登录…", false); panel.post("/api/mega/login", {email: email.text, password: password.text, auth_code: authCode.text}, "登录成功", function () { password.text = ""; panel.refreshStatus() }) }
             }
@@ -137,7 +137,7 @@ Item {
                 ToolTip.visible: hovered; ToolTip.text: prefs.dest
             }
             Chip { text: "选择目录…"; onClicked: folderDialog.open() }
-            Button { text: "下载"; highlighted: true; enabled: link.text.trim().length > 0; onClicked: { panel.download(link.text.trim()); link.text = "" } }
+            PrimaryButton { text: "下载"; enabled: link.text.trim().length > 0; onClicked: { panel.download(link.text.trim()); link.text = "" } }
         }
         Label {
             visible: panel.message !== ""

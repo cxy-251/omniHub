@@ -206,10 +206,23 @@ HOTKEYS_INI = "[Settings]\n[Hotkeys]\nArmySelect=Grave\nTownCamera=Space\nAlertR
 
 
 def install_hotkeys() -> None:
-    """` = 全选部队，空格 = 回基地，Backspace = 跳到上个警报。"""
+    """` = 全选部队，空格 = 回基地，Backspace = 跳到上个警报。
+    只补上缺的这几项：玩家在游戏里自己改过的键原样保留（以前每次开局整份重写，改过的键会被冲掉）。"""
     docs = _pfx_docs()
     (docs / "Hotkeys").mkdir(parents=True, exist_ok=True)
-    (docs / "Hotkeys" / f"{HOTKEY_PROFILE}.SC2Hotkeys").write_text(HOTKEYS_INI, encoding="utf-8")
+    path = docs / "Hotkeys" / f"{HOTKEY_PROFILE}.SC2Hotkeys"
+    if path.exists():
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        have = {ln.split("=", 1)[0].strip() for ln in lines if "=" in ln}
+        defaults = [ln for ln in HOTKEYS_INI.splitlines() if "=" in ln and ln.split("=", 1)[0] not in have]
+        if defaults:
+            if "[Hotkeys]" not in lines:
+                lines.append("[Hotkeys]")
+            at = lines.index("[Hotkeys]") + 1
+            lines[at:at] = defaults
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    else:
+        path.write_text(HOTKEYS_INI, encoding="utf-8")
     var = docs / "Variables.txt"
     lines = var.read_text(encoding="utf-8", errors="replace").splitlines() if var.exists() else []
     lines = [ln for ln in lines if not ln.lower().startswith("hotkeyprofile=")] + [f"hotkeyProfile={HOTKEY_PROFILE}"]
@@ -321,6 +334,19 @@ def cmd_play(args) -> None:
             players.append(Computer(race[o["race"].upper()], diff[o["difficulty"]],
                                     build.get(o.get("ai_build", "random"), AIBuild.RandomBuild)))
         threading.Thread(target=_watch_window, args=(stop, lost), daemon=True).start()
+        # 对局一结束（burnysc2 记下 Result）就先报告结果并结束 SC2：burnysc2 自己在 Proton 下清理进程
+        # 要等一分多钟，界面会一直显示「对局进行中」。
+        from loguru import logger
+
+        def early_result(message):
+            text = message.record["message"]
+            if text.startswith("Result for player 1") and "early" not in result:
+                outcome = text.rsplit(":", 1)[-1].strip()
+                result["early"] = outcome
+                print("OMNIHUB_SC2_RESULT " + json.dumps({**result, "result": outcome}, ensure_ascii=False), flush=True)
+                threading.Thread(target=_force_kill_sc2, daemon=True).start()
+
+        logger.add(early_result, level="INFO")
         res = run_game(maps.get(map_name), players, realtime=True)
         if lost:
             raise RuntimeError(lost["reason"])
@@ -328,11 +354,16 @@ def cmd_play(args) -> None:
             res = res[0] if res else None
         result["result"] = getattr(res, "name", str(res)) if res is not None else "Unknown"
     except Exception as e:
-        result["result"] = "Error"
-        result["error"] = lost.get("reason") or str(e)
+        if "early" in result:
+            # 已经拿到结果后我们主动结束了 SC2，burnysc2 随后报连接断开，不算出错。
+            result["result"] = result["early"]
+        else:
+            result["result"] = "Error"
+            result["error"] = lost.get("reason") or str(e)
     finally:
         stop.set()
         _force_kill_sc2()
+    result.pop("early", None)
     print("OMNIHUB_SC2_RESULT " + json.dumps(result, ensure_ascii=False), flush=True)
 
 

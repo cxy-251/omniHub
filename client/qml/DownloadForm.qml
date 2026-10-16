@@ -138,6 +138,6 @@ ColumnLayout {
                 presetName.text = ""; armed = false
             }
         }
-        Button { text: "开始"; highlighted: true; enabled: form.ready; onClicked: form.run(form.values) }
+        PrimaryButton { text: "开始"; enabled: form.ready; onClicked: form.run(form.values) }
     }
 }

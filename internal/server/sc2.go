@@ -189,6 +189,30 @@ func (r *Router) handleSC2Play(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
+	// 同一 group 的 mod 互斥（如 3 倍 / 5 倍采集、2 倍运营 / 秒建造），定义来自 sc2Mod 的 MOD_INFO。
+	r.sc2.mu.Lock()
+	cached := r.sc2.mods
+	r.sc2.mu.Unlock()
+	var infos []struct {
+		Key   string `json:"key"`
+		Name  string `json:"name"`
+		Group string `json:"group"`
+	}
+	if cached != nil && json.Unmarshal(cached, &infos) == nil {
+		chosen := map[string]string{}
+		for _, m := range in.Mods {
+			for _, info := range infos {
+				if info.Key != m || info.Group == "" {
+					continue
+				}
+				if other, dup := chosen[info.Group]; dup {
+					http.Error(w, other+" 与 "+info.Name+" 不能同时选", 400)
+					return
+				}
+				chosen[info.Group] = info.Name
+			}
+		}
+	}
 	if !r.sc2Available() {
 		http.Error(w, "StarCraft II not found", 404)
 		return
@@ -235,15 +259,18 @@ func (r *Router) handleSC2Status(w http.ResponseWriter, req *http.Request) {
 	if id != "" {
 		if status, err := r.gameRuns.Snapshot(id); err == nil {
 			out["session"] = status
-			if status.State == "exited" {
-				out["result"] = sc2ResultFromLog(status.LogPath)
+			// 结果一写进日志就报告（SC2 进程可能还在收尾），界面据此立刻显示「对局已结束」。
+			if result := sc2ResultFromLog(status.LogPath, status.State == "exited"); result != nil {
+				out["result"] = result
+				out["ended"] = true
 			}
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-func sc2ResultFromLog(path string) any {
+// sc2ResultFromLog 读日志里最后一行结果；还没有结果时，进程已退出则报异常结束，否则返回 nil（仍在对局）。
+func sc2ResultFromLog(path string, exited bool) any {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -259,6 +286,9 @@ func sc2ResultFromLog(path string) any {
 	}
 	var result any
 	if last == "" || json.Unmarshal([]byte(last), &result) != nil {
+		if !exited {
+			return nil
+		}
 		return map[string]string{"result": "Error", "error": "对局异常结束，详见日志"}
 	}
 	return result

@@ -33,9 +33,10 @@ Rectangle {
     readonly property var builds: [["random", "随机打法"], ["rush", "速攻"], ["timing", "时间点"], ["power", "强势"], ["macro", "运营"], ["air", "空军"]]
     readonly property var selectedMap: maps.find(function (m) { return m.stem === prefs.map }) || null
     readonly property int maxOpponents: selectedMap ? selectedMap.max_opponents : 1
-    readonly property bool running: !!(status.session && status.session.state !== "exited")
+    // 日志里一有结果就算结束（SC2 进程可能还在收尾）。
+    readonly property bool running: !!(status.session && status.session.state !== "exited" && !status.ended)
 
-    function refreshStatus() { request("GET", "/api/sc2/status", null, function (s) { panel.status = s }) }
+    function refreshStatus() { request("GET", "/api/sc2/status", null, function (s) { panel.status = s; panel.starting = false }) }
     function setOpponent(i, change) {
         var list = prefs.opponents.slice()
         list[i] = Object.assign({}, list[i], change)
@@ -45,15 +46,28 @@ Rectangle {
         error = ""
         var opponents = prefs.opponents.slice(0, maxOpponents)
         request("POST", "/api/sc2/play", {map: prefs.map, race: prefs.race, opponents: opponents, mods: prefs.mods}, function () {
+            panel.starting = true
             refreshStatus()
-            poll.start()
         })
     }
-    Timer { id: poll; interval: 3000; repeat: true; onTriggered: { panel.refreshStatus(); if (!panel.running) stop() } }
+    // 有对局在进行（包括切页回来时已经在进行的）就每 3 秒刷新一次；刚点开始、状态还没变成运行中时也刷新。
+    property bool starting: false
+    Timer { interval: 3000; repeat: true; running: panel.running || panel.starting; onTriggered: panel.refreshStatus() }
 
     Component.onCompleted: {
         request("GET", "/api/sc2/maps", null, function (list) { panel.maps = list; if (!panel.selectedMap && list.length) prefs.map = list[0].stem })
-        request("GET", "/api/sc2/mods", null, function (list) { panel.mods = list })
+        request("GET", "/api/sc2/mods", null, function (list) {
+            panel.mods = list
+            // 以前保存的选择里同组多选的（互斥规则加入之前），每组只留最后选的那个。
+            var seen = {}, kept = []
+            prefs.mods.slice().reverse().forEach(function (k) {
+                var m = list.find(function (x) { return x.key === k })
+                if (!m) return
+                if (m.group) { if (seen[m.group]) return; seen[m.group] = true }
+                kept.unshift(k)
+            })
+            if (kept.join(",") !== prefs.mods.join(",")) prefs.mods = kept
+        })
         refreshStatus()
     }
 
@@ -174,17 +188,23 @@ Rectangle {
                     ToolTip.visible: hovered; ToolTip.text: modelData.desc || ""
                     onClicked: {
                         var l = prefs.mods.filter(function (k) { return k !== modelData.key })
-                        if (!selected) l.push(modelData.key)
+                        if (!selected) {
+                            // 同一 group 的 mod 互斥（如 3 倍 / 5 倍采集、2 倍运营 / 秒建造）：选新的就去掉同组旧的。
+                            if (modelData.group) {
+                                var group = modelData.group
+                                l = l.filter(function (k) { var m = panel.mods.find(function (x) { return x.key === k }); return !m || m.group !== group })
+                            }
+                            l.push(modelData.key)
+                        }
                         prefs.mods = l
                     }
                 }
             }
         }
         RowLayout {
-            Button {
+            PrimaryButton {
                 text: panel.running ? "对局进行中…" : "开始对局"
-                highlighted: true
-                enabled: !panel.running && !!panel.selectedMap
+                enabled: !panel.running && !panel.starting && !!panel.selectedMap
                 onClicked: panel.start()
             }
             Label {
@@ -193,9 +213,10 @@ Rectangle {
                 text: {
                     if (panel.error) return panel.error
                     var r = panel.status.result
-                    if (panel.running) return "SC2 启动中，首次可能要等十几秒"
+                    if (panel.running) return "对局进行中（首次启动可能要等十几秒）"
+                    if (panel.starting) return "SC2 启动中…"
                     if (!r) return ""
-                    return "上一局：" + r.map + " · " + ({Victory: "胜利", Defeat: "失败", Tie: "平局"}[r.result] || r.result) + (r.error ? "（" + r.error + "）" : "")
+                    return (panel.status.ended && panel.status.session && panel.status.session.state !== "exited" ? "对局已结束 · " : "上一局：") + r.map + " · " + ({Victory: "胜利", Defeat: "失败", Tie: "平局"}[r.result] || r.result) + (r.error ? "（" + r.error + "）" : "")
                 }
             }
         }

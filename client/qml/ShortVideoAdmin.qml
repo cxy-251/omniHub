@@ -67,7 +67,7 @@ ColumnLayout {
                         text: "逐个核对原目录与 albums.db 中的入库内容（文件名、数量、SHA-256），完全一致的目录移入系统回收站；有任何差异的保留不动。背景音乐 mp3 不受影响。"
                     }
                     RowLayout {
-                        Button { text: "校验并移入回收站"; highlighted: true; onClicked: { page.confirmClean = false; page.act("clean") } }
+                        PrimaryButton { text: "校验并移入回收站"; onClicked: { page.confirmClean = false; page.act("clean") } }
                         Button { text: "取消"; onClicked: page.confirmClean = false }
                     }
                 }
