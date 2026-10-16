@@ -5,6 +5,8 @@ type Device = { id: string; user_id: number; username: string; device_name: stri
 type Devices = { devices: Device[]; current_device_id: string; can_enroll: boolean; lan: boolean; capacity: number; lifetime_days: number };
 const sections = [['gallery', '相册'], ['shortvideo', '短视频'], ['text', '文本'], ['audio', '音频'], ['manga', '漫画'], ['games', '游戏'], ['tools', '工具'], ['tasks', '任务'], ['admin', '管理']] as const;
 const levels = [0, 1, 2, 3, 4, 99];
+const levelNames: Record<number, string> = { 0: '游客', 1: '用户', 2: 'VIP1', 3: 'VIP2', 4: 'VIP3', 99: '管理员' };
+type Subsection = { id: string; section: string; required_level: number; explicit: boolean };
 const input = 'rounded-md border border-line bg-background px-3 py-2 text-sm';
 const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
 
@@ -16,6 +18,7 @@ export default function AdminPage() {
   const [passwordUser, setPasswordUser] = useState<number>(), [replacement, setReplacement] = useState('');
   const [users, setUsers] = useState<(User & { status: string })[]>([]);
   const [permissions, setPermissions] = useState<Record<string, number>>({});
+  const [subsections, setSubsections] = useState<Subsection[]>([]);
   const [devices, setDevices] = useState<Devices>();
   const [name, setName] = useState(''), [revision, setRevision] = useState(0);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [pending, setPending] = useState(false);
@@ -26,8 +29,8 @@ export default function AdminPage() {
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    Promise.all([api<Record<string, number>>('/api/admin/permissions', { signal: controller.signal }), request(`/api/admin/users?limit=32&offset=${offset}`, { signal: controller.signal }).then(async response => ({ rows: await response.json() as (User & { status: string })[], more: response.headers.get('X-Has-More') === 'true' })), api<Devices>('/api/admin/devices', { signal: controller.signal }), api<Status>('/api/auth/status', { signal: controller.signal })])
-      .then(([matrix, accounts, remembered, status]) => { setPermissions(matrix); setUsers(accounts.rows); setMore(accounts.more); setCurrentID(status.user.id); setDevices(remembered); })
+    Promise.all([api<Record<string, number>>('/api/admin/permissions', { signal: controller.signal }), request(`/api/admin/users?limit=32&offset=${offset}`, { signal: controller.signal }).then(async response => ({ rows: await response.json() as (User & { status: string })[], more: response.headers.get('X-Has-More') === 'true' })), api<Devices>('/api/admin/devices', { signal: controller.signal }), api<Status>('/api/auth/status', { signal: controller.signal }), api<Subsection[]>('/api/admin/subsections', { signal: controller.signal })])
+      .then(([matrix, accounts, remembered, status, subs]) => { setPermissions(matrix); setSubsections(subs ?? []); setUsers(accounts.rows); setMore(accounts.more); setCurrentID(status.user.id); setDevices(remembered); })
       .catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
   }, [revision, offset]);
@@ -45,20 +48,31 @@ export default function AdminPage() {
   return <div className="space-y-6">
     <div className="flex items-center gap-3"><button className={button} disabled={pending} onClick={() => { setError(''); setRevision(value => value + 1); }}>刷新管理状态</button>{notice ? <p role="status" className="text-muted">{notice}</p> : null}</div>
     {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
-    <section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-4 text-lg">分类准入等级</h2>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{sections.map(([id, label]) => <div key={id} className="flex items-center justify-between gap-2"><label>{label} <select className={input} value={permissions[id] ?? 0} onChange={e => setPermissions(old => ({ ...old, [id]: Number(e.target.value) }))}>{levels.map(level => <option key={level} value={level}>{level === 99 ? 'Admin' : `等级 ${level}`}</option>)}</select></label><button className={button} disabled={pending || !devices} onClick={() => void change('/api/admin/permissions', { section_id: id, required_level: permissions[id] ?? 0 })}>保存</button></div>)}</div>
+    <section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-1 text-lg">分区最低等级</h2>
+      <p className="mb-3 text-sm text-muted">选择后立即保存。「游客」表示局域网内不登录也能看到。</p>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{sections.map(([id, label]) => <label key={id} className="flex items-center justify-between gap-2 text-sm">{label}
+        <select className={input} disabled={pending || !devices} value={permissions[id] ?? 0} onChange={e => { const level = Number(e.target.value); setPermissions(old => ({ ...old, [id]: level })); void change('/api/admin/permissions', { section_id: id, required_level: level }); }}>
+          {levels.map(level => <option key={level} value={level}>{levelNames[level]}</option>)}</select></label>)}</div>
+      {subsections.length ? <>
+        <h3 className="mb-1 mt-4 font-semibold">子分区</h3>
+        <p className="mb-2 text-sm text-muted">资源库里的子目录（如 text/novels/nsfw）。灰色为默认值：没有单独设置的沿用所属分区，nsfw 默认仅管理员。</p>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{subsections.map(sub => <label key={sub.id} className="flex items-center justify-between gap-2 text-sm">
+          <span className={`min-w-0 truncate ${sub.explicit ? '' : 'text-muted'}`} title={sub.id}>{sub.id}{sub.explicit ? '' : '（默认）'}</span>
+          <select className={input} disabled={pending || !devices} value={sub.required_level} onChange={e => { const level = Number(e.target.value); setSubsections(old => old.map(x => x.id === sub.id ? { ...x, required_level: level, explicit: true } : x)); void change('/api/admin/permissions', { section_id: sub.id, required_level: level }); }}>
+            {levels.map(level => <option key={level} value={level}>{levelNames[level]}</option>)}</select></label>)}</div>
+      </> : null}
     </section>
     <section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-4 text-lg">创建用户</h2>
       <form className="flex flex-wrap items-end gap-3" onSubmit={event => { event.preventDefault(); void change('/api/admin/users/create', { username: username.trim(), password, role, level: role === 'admin' ? 99 : newLevel }).then(ok => { setPassword(''); if (ok) setUsername(''); }); }}>
         <label>用户名 <input className={input} required maxLength={64} value={username} onChange={e => setUsername(e.target.value)} autoComplete="off" /></label>
         <label>初始密码 <input className={input} type="password" required maxLength={72} value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" /></label>
         <label>角色 <select className={input} value={role} onChange={e => setRole(e.target.value)}><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
-        {role === 'user' ? <label>等级 <select className={input} value={newLevel} onChange={e => setNewLevel(Number(e.target.value))}>{levels.filter(value => value !== 99).map(value => <option key={value}>{value}</option>)}</select></label> : null}
+        {role === 'user' ? <label>等级 <select className={input} value={newLevel} onChange={e => setNewLevel(Number(e.target.value))}>{levels.filter(value => value !== 99).map(value => <option key={value} value={value}>{levelNames[value]}</option>)}</select></label> : null}
         <button className={button} disabled={pending || !devices}>创建</button>
       </form>
     </section>
     <section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-4 text-lg">用户等级与状态</h2><p className="mb-3 text-sm text-muted">修改会撤销该账号的普通会话与信任设备。管理员等级固定为 99。</p>
-      <div className="space-y-3">{users.map(user => <div key={user.id} className="flex flex-wrap items-center gap-3"><span className="min-w-40 break-all">{user.username} · {user.role} · {user.status}</span><select aria-label={`${user.username} 的等级`} className={input} disabled={user.role === 'admin'} value={user.level} onChange={e => setUsers(old => old.map(item => item.id === user.id ? { ...item, level: Number(e.target.value) } : item))}>{levels.map(level => <option key={level}>{level}</option>)}</select><button className={button} disabled={pending || user.role === 'admin'} onClick={() => void change('/api/admin/users', { user_id: user.id, level: user.level })}>保存并撤销凭证</button><button className={button} disabled={pending} onClick={() => void change('/api/admin/users/status', { user_id: user.id, status: user.status === 'active' ? 'disabled' : 'active' }, 'POST', user.id === currentID)}>{user.status === 'active' ? '停用账号' : '恢复账号'}</button><button className={button} disabled={pending} onClick={() => { setPasswordUser(user.id); setReplacement(''); }}>重置密码</button></div>)}</div>
+      <div className="space-y-3">{users.map(user => <div key={user.id} className="flex flex-wrap items-center gap-3"><span className="min-w-40 break-all">{user.username} · {user.role} · {user.status}</span><select aria-label={`${user.username} 的等级`} className={input} disabled={user.role === 'admin'} value={user.level} onChange={e => setUsers(old => old.map(item => item.id === user.id ? { ...item, level: Number(e.target.value) } : item))}>{levels.map(level => <option key={level} value={level}>{levelNames[level]}</option>)}</select><button className={button} disabled={pending || user.role === 'admin'} onClick={() => void change('/api/admin/users', { user_id: user.id, level: user.level })}>保存并撤销凭证</button><button className={button} disabled={pending} onClick={() => void change('/api/admin/users/status', { user_id: user.id, status: user.status === 'active' ? 'disabled' : 'active' }, 'POST', user.id === currentID)}>{user.status === 'active' ? '停用账号' : '恢复账号'}</button><button className={button} disabled={pending} onClick={() => { setPasswordUser(user.id); setReplacement(''); }}>重置密码</button></div>)}</div>
       <div className="mt-4 flex gap-3"><button className={button} disabled={pending || offset === 0} onClick={() => setOffset(value => Math.max(0, value - 32))}>上一页</button><button className={button} disabled={pending || !more} onClick={() => setOffset(value => value + 32)}>下一页</button></div>
       {passwordUser !== undefined ? <form className="mt-4 flex flex-wrap items-center gap-3" onSubmit={event => { event.preventDefault(); void change('/api/admin/users/password', { user_id: passwordUser, password: replacement }, 'POST', passwordUser === currentID).then(ok => { setReplacement(''); if (ok) setPasswordUser(undefined); }); }}><label>账号 #{passwordUser} 的新密码 <input className={input} type="password" required maxLength={72} autoComplete="new-password" value={replacement} onChange={e => setReplacement(e.target.value)} /></label><button className={button} disabled={pending}>更新并撤销全部凭证</button><button type="button" className={button} onClick={() => { setPasswordUser(undefined); setReplacement(''); }}>取消</button></form> : null}
     </section>
