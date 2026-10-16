@@ -228,7 +228,7 @@ Item {
             else if (event.key === Qt.Key_Down) page = Math.min(post?.image_count ?? 1, page + 1)
             else if (event.key === Qt.Key_Up) page = Math.max(1, page - 1)
             else if (event.key === Qt.Key_Space && isVideo) video.playing ? video.pause() : video.play()
-            else if (event.key === Qt.Key_L && post) view.toggleLike(post)
+            else if (event.key === Qt.Key_Z && post) view.toggleLike(post)
             else return
             event.accepted = true
         }
@@ -302,7 +302,7 @@ Item {
                         glyph: view.isLiked(viewer.post) ? "favorite-fill" : "favorite"
                         enabled: !!viewer.post
                         onClicked: view.toggleLike(viewer.post)
-                        ToolTip.text: view.isLiked(viewer.post) ? "取消点赞（L）" : "点赞（L）"
+                        ToolTip.text: view.isLiked(viewer.post) ? "取消点赞（Z）" : "点赞（Z）"
                     }
                     IconButton {
                         glyph: "delete"; checked: viewer.trashArmed

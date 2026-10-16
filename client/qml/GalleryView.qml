@@ -196,7 +196,7 @@ Item {
                     if (event.key === Qt.Key_Escape || event.key === Qt.Key_Back) view.openIndex = -1
                     else if (event.key === Qt.Key_Right || event.key === Qt.Key_Down) step(1)
                     else if (event.key === Qt.Key_Left || event.key === Qt.Key_Up) step(-1)
-                    else if (event.key === Qt.Key_L && photo) view.toggleLike(photo)
+                    else if (event.key === Qt.Key_Z && photo) view.toggleLike(photo)
                     else return
                     event.accepted = true
                 }
@@ -245,7 +245,7 @@ Item {
                             glyph: view.isLiked(viewer.photo) ? "favorite-fill" : "favorite"
                             enabled: !!viewer.photo
                             onClicked: view.toggleLike(viewer.photo)
-                            ToolTip.text: view.isLiked(viewer.photo) ? "取消点赞（L）" : "点赞（L）"
+                            ToolTip.text: view.isLiked(viewer.photo) ? "取消点赞（Z）" : "点赞（Z）"
                         }
                         IconButton {
                             glyph: "delete"; checked: viewer.trashArmed

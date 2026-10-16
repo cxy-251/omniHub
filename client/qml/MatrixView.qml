@@ -9,7 +9,7 @@ import omniHub.Media 1.0
 //   gallery     图片，按设定的秒数自动轮播
 // 每屏独立频道（推荐、我的点赞、平台/分组），顶栏只有一套控件，操作焦点屏；点屏或按 1/2/3 切换焦点。
 // 点赞、移到回收站、伴听（全局音声引擎，伴听时视频静音）、记住每屏位置、弹出独立窗口——两种内容同一套代码。
-// 键盘：空格 暂停/继续，←/→ 上/下一条，L 点赞，M 静音，Tab 固定/收起顶栏，F 全屏（独立窗口），Esc 返回/关闭。
+// 快捷键都作用于焦点屏（1/2/3 选屏），完整列表见 shortcuts（界面上「⌨ 快捷键」或按 ? 显示）。
 FocusScope {
     id: matrix
     property string domain: "shortvideo"
@@ -59,6 +59,7 @@ FocusScope {
         property int screens: 3
         property bool focusAudio: true
         property int slideSeconds: 5
+        property bool shortcutsSeen: false   // 第一次打开时提示一次「按 ? 查看快捷键」
         // 每屏：{channel, shuffle, muted, seed, index, postId, pos}
         property var slots: []
     }
@@ -93,6 +94,7 @@ FocusScope {
             prefs.slots = all
         }
         ready = true
+        if (!prefs.shortcutsSeen) { say("按 ? 查看快捷键"); prefs.shortcutsSeen = true }
         feed.loadGroups()
         if (audioEngine) api.getJSON("/api/media/audio/albums?limit=100", function (list) { matrix.audioAlbums = list })
     }
@@ -109,19 +111,60 @@ FocusScope {
     Component.onDestruction: savePositions()
     Timer { interval: 10000; repeat: true; running: matrix.playing; onTriggered: matrix.savePositions() }
 
+    // 快捷键（按焦点屏设计）。说明面板与按钮提示都从这张表生成，改键只改这里。
+    readonly property var shortcuts: [
+        ["1 / 2 / 3", "选焦点屏"],
+        ["Z", "焦点屏点赞 / 取消"],
+        ["← / →", "焦点屏上一条 / 下一条"],
+        ["↑ / ↓", "焦点屏后退 / 前进 5 秒", "video"],
+        ["空格", "焦点屏暂停 / 继续"],
+        ["P", "全部播放 / 全部暂停"],
+        ["Delete", "焦点屏移到回收站（3 秒内按两次）"],
+        ["M", "焦点屏静音 / 取消", "video"],
+        ["B", "伴听暂停 / 继续"],
+        ["Tab", "固定 / 收起顶栏"],
+        ["F", "全屏（独立窗口）"],
+        ["? 或 H", "显示 / 隐藏快捷键说明"],
+        ["Esc", "退出全屏 / 关闭说明 / 返回浏览"]
+    ]
+    property bool helpShown: false
+    property string toast: ""
+    function say(text) { toast = text; toastTimer.restart() }
+    Timer { id: toastTimer; interval: 2200; onTriggered: matrix.toast = "" }
+
+    // 回收站要在 3 秒内按两次（键盘与按钮共用一个确认状态）。
+    property bool trashArmed: false
+    Timer { id: trashDisarm; interval: 3000; onTriggered: matrix.trashArmed = false }
+    function trashFocused() {
+        var slot = repeater.itemAt(focused)
+        if (!slot || !slot.post) return
+        if (trashArmed) { trashArmed = false; slot.trash(); say("已移到回收站") }
+        else { trashArmed = true; trashDisarm.restart(); say("再按一次移到回收站") }
+    }
+    function toggleAccompany() {
+        if (!audioEngine || !audioEngine.active) { say("先在顶栏选一张伴听专辑"); return }
+        audioEngine.togglePlay()
+    }
+
     focus: true
     Keys.onPressed: function (event) {
         var slot = repeater.itemAt(focused)
-        if (event.key === Qt.Key_Escape) { if (matrix.fullscreen) matrix.fullscreenToggled(); else matrix.exitRequested() }
-        else if (event.key === Qt.Key_Tab) barPinned = !barPinned
-        else if (event.key === Qt.Key_F && matrix.detached) matrix.fullscreenToggled()
-        else if (event.key >= Qt.Key_1 && event.key < Qt.Key_1 + prefs.screens) focused = event.key - Qt.Key_1
+        var k = event.key
+        if (k === Qt.Key_Escape) { if (helpShown) helpShown = false; else if (matrix.fullscreen) matrix.fullscreenToggled(); else matrix.exitRequested() }
+        else if (k === Qt.Key_Question || k === Qt.Key_H || k === Qt.Key_Slash) helpShown = !helpShown
+        else if (k === Qt.Key_Tab) barPinned = !barPinned
+        else if (k === Qt.Key_F && matrix.detached) matrix.fullscreenToggled()
+        else if (k >= Qt.Key_1 && k < Qt.Key_1 + prefs.screens) focused = k - Qt.Key_1
+        else if (k === Qt.Key_P) setAllPlaying(!playing)
+        else if (k === Qt.Key_B) toggleAccompany()
         else if (!slot) return
-        else if (event.key === Qt.Key_Space) slot.togglePause()
-        else if (event.key === Qt.Key_Right) slot.step(1)
-        else if (event.key === Qt.Key_Left) slot.step(-1)
-        else if (event.key === Qt.Key_L) slot.toggleLike()
-        else if (event.key === Qt.Key_M && matrix.isVideo) setSlot(focused, {muted: !slotConfig(focused).muted})
+        else if (k === Qt.Key_Space) slot.togglePause()
+        else if (k === Qt.Key_Right) slot.step(1)
+        else if (k === Qt.Key_Left) slot.step(-1)
+        else if ((k === Qt.Key_Up || k === Qt.Key_Down) && slot.video) slot.video.seekRelative(k === Qt.Key_Up ? -5 : 5)
+        else if (k === Qt.Key_Z) { slot.toggleLike(); if (slot.post) say(slot.post.liked ? "已取消点赞" : "♥ 已点赞（屏 " + (focused + 1) + "）") }
+        else if (k === Qt.Key_Delete) trashFocused()
+        else if (k === Qt.Key_M && matrix.isVideo) setSlot(focused, {muted: !slotConfig(focused).muted})
         else return
         event.accepted = true
     }
@@ -157,7 +200,7 @@ FocusScope {
                     text: prefs.slideSeconds + " 秒/张"
                     onClicked: { var c = [3, 5, 8, 15]; prefs.slideSeconds = c[(c.indexOf(prefs.slideSeconds) + 1) % c.length] }
                 }
-                Chip { text: matrix.playing ? "⏸ 全部暂停" : "▶ 全部播放"; selected: matrix.playing; onClicked: matrix.setAllPlaying(!matrix.playing) }
+                Chip { text: matrix.playing ? "⏸ 全部暂停" : "▶ 全部播放"; selected: matrix.playing; onClicked: matrix.setAllPlaying(!matrix.playing); ToolTip.visible: hovered; ToolTip.text: "P" }
                 Rectangle { width: 1; height: 20; color: "#30363d" }
                 Label { text: "屏 " + (matrix.focused + 1); color: "#58a6ff"; font.pixelSize: 13 }
                 ComboBox {
@@ -173,24 +216,23 @@ FocusScope {
                 }
                 // 推荐频道本身就是随机的；其它频道可选顺序/随机。
                 Chip { visible: bar.cfg.channel !== "recommend"; text: bar.cfg.shuffle ? "随机" : "顺序"; onClicked: matrix.setSlot(matrix.focused, {shuffle: !bar.cfg.shuffle, index: 0, postId: "", pos: 0}) }
-                Chip { text: "◀"; onClicked: if (bar.slotItem) bar.slotItem.step(-1) }
-                Chip { text: bar.slotItem && bar.slotItem.paused ? "▶" : "⏸"; onClicked: if (bar.slotItem) bar.slotItem.togglePause() }
-                Chip { text: "▶▶"; onClicked: if (bar.slotItem) bar.slotItem.step(1) }
-                Chip { visible: matrix.isVideo; text: bar.cfg.muted ? "🔇" : "🔊"; selected: bar.cfg.muted; onClicked: matrix.setSlot(matrix.focused, {muted: !bar.cfg.muted}) }
+                Chip { text: "◀"; onClicked: if (bar.slotItem) bar.slotItem.step(-1); ToolTip.visible: hovered; ToolTip.text: "上一条（←）" }
+                Chip { text: bar.slotItem && bar.slotItem.paused ? "▶" : "⏸"; onClicked: if (bar.slotItem) bar.slotItem.togglePause(); ToolTip.visible: hovered; ToolTip.text: "焦点屏暂停 / 继续（空格）" }
+                Chip { text: "▶▶"; onClicked: if (bar.slotItem) bar.slotItem.step(1); ToolTip.visible: hovered; ToolTip.text: "下一条（→）" }
+                Chip { visible: matrix.isVideo; text: bar.cfg.muted ? "🔇" : "🔊"; selected: bar.cfg.muted; onClicked: matrix.setSlot(matrix.focused, {muted: !bar.cfg.muted}); ToolTip.visible: hovered; ToolTip.text: "静音（M）" }
                 Chip {
                     readonly property bool liked: !!(bar.slotItem && bar.slotItem.post && bar.slotItem.post.liked)
                     text: liked ? "♥ 已赞" : "♡ 点赞"; selected: liked
                     enabled: !!(bar.slotItem && bar.slotItem.post)
                     onClicked: bar.slotItem.toggleLike()
+                    ToolTip.visible: hovered; ToolTip.text: "焦点屏点赞（Z）"
                 }
                 Chip {
-                    // 连点两次才移到回收站（3 秒内）。短视频进系统回收站；相册只在 omniHub 里隐藏（原图库只读），都能恢复。
-                    id: trashChip
-                    property bool armed: false
-                    text: armed ? "再点一次确认" : "🗑 回收站"; selected: armed
+                    // 3 秒内点两次才移到回收站（与 Delete 键共用确认）。短视频进系统回收站；相册只在 omniHub 里隐藏（原图库只读），都能恢复。
+                    text: matrix.trashArmed ? "再点一次确认" : "🗑 回收站"; selected: matrix.trashArmed
                     enabled: !!(bar.slotItem && bar.slotItem.post)
-                    onClicked: { if (armed) { armed = false; bar.slotItem.trash() } else { armed = true; disarm.restart() } }
-                    Timer { id: disarm; interval: 3000; onTriggered: trashChip.armed = false }
+                    onClicked: matrix.trashFocused()
+                    ToolTip.visible: hovered; ToolTip.text: "移到回收站（Delete 按两次）"
                 }
                 // 伴听：选一张音声专辑，从上次听到的地方接着放；选「关」暂停。底部播放条可切集、调倍速。
                 ComboBox {
@@ -211,7 +253,8 @@ FocusScope {
                     ToolTip.text: matrix.accompanying && matrix.audioEngine.track ? "正在伴听：" + matrix.audioEngine.track.title : ""
                 }
                 Item { Layout.fillWidth: true }
-                Chip { text: "📌"; selected: matrix.barPinned; onClicked: matrix.barPinned = !matrix.barPinned }
+                Chip { text: "⌨ 快捷键"; selected: matrix.helpShown; onClicked: matrix.helpShown = !matrix.helpShown; ToolTip.visible: hovered; ToolTip.text: "? 或 H" }
+                Chip { text: "📌"; selected: matrix.barPinned; onClicked: matrix.barPinned = !matrix.barPinned; ToolTip.visible: hovered; ToolTip.text: "固定顶栏（Tab）" }
             }
         }
         // 顶边感应条：鼠标移到最上方时显示顶栏；触屏点顶边同样显示。
@@ -367,6 +410,46 @@ FocusScope {
                         }
                     }
                 }
+            }
+        }
+
+        // 提示条（点赞、回收站确认等）
+        Rectangle {
+            visible: matrix.toast !== ""
+            z: 5
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom; anchors.bottomMargin: 40
+            width: toastLabel.implicitWidth + 28; height: 34; radius: 17
+            color: "#e6161b22"; border.color: "#58a6ff"
+            Label { id: toastLabel; anchors.centerIn: parent; text: matrix.toast; color: "#e6edf3"; font.pixelSize: 14 }
+        }
+        // 快捷键说明（? / H 或顶栏「⌨ 快捷键」）
+        Rectangle {
+            visible: matrix.helpShown
+            z: 6
+            anchors.centerIn: parent
+            width: helpColumn.implicitWidth + 48; height: helpColumn.implicitHeight + 40
+            radius: 10; color: "#f20d1117"; border.color: "#30363d"
+            TapHandler { onTapped: matrix.helpShown = false }
+            Column {
+                id: helpColumn
+                anchors.centerIn: parent
+                spacing: 6
+                Label { text: "快捷键（作用于焦点屏，蓝框的那一屏）"; color: "#e6edf3"; font.pixelSize: 15; font.bold: true; bottomPadding: 4 }
+                Repeater {
+                    // 第三项为 "video" 的只在视频屏有用，相册轮播里不显示。
+                    model: matrix.shortcuts.filter(function (s) { return matrix.isVideo || s[2] !== "video" })
+                    delegate: Row {
+                        required property var modelData
+                        spacing: 14
+                        Rectangle {
+                            width: 96; height: 24; radius: 4; color: "#21262d"; border.color: "#30363d"
+                            Label { anchors.centerIn: parent; text: modelData[0]; color: "#58a6ff"; font.pixelSize: 13; font.family: "monospace" }
+                        }
+                        Label { anchors.verticalCenter: parent.verticalCenter; text: modelData[1]; color: "#c9d1d9"; font.pixelSize: 13 }
+                    }
+                }
+                Label { text: "按 Esc 或点击任意处关闭"; color: "#6e7681"; font.pixelSize: 11; topPadding: 4 }
             }
         }
     }
