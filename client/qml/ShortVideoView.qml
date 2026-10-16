@@ -56,6 +56,11 @@ Item {
         backendApi.refreshLibraries()
         feed.loadGroups()
     }
+    // 列表变短（移到回收站后）时停在原位置看下一个；原来就是最后一个则退到前一个。
+    Connections {
+        target: paged
+        function onTotalChanged() { if (view.openIndex >= paged.total && paged.total > 0) view.openIndex = paged.total - 1 }
+    }
 
 
     ColumnLayout {
@@ -175,7 +180,7 @@ Item {
 
     Loader {
         anchors.fill: parent
-        active: view.openIndex >= 0 && view.openIndex < paged.total
+        active: view.openIndex >= 0   // 列表刷新时总数会短暂为 0，不能据此销毁查看界面
         sourceComponent: Component { Viewer { post: view.postAt(view.openIndex) } }
     }
 
@@ -211,13 +216,17 @@ Item {
         Component.onDestruction: finish()
         property bool trashArmed: false
         Timer { id: trashDisarm; interval: 3000; onTriggered: viewer.trashArmed = false }
+        // 3 秒内点两次（或按两次 Delete）。完成后留在查看界面，同一位置换成下一个作品。
+        property string notice: ""
+        Timer { id: noticeTimer; interval: 2500; onTriggered: viewer.notice = "" }
+        function say(text) { notice = text; noticeTimer.restart() }
         function trash() {
-            if (!trashArmed) { trashArmed = true; trashDisarm.restart(); return }
+            if (!trashArmed) { trashArmed = true; trashDisarm.restart(); say("再点一次移到回收站"); return }
             trashArmed = false
             var target = post
             shown = null
             video.source = ""
-            feed.trash(target, function () { paged.reset(); if (view.openIndex >= paged.total) view.openIndex = -1 })
+            feed.trash(target, function () { paged.reset(); viewer.say("已移到系统回收站") })
         }
         function next() { if (view.openIndex < paged.total - 1) view.openIndex++ }
         function prev() { if (view.openIndex > 0) view.openIndex-- }
@@ -229,6 +238,7 @@ Item {
             else if (event.key === Qt.Key_Up) page = Math.max(1, page - 1)
             else if (event.key === Qt.Key_Space && isVideo) video.playing ? video.pause() : video.play()
             else if (event.key === Qt.Key_Z && post) view.toggleLike(post)
+            else if (event.key === Qt.Key_Delete && post) trash()
             else return
             event.accepted = true
         }
@@ -304,11 +314,16 @@ Item {
                         onClicked: view.toggleLike(viewer.post)
                         ToolTip.text: view.isLiked(viewer.post) ? "取消点赞（Z）" : "点赞（Z）"
                     }
+                    Label {
+                        visible: viewer.notice !== ""
+                        text: viewer.notice
+                        color: viewer.trashArmed ? "#ff7b72" : "#3fb950"; font.pixelSize: 13; font.bold: viewer.trashArmed
+                    }
                     IconButton {
                         glyph: "delete"; checked: viewer.trashArmed
                         enabled: !!viewer.post
                         onClicked: viewer.trash()
-                        ToolTip.text: viewer.trashArmed ? "再点一次：移到系统回收站" : "移到回收站"
+                        ToolTip.text: "移到系统回收站（Delete 按两次）"
                     }
                     IconButton { visible: !viewer.isVideo; glyph: "chevron_left"; enabled: viewer.page > 1; onClicked: viewer.page--; ToolTip.text: "上一张（↑）" }
                     Label { visible: !viewer.isVideo; color: "white"; font.pixelSize: 13; text: viewer.page + " / " + (viewer.post?.image_count ?? 0) }

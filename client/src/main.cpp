@@ -10,6 +10,8 @@
 #include <QEvent>
 #include <QPalette>
 #include <QTimer>
+#include <QKeyEvent>
+#include <QKeySequence>
 #include <QElapsedTimer>
 #include <QNetworkProxyFactory>
 #include <algorithm>
@@ -144,6 +146,27 @@ int main(int argc, char *argv[])
         startupMark("engine ready, loading QML");
         engine.load(url);
         startupMark("QML loaded");
+        // 开发验证：OMNIHUB_DEV_KEYS="毫秒:键,毫秒:键,…"（如 "4000:Delete,4300:Delete"）在指定时刻向窗口发按键，
+        // 离屏测试键盘操作用。键名同 Qt::Key_ 后缀（Delete、Z、Space、Right、P、Escape、1、Question……）。
+        if (!engine.rootObjects().isEmpty())
+            if (auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().first()))
+                for (const QString &item : qEnvironmentVariable("OMNIHUB_DEV_KEYS").split(',', Qt::SkipEmptyParts)) {
+                    const int colon = item.indexOf(':');
+                    const QString name = item.mid(colon + 1);
+                    bool ok = false;
+                    const int key = QKeySequence::fromString(name, QKeySequence::PortableText)[0].key();
+                    const int at = item.left(colon).toInt(&ok);
+                    if (!ok || key == 0) continue;
+                    QTimer::singleShot(at, w, [w, key, name] {
+                        if (!w->isActive()) w->requestActivate();
+                        const QString text = name.size() == 1 ? name.toLower() : QString();
+                        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier, text), release(QEvent::KeyRelease, key, Qt::NoModifier, text);
+                        QCoreApplication::sendEvent(w, &press);
+                        QCoreApplication::sendEvent(w, &release);
+                        QQuickItem *focus = w->activeFocusItem();
+                        fprintf(stderr, "dev-key %s -> %s\n", qPrintable(name), focus ? focus->metaObject()->className() : "(no focus)");
+                    });
+                }
         if (!engine.rootObjects().isEmpty())
             if (auto *w = qobject_cast<QQuickWindow *>(engine.rootObjects().first())) {
                 QObject::connect(w, &QQuickWindow::frameSwapped, w, [] { static bool once = false; if (!once) { once = true; startupMark("first frame"); } });

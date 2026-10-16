@@ -40,6 +40,11 @@ Item {
     }
 
     Component.onCompleted: feed.loadGroups()
+    // 列表变短（移到回收站后）时，大图停在原位置看下一张；原来就是最后一张则退到前一张。
+    Connections {
+        target: paged
+        function onTotalChanged() { if (view.openIndex >= paged.total && paged.total > 0) view.openIndex = paged.total - 1 }
+    }
 
 
     ColumnLayout {
@@ -179,13 +184,21 @@ Item {
                 Component.onDestruction: finish()
                 property bool trashArmed: false
                 Timer { id: trashDisarm; interval: 3000; onTriggered: viewer.trashArmed = false }
+                // 3 秒内点两次（或按两次 Delete）。完成后留在大图里，同一位置换成下一张。
+                property string notice: ""
+                Timer { id: noticeTimer; interval: 2500; onTriggered: viewer.notice = "" }
+                function say(text) { notice = text; noticeTimer.restart() }
                 function trash() {
-                    if (!trashArmed) { trashArmed = true; trashDisarm.restart(); return }
+                    var restoring = view.channel === "hidden"
+                    if (!trashArmed) { trashArmed = true; trashDisarm.restart(); say(restoring ? "再点一次从回收站恢复" : "再点一次移到回收站"); return }
                     trashArmed = false
                     var target = photo
                     shown = null
-                    var done = function () { view.reload(); if (view.openIndex >= paged.total - 1) view.openIndex = -1 }
-                    if (view.channel === "hidden") feed.restore(target, done); else feed.trash(target, done)
+                    var done = function () {
+                        view.reload()
+                        viewer.say(restoring ? "已恢复" : "已移到回收站，可在「🗑 回收站」里恢复")
+                    }
+                    if (restoring) feed.restore(target, done); else feed.trash(target, done)
                 }
                 Timer { id: originalTimer; interval: 250; onTriggered: viewer.originalSource = viewer.photo ? view.apiQuery("/api/media/gallery/original", viewer.photo) : "" }
                 color: "black"
@@ -197,6 +210,7 @@ Item {
                     else if (event.key === Qt.Key_Right || event.key === Qt.Key_Down) step(1)
                     else if (event.key === Qt.Key_Left || event.key === Qt.Key_Up) step(-1)
                     else if (event.key === Qt.Key_Z && photo) view.toggleLike(photo)
+                    else if (event.key === Qt.Key_Delete && photo) trash()
                     else return
                     event.accepted = true
                 }
@@ -247,12 +261,16 @@ Item {
                             onClicked: view.toggleLike(viewer.photo)
                             ToolTip.text: view.isLiked(viewer.photo) ? "取消点赞（Z）" : "点赞（Z）"
                         }
+                        Label {
+                            visible: viewer.notice !== ""
+                            text: viewer.notice
+                            color: viewer.trashArmed ? "#ff7b72" : "#3fb950"; font.pixelSize: 13; font.bold: viewer.trashArmed
+                        }
                         IconButton {
                             glyph: "delete"; checked: viewer.trashArmed
                             enabled: !!viewer.photo
                             onClicked: viewer.trash()
-                            ToolTip.text: view.channel === "hidden" ? (viewer.trashArmed ? "再点一次：恢复" : "从回收站恢复")
-                                : viewer.trashArmed ? "再点一次：移到回收站（只在 omniHub 里隐藏，可恢复）" : "移到回收站"
+                            ToolTip.text: view.channel === "hidden" ? "从回收站恢复（Delete 按两次）" : "移到回收站（Delete 按两次；只在 omniHub 里隐藏，可恢复）"
                         }
                     }
                 }
