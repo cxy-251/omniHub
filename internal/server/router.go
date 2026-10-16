@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 
@@ -343,6 +342,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/tools/shared/files", r.handleToolsSharedFiles)
 	r.mux.HandleFunc("/api/tools/shared/upload", r.handleToolsSharedUpload)
 	r.mux.HandleFunc("/api/tools/shared/zip", r.handleToolsSharedZip)
+	r.mux.HandleFunc("/api/tools/shared/file", r.handleToolsSharedFile)
 	r.mux.HandleFunc("/api/tools/speed", r.handleToolsSpeed)
 	r.mux.HandleFunc("/api/tools/webshell", r.handleToolsWebShell)
 
@@ -1056,146 +1056,6 @@ func (r *Router) handleAdminUsers(w http.ResponseWriter, req *http.Request) {
 }
 
 // --- 局域网小工具 ---
-
-func (r *Router) handleToolsClipboard(w http.ResponseWriter, req *http.Request) {
-	switch req.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, r.clipboard.List())
-	case http.MethodPost:
-		var p struct {
-			Content string `json:"content"`
-		}
-		if err := json.NewDecoder(req.Body).Decode(&p); err == nil && p.Content != "" {
-			item := r.clipboard.Push(p.Content)
-			writeJSON(w, http.StatusOK, item)
-			return
-		}
-		http.Error(w, "invalid content", http.StatusBadRequest)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func (r *Router) handleToolsMetrics(w http.ResponseWriter, req *http.Request) {
-	metrics := tools.GetSystemMetrics("/")
-	writeJSON(w, http.StatusOK, metrics)
-}
-
-func (r *Router) handleToolsWOL(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var p struct {
-		MAC string `json:"mac"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&p); err != nil || p.MAC == "" {
-		http.Error(w, "invalid mac address", http.StatusBadRequest)
-		return
-	}
-
-	if err := tools.SendWakeOnLAN(p.MAC); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (r *Router) handleToolsLANScan(w http.ResponseWriter, req *http.Request) {
-	devices, err := tools.ScanLAN()
-	if err != nil {
-		writeJSON(w, http.StatusOK, []tools.LANDevice{})
-		return
-	}
-	writeJSON(w, http.StatusOK, devices)
-}
-
-func (r *Router) handleToolsSharedFiles(w http.ResponseWriter, req *http.Request) {
-	primary := r.libMgr.GetPrimary()
-	if primary == nil {
-		writeJSON(w, http.StatusOK, []interface{}{})
-		return
-	}
-	sharedDir := filepath.Join(primary.RootPath, "media_library", "shared")
-	list, err := tools.ListSharedFiles(sharedDir)
-	if err != nil {
-		writeJSON(w, http.StatusOK, []interface{}{})
-		return
-	}
-	writeJSON(w, http.StatusOK, list)
-}
-
-func (r *Router) handleToolsSharedUpload(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	primary := r.libMgr.GetPrimary()
-	if primary == nil {
-		http.Error(w, "no primary library", http.StatusBadRequest)
-		return
-	}
-	sharedDir := filepath.Join(primary.RootPath, "media_library", "shared")
-
-	chunkIndex, _ := strconv.Atoi(req.URL.Query().Get("chunk_index"))
-	filename := req.URL.Query().Get("filename")
-	if filename == "" {
-		http.Error(w, "missing filename", http.StatusBadRequest)
-		return
-	}
-
-	buf, err := io.ReadAll(req.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if err := tools.WriteChunk(sharedDir, filename, chunkIndex, buf); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (r *Router) handleToolsSharedZip(w http.ResponseWriter, req *http.Request) {
-	primary := r.libMgr.GetPrimary()
-	if primary == nil {
-		http.Error(w, "no primary library", http.StatusBadRequest)
-		return
-	}
-	sharedDir := filepath.Join(primary.RootPath, "media_library", "shared")
-	filesParam := req.URL.Query().Get("files")
-	var filenames []string
-	if filesParam != "" {
-		filenames = strings.Split(filesParam, ",")
-	}
-
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", "attachment; filename=\"shared_archive.zip\"")
-	_ = tools.StreamZipArchive(sharedDir, filenames, w)
-}
-
-func (r *Router) handleToolsSpeed(w http.ResponseWriter, req *http.Request) {
-	switch req.Method {
-	case http.MethodGet:
-		// 下行测速：返回 5MB 随机数据
-		w.Header().Set("Content-Type", "application/octet-stream")
-		dummy := make([]byte, 1024*1024*5)
-		_, _ = w.Write(dummy)
-	case http.MethodPost:
-		// 上行测速：读取上传流并丢弃
-		_, _ = io.Copy(io.Discard, req.Body)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// handleToolsWebShell 暂时停用：旧实现没有超时、输出上限和进程组清理，待按 11.4 重做后再开放。
-func (r *Router) handleToolsWebShell(w http.ResponseWriter, req *http.Request) {
-	http.Error(w, "web shell is disabled", http.StatusServiceUnavailable)
-}
 
 func (r *Router) checkSectionAccess(w http.ResponseWriter, req *http.Request, sectionID string, target auth.TargetFilter) bool {
 	user := auth.UserFromContext(req.Context())

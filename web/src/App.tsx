@@ -10,7 +10,7 @@ const AudioPage = lazy(() => import('./AudioPage'));
 const TextPage = lazy(() => import('./TextPage'));
 const MangaLibrary = lazy(() => import('./MangaLibrary'));
 const GameLibrary = lazy(() => import('./GameLibrary'));
-const LegacyTools = lazy(() => import('./LegacyTools'));
+const ToolsPage = lazy(() => import('./ToolsPage'));
 const TaskConsole = lazy(() => import('./TaskConsole'));
 const AdminCenter = lazy(() => import('./AdminCenter'));
 
@@ -110,7 +110,7 @@ function Shell() {
         {current === 'text' ? <TextPage active /> : null}
         {current === 'manga' ? <MangaLibrary active /> : null}
         {current === 'games' ? <GameLibrary /> : null}
-        {current === 'tools' ? <LegacyTools /> : null}
+        {current === 'tools' ? <ToolsPage /> : null}
         {current === 'tasks' ? <TaskConsole /> : null}
         {current === 'admin' ? <AdminCenter /> : null}
       </Suspense>
