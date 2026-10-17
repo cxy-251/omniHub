@@ -22,7 +22,9 @@ ColumnLayout {
     property bool showPasswords: false
 
     readonly property var levels: [[0, "游客"], [1, "用户"], [2, "VIP1"], [3, "VIP2"], [4, "VIP3"], [99, "管理员"]]
-    readonly property var sections: [["gallery", "相册"], ["shortvideo", "短视频"], ["text", "文本"], ["audio", "音声"], ["manga", "漫画"], ["games", "游戏"], ["tools", "工具"], ["tasks", "任务"], ["admin", "管理"]]
+    // 工具按单个工具分级（子分区 tools/…）；任务与设置只对管理员角色开放，不在这里设等级。
+    readonly property var sections: [["gallery", "相册"], ["shortvideo", "短视频"], ["text", "文本"], ["audio", "音声"], ["manga", "漫画"], ["games", "游戏"]]
+    readonly property var subsectionNames: ({"tools/clipboard": "工具 · 剪贴板", "tools/shared": "工具 · 共享文件", "tools/status": "工具 · 主机状态", "tools/network": "工具 · 网络"})
     function levelIndex(v) { return Math.max(0, levels.findIndex(function (l) { return l[0] === v })) }
 
     ApiClient { id: api; onErrorChanged: if (error) { page.notice = error; page.noticeError = true } }
@@ -78,7 +80,7 @@ ColumnLayout {
             delegate: RowLayout {
                 required property var modelData
                 spacing: 6
-                Label { text: modelData.id + (modelData.explicit ? "" : "（默认）"); color: modelData.explicit ? "#e6edf3" : "#8b949e"; font.pixelSize: 12; Layout.preferredWidth: 190; elide: Text.ElideMiddle }
+                Label { text: (page.subsectionNames[modelData.id] || modelData.id) + (modelData.explicit ? "" : "（默认）"); color: modelData.explicit ? "#e6edf3" : "#8b949e"; font.pixelSize: 12; Layout.preferredWidth: 190; elide: Text.ElideMiddle }
                 ComboBox {
                     implicitHeight: 30; Layout.preferredWidth: 100; font.pixelSize: 13
                     model: page.levels.map(function (l) { return l[1] })

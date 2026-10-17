@@ -36,7 +36,7 @@ func (r *Router) sectionEnabled(section string) bool {
 func (r *Router) handleSections(w http.ResponseWriter, req *http.Request) {
 	u := auth.UserFromContext(req.Context())
 	allowed := make([]string, 0, 8)
-	for _, section := range []string{"gallery", "shortvideo", "text", "audio", "manga", "games", "tools"} {
+	for _, section := range []string{"gallery", "shortvideo", "text", "audio", "manga", "games"} {
 		if !r.sectionEnabled(section) {
 			continue
 		}
@@ -47,6 +47,20 @@ func (r *Router) handleSections(w http.ResponseWriter, req *http.Request) {
 		}
 		if u.Level >= level {
 			allowed = append(allowed, section)
+		}
+	}
+	// 工具：能用至少一个就显示「工具」，并列出能用的工具（tools/<名字>）。
+	if r.sectionEnabled("tools") {
+		tools, err := r.allowedTools(req)
+		if err != nil {
+			http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if len(tools) > 0 {
+			allowed = append(allowed, "tools")
+		}
+		for _, t := range tools {
+			allowed = append(allowed, "tools/"+t)
 		}
 	}
 	if u.Role == auth.RoleAdmin {

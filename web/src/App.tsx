@@ -11,13 +11,12 @@ const TextPage = lazy(() => import('./TextPage'));
 const MangaLibrary = lazy(() => import('./MangaLibrary'));
 const GameLibrary = lazy(() => import('./GameLibrary'));
 const ToolsPage = lazy(() => import('./ToolsPage'));
-const TaskConsole = lazy(() => import('./TaskConsole'));
 const AdminCenter = lazy(() => import('./AdminCenter'));
 
 // 导航与桌面端一致；只显示当前账号有权限的分区（服务端 /api/sections 决定）。
 const tabs = [
   ['shortvideo', '短视频'], ['gallery', '相册'], ['audio', '音声'], ['text', '文本'], ['manga', '漫画'],
-  ['games', '游戏'], ['tools', '工具'], ['tasks', '任务'], ['admin', '设置'],
+  ['games', '游戏'], ['tools', '工具'], ['admin', '设置'],
 ] as const;
 type Tab = typeof tabs[number][0];
 
@@ -114,8 +113,7 @@ function Shell() {
         {current === 'text' ? <TextPage active /> : null}
         {current === 'manga' ? <MangaLibrary active /> : null}
         {current === 'games' ? <GameLibrary /> : null}
-        {current === 'tools' ? <ToolsPage /> : null}
-        {current === 'tasks' ? <TaskConsole /> : null}
+        {current === 'tools' ? <ToolsPage sections={sections} /> : null}
         {current === 'admin' ? <AdminCenter /> : null}
       </Suspense>
     </main>

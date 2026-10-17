@@ -141,6 +141,14 @@ func (r *Router) handleAdminSubsections(w http.ResponseWriter, req *http.Request
 			}
 		}
 	}
+	for _, t := range toolDefaults {
+		id := "tools/" + t.name
+		level, explicit := c.stored[id]
+		if !explicit {
+			level = t.level
+		}
+		seen[id] = entry{ID: id, Section: "tools", RequiredLevel: level, Explicit: explicit}
+	}
 	out := make([]entry, 0, len(seen))
 	for _, e := range seen {
 		out = append(out, e)

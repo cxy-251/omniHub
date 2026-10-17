@@ -22,12 +22,49 @@ const (
 	maxUploadChunk    = 8 << 20
 )
 
-func (r *Router) toolsAllowed(w http.ResponseWriter, req *http.Request, lanOnly bool) bool {
+// 每个工具单独分级（子分区 tools/<名字>，在设置页修改）：剪贴板、共享文件默认「用户」，
+// 主机状态、网络默认「管理员」。「工具」分区本身不再设门槛：能用至少一个工具就显示。
+var toolDefaults = []struct {
+	name  string
+	level int
+}{{"clipboard", auth.LevelVIP0}, {"shared", auth.LevelVIP0}, {"status", auth.LevelAdmin}, {"network", auth.LevelAdmin}}
+
+// allowedTools 返回当前账号能用的工具名。
+func (r *Router) allowedTools(req *http.Request) ([]string, error) {
+	stored, err := r.authDB.ListSectionPermissions()
+	if err != nil {
+		return nil, err
+	}
+	level := auth.UserFromContext(req.Context()).Level
+	var out []string
+	for _, t := range toolDefaults {
+		required := t.level
+		if v, ok := stored["tools/"+t.name]; ok {
+			required = v
+		}
+		if level >= required {
+			out = append(out, t.name)
+		}
+	}
+	return out, nil
+}
+
+func (r *Router) toolsAllowed(w http.ResponseWriter, req *http.Request, tool string, lanOnly bool) bool {
 	if !r.sectionEnabled("tools") {
 		http.Error(w, "tools disabled", http.StatusForbidden)
 		return false
 	}
-	if !r.checkSectionAccess(w, req, "tools", auth.TargetAll) {
+	allowed, err := r.allowedTools(req)
+	if err != nil {
+		http.Error(w, "permission lookup failed", http.StatusServiceUnavailable)
+		return false
+	}
+	ok := false
+	for _, name := range allowed {
+		ok = ok || name == tool
+	}
+	if !ok {
+		http.Error(w, "forbidden: insufficient permission level", http.StatusForbidden)
 		return false
 	}
 	if lanOnly && auth.IsWANFromContext(req.Context()) {
@@ -49,7 +86,7 @@ func (r *Router) sharedDir() (string, error) {
 }
 
 func (r *Router) handleToolsClipboard(w http.ResponseWriter, req *http.Request) {
-	if !r.toolsAllowed(w, req, false) {
+	if !r.toolsAllowed(w, req, "clipboard", false) {
 		return
 	}
 	switch req.Method {
@@ -70,7 +107,7 @@ func (r *Router) handleToolsClipboard(w http.ResponseWriter, req *http.Request) 
 }
 
 func (r *Router) handleToolsMetrics(w http.ResponseWriter, req *http.Request) {
-	if !r.toolsAllowed(w, req, false) {
+	if !r.toolsAllowed(w, req, "status", false) {
 		return
 	}
 	// 磁盘看资源库所在的盘（系统根分区在 SteamOS 上只读、很小，没有参考意义）。
@@ -86,7 +123,7 @@ func (r *Router) handleToolsWOL(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !r.toolsAllowed(w, req, true) {
+	if !r.toolsAllowed(w, req, "network", true) {
 		return
 	}
 	var p struct {
@@ -104,7 +141,7 @@ func (r *Router) handleToolsWOL(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) handleToolsLANScan(w http.ResponseWriter, req *http.Request) {
-	if !r.toolsAllowed(w, req, true) {
+	if !r.toolsAllowed(w, req, "network", true) {
 		return
 	}
 	devices, err := tools.ScanLAN()
@@ -115,7 +152,7 @@ func (r *Router) handleToolsLANScan(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) handleToolsSharedFiles(w http.ResponseWriter, req *http.Request) {
-	if !r.toolsAllowed(w, req, false) {
+	if !r.toolsAllowed(w, req, "shared", false) {
 		return
 	}
 	dir, err := r.sharedDir()
@@ -138,7 +175,7 @@ func (r *Router) handleToolsSharedUpload(w http.ResponseWriter, req *http.Reques
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !r.toolsAllowed(w, req, true) {
+	if !r.toolsAllowed(w, req, "shared", true) {
 		return
 	}
 	dir, err := r.sharedDir()
@@ -167,7 +204,7 @@ func (r *Router) handleToolsSharedUpload(w http.ResponseWriter, req *http.Reques
 
 // handleToolsSharedFile 下载一个共享文件。一律作为附件下载、禁止嗅探：上传的 .html 不能在本站源里执行。
 func (r *Router) handleToolsSharedFile(w http.ResponseWriter, req *http.Request) {
-	if !r.toolsAllowed(w, req, false) {
+	if !r.toolsAllowed(w, req, "shared", false) {
 		return
 	}
 	dir, err := r.sharedDir()
@@ -191,7 +228,7 @@ func (r *Router) handleToolsSharedFile(w http.ResponseWriter, req *http.Request)
 
 // handleToolsSharedZip 把选中的文件（files=a,b；为空表示全部）打包下载。
 func (r *Router) handleToolsSharedZip(w http.ResponseWriter, req *http.Request) {
-	if !r.toolsAllowed(w, req, false) {
+	if !r.toolsAllowed(w, req, "shared", false) {
 		return
 	}
 	dir, err := r.sharedDir()
@@ -220,7 +257,7 @@ func (r *Router) handleToolsSharedZip(w http.ResponseWriter, req *http.Request) 
 }
 
 func (r *Router) handleToolsSpeed(w http.ResponseWriter, req *http.Request) {
-	if !r.toolsAllowed(w, req, false) {
+	if !r.toolsAllowed(w, req, "network", false) {
 		return
 	}
 	switch req.Method {

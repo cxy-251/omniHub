@@ -3,7 +3,9 @@ import { api, request, type Status, type User } from './api';
 
 type Device = { id: string; user_id: number; username: string; device_name: string; ip: string; created_at: string; expires_at: string };
 type Devices = { devices: Device[]; current_device_id: string; can_enroll: boolean; lan: boolean; capacity: number; lifetime_days: number };
-const sections = [['gallery', '相册'], ['shortvideo', '短视频'], ['text', '文本'], ['audio', '音频'], ['manga', '漫画'], ['games', '游戏'], ['tools', '工具'], ['tasks', '任务'], ['admin', '管理']] as const;
+// 工具按单个工具分级（子分区 tools/…）；任务与设置只对管理员角色开放，不在这里设等级。
+const sections = [['gallery', '相册'], ['shortvideo', '短视频'], ['text', '文本'], ['audio', '音声'], ['manga', '漫画'], ['games', '游戏']] as const;
+const subsectionNames: Record<string, string> = { 'tools/clipboard': '工具 · 剪贴板', 'tools/shared': '工具 · 共享文件', 'tools/status': '工具 · 主机状态', 'tools/network': '工具 · 网络（测速/唤醒/扫描）' };
 const levels = [0, 1, 2, 3, 4, 99];
 const levelNames: Record<number, string> = { 0: '游客', 1: '用户', 2: 'VIP1', 3: 'VIP2', 4: 'VIP3', 99: '管理员' };
 type Subsection = { id: string; section: string; required_level: number; explicit: boolean };
@@ -55,9 +57,9 @@ export default function AdminPage() {
           {levels.map(level => <option key={level} value={level}>{levelNames[level]}</option>)}</select></label>)}</div>
       {subsections.length ? <>
         <h3 className="mb-1 mt-4 font-semibold">子分区</h3>
-        <p className="mb-2 text-sm text-muted">资源库里的子目录（如 text/novels/nsfw）。灰色为默认值：没有单独设置的沿用所属分区，nsfw 默认仅管理员。</p>
+        <p className="mb-2 text-sm text-muted">资源库里的子目录（如 text/novels/nsfw）和各个工具。灰色为默认值：子目录沿用所属分区（nsfw 默认仅管理员）；剪贴板、共享文件默认「用户」，主机状态、网络默认「管理员」。</p>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{subsections.map(sub => <label key={sub.id} className="flex items-center justify-between gap-2 text-sm">
-          <span className={`min-w-0 truncate ${sub.explicit ? '' : 'text-muted'}`} title={sub.id}>{sub.id}{sub.explicit ? '' : '（默认）'}</span>
+          <span className={`min-w-0 truncate ${sub.explicit ? '' : 'text-muted'}`} title={sub.id}>{subsectionNames[sub.id] ?? sub.id}{sub.explicit ? '' : '（默认）'}</span>
           <select className={input} disabled={pending || !devices} value={sub.required_level} onChange={e => { const level = Number(e.target.value); setSubsections(old => old.map(x => x.id === sub.id ? { ...x, required_level: level, explicit: true } : x)); void change('/api/admin/permissions', { section_id: sub.id, required_level: level }); }}>
             {levels.map(level => <option key={level} value={level}>{levelNames[level]}</option>)}</select></label>)}</div>
       </> : null}

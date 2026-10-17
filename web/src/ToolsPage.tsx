@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, post, request } from './api';
-import { button, primaryButton, select } from './ui';
+import { button, chip, primaryButton, select, store, stored } from './ui';
 
 // 局域网小工具：剪贴板、共享文件（media_library/shared）、硬件看板、测速、唤醒与局域网扫描。
 // 所有内容都以文本节点渲染（旧版用 innerHTML 拼接剪贴板和文件名，别的设备能注入脚本）。
@@ -23,12 +23,24 @@ function usePoll(fn: () => void, ms: number) {
   }, [ms]);
 }
 
-export default function ToolsPage() {
-  return <section className="grid gap-3 lg:grid-cols-2">
-    <Clipboard />
-    <SharedFiles />
-    <MetricsCard />
-    <Network />
+// 每个工具单独分级（设置 → 子分区 tools/…），这里只显示当前账号能用的。
+const tools = [['clipboard', '📋 剪贴板'], ['shared', '📁 共享文件'], ['status', '📊 主机状态'], ['network', '🌐 网络']] as const;
+
+export default function ToolsPage({ sections }: { sections: string[] }) {
+  const available = tools.filter(([id]) => sections.includes(`tools/${id}`));
+  const [tab, setTab] = useState(() => stored('omnihub.tools.tab', 'clipboard'));
+  useEffect(() => store('omnihub.tools.tab', tab), [tab]);
+  const current = available.some(([id]) => id === tab) ? tab : available[0]?.[0];
+  return <section className="space-y-3">
+    <div className="flex flex-wrap gap-1.5">
+      {available.map(([id, label]) => <button key={id} className={chip(current === id)} onClick={() => setTab(id)}>{label}</button>)}
+    </div>
+    <div className="max-w-3xl">
+      {current === 'clipboard' ? <Clipboard /> : null}
+      {current === 'shared' ? <SharedFiles /> : null}
+      {current === 'status' ? <MetricsCard /> : null}
+      {current === 'network' ? <Network /> : null}
+    </div>
   </section>;
 }
 
@@ -59,7 +71,7 @@ function Clipboard() {
       <button className={primaryButton} onClick={send} disabled={!text.trim()}>发送</button>
     </div>
     {msg ? <p className="text-xs text-muted">{msg}</p> : null}
-    <ul className="max-h-64 space-y-1 overflow-y-auto">
+    <ul className="max-h-[60vh] space-y-1 overflow-y-auto">
       {items.map(it => <li key={it.id} className="flex items-start gap-2 rounded border border-line bg-background px-2 py-1">
         <p className="min-w-0 flex-1 whitespace-pre-wrap break-all text-sm">{/^https?:\/\/\S+$/.test(it.content.trim())
           ? <a className="text-primary underline" href={it.content.trim()} target="_blank" rel="noopener noreferrer">{it.content}</a> : it.content}</p>
@@ -109,7 +121,7 @@ function SharedFiles() {
       <button className={button} onClick={load}>刷新</button>
       {progress ? <span className="text-sm text-muted">{progress}</span> : msg ? <span className="text-sm text-muted">{msg}</span> : null}
     </div>
-    <ul className="max-h-64 space-y-1 overflow-y-auto">
+    <ul className="max-h-[60vh] space-y-1 overflow-y-auto">
       {regular.map(f => <li key={f.name} className="flex items-center gap-2 rounded border border-line bg-background px-2 py-1 text-sm">
         <a className="min-w-0 flex-1 truncate text-primary hover:underline" href={`/api/tools/shared/file?name=${encodeURIComponent(f.name)}`} download={f.name}>{f.name}</a>
         <span className="shrink-0 text-xs text-muted">{size(f.size_bytes)} · {f.mod_time.slice(5, 16)}</span>
