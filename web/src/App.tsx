@@ -20,7 +20,6 @@ const tabs = [
   ['games', '游戏'], ['tools', '工具'], ['tasks', '任务'], ['admin', '设置'],
 ] as const;
 type Tab = typeof tabs[number][0];
-type Libraries = { primary: { name: string } | null };
 
 const GamePlayer = lazy(() => import('./GameLibrary').then(m => ({ default: m.GamePlayer })));
 
@@ -38,7 +37,6 @@ window.addEventListener('hashchange', () => { if (window.location.hash.startsWit
 function Shell() {
   const [status, setStatus] = useState<Status>();
   const [sections, setSections] = useState<string[]>([]);
-  const [library, setLibrary] = useState('');
   // 当前标签记在网址 #后（可前进/后退、可直接打开某页），没有时用上次的。
   const fromHash = () => tabs.find(([id]) => window.location.hash.split('/')[0] === `#${id}`)?.[0];   // #gallery/matrix 直接打开多联放映
   const [tab, setTab] = useState<Tab>(() => fromHash() ?? stored('omnihub.tab', 'shortvideo'));
@@ -60,10 +58,8 @@ function Shell() {
     Promise.all([
       api<Status>('/api/auth/status', { signal: controller.signal }),
       api<{ sections: string[] }>('/api/sections', { signal: controller.signal }),
-      api<Libraries>('/api/library/list', { signal: controller.signal }),
-    ]).then(([nextStatus, access, libraries]) => {
+    ]).then(([nextStatus, access]) => {
       setStatus(nextStatus); setSections(access.sections);
-      setLibrary(libraries.primary ? libraries.primary.name : '尚未配置资源库');
     }).catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
   }, [revision]);
@@ -94,7 +90,6 @@ function Shell() {
         <nav className="order-last flex min-w-0 basis-full gap-1 overflow-x-auto sm:order-none sm:flex-1 sm:basis-auto" aria-label="主要导航">
           {visible.map(([id, label]) => <button key={id} className={tabStyle(current === id)} onClick={() => choose(id)}>{label}</button>)}
         </nav>
-        <span className="ml-auto hidden text-xs text-muted sm:inline">{library}</span>
         <span className="ml-auto text-sm text-muted sm:ml-0">{status?.user.username ?? '访客'}{status ? ` · Lv.${status.user.level}` : ''}</span>
         {status?.logged_in
           ? <><button className={headerButton} onClick={() => setPasswordOpen(v => !v)}>修改密码</button>
