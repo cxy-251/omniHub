@@ -18,6 +18,8 @@ ColumnLayout {
     property string notice: ""
     property bool noticeError: false
     property int resetFor: 0
+    // 输入新密码时可以显示明文；已有密码只存了哈希，无法显示，忘了就在这里重置。
+    property bool showPasswords: false
 
     readonly property var levels: [[0, "游客"], [1, "用户"], [2, "VIP1"], [3, "VIP2"], [4, "VIP3"], [99, "管理员"]]
     readonly property var sections: [["gallery", "相册"], ["shortvideo", "短视频"], ["text", "文本"], ["audio", "音声"], ["manga", "漫画"], ["games", "游戏"], ["tools", "工具"], ["tasks", "任务"], ["admin", "管理"]]
@@ -89,17 +91,19 @@ ColumnLayout {
 
     // 账号
     Label { text: "账号"; color: "#c9d1d9"; font.pixelSize: 15; font.bold: true }
+    Toggle { text: "显示输入的密码"; checked: page.showPasswords; onToggled: page.showPasswords = checked }
+    Label { text: "已设置的密码只保存了加密摘要，无法查看；忘记了就点该账号的「重置密码」设一个新的。"; color: "#8b949e"; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
     RowLayout {
         spacing: 6
         TextField { id: newName; placeholderText: "用户名"; implicitHeight: 30; Layout.preferredWidth: 140; maximumLength: 64 }
-        TextField { id: newPassword; placeholderText: "密码"; echoMode: TextInput.Password; implicitHeight: 30; Layout.preferredWidth: 140; maximumLength: 72 }
+        TextField { id: newPassword; placeholderText: "密码"; echoMode: page.showPasswords ? TextInput.Normal : TextInput.Password; implicitHeight: 30; Layout.preferredWidth: 140; maximumLength: 72 }
         ComboBox { id: newLevel; implicitHeight: 30; Layout.preferredWidth: 100; font.pixelSize: 13; model: page.levels.map(function (l) { return l[1] }); currentIndex: 1 }
         Button {
             text: "新建账号"
             enabled: newName.text.trim() !== "" && newPassword.text !== ""
             onClicked: {
                 var level = page.levels[newLevel.currentIndex][0]
-                page.post("/api/admin/users/create", {username: newName.text.trim(), password: newPassword.text, role: level === 99 ? "admin" : "user", level: level}, "已新建 " + newName.text.trim())
+                page.post("/api/admin/users/create", {username: newName.text.trim(), password: newPassword.text, role: level === 99 ? "admin" : "user", level: level}, "已新建 " + newName.text.trim() + (page.showPasswords ? "，密码：" + newPassword.text : ""))
                 newName.text = ""; newPassword.text = ""
             }
         }
@@ -124,11 +128,11 @@ ColumnLayout {
                 onClicked: page.post("/api/admin/users/status", {user_id: modelData.id, status: modelData.status === "active" ? "disabled" : "active"}, "已更新")
             }
             Button { text: "重置密码"; onClicked: page.resetFor = modelData.id }
-            TextField { id: resetField; visible: page.resetFor === modelData.id; placeholderText: "新密码"; echoMode: TextInput.Password; implicitHeight: 30; Layout.preferredWidth: 140; maximumLength: 72 }
+            TextField { id: resetField; visible: page.resetFor === modelData.id; placeholderText: "新密码"; echoMode: page.showPasswords ? TextInput.Normal : TextInput.Password; implicitHeight: 30; Layout.preferredWidth: 140; maximumLength: 72 }
             Button {
                 visible: page.resetFor === modelData.id
                 text: "确认"; enabled: resetField.text !== ""
-                onClicked: { page.post("/api/admin/users/password", {user_id: modelData.id, password: resetField.text}, "密码已更新，并撤销全部凭证"); page.resetFor = 0 }
+                onClicked: { page.post("/api/admin/users/password", {user_id: modelData.id, password: resetField.text}, modelData.username + " 的密码已改为" + (page.showPasswords ? "：" + resetField.text : "新密码") + "，并撤销全部凭证"); page.resetFor = 0 }
             }
         }
     }

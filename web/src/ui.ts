@@ -15,3 +15,12 @@ export function stored<T>(key: string, fallback: T): T {
 export function store(key: string, value: unknown) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 忽略 */ }
 }
+
+// 全局提示：notify('…') 在页面底部弹出 2.5 秒（App 里的 <Toast /> 显示）。
+export function notify(message: string) {
+  window.dispatchEvent(new CustomEvent('omnihub-notice', { detail: message }));
+}
+// 把接口错误换成用户看得懂的话：未登录时提示去登录。
+export function explain(error: Error, action: string) {
+  return /login required|logged in|403/i.test(error.message) ? `登录后才能${action}` : `${action}失败：${error.message}`;
+}

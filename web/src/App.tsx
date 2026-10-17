@@ -22,9 +22,18 @@ const tabs = [
 type Tab = typeof tabs[number][0];
 type Libraries = { primary: { name: string } | null };
 
+const GamePlayer = lazy(() => import('./GameLibrary').then(m => ({ default: m.GamePlayer })));
+
 export default function App() {
+  // #play/<库ID>/<游戏ID>：新标签页里只放游戏本身（游戏页点卡片时打开）。
+  if (window.location.hash.startsWith('#play/')) {
+    const [lib, id] = window.location.hash.slice(6).split('/').map(decodeURIComponent);
+    return <Suspense fallback={null}><GamePlayer libraryId={lib} id={id} /></Suspense>;
+  }
   return <AudioProvider><Shell /></AudioProvider>;
 }
+// 同一页里地址改成 #play/…（比如手动粘贴）时重新加载，进入游戏页。
+window.addEventListener('hashchange', () => { if (window.location.hash.startsWith('#play/')) window.location.reload(); });
 
 function Shell() {
   const [status, setStatus] = useState<Status>();
@@ -115,6 +124,19 @@ function Shell() {
         {current === 'admin' ? <AdminCenter /> : null}
       </Suspense>
     </main>
+    <Toast />
     <AudioBar onOpen={() => choose('audio')} />
   </div>;
+}
+
+// 全局提示（ui.ts 的 notify）：底部居中，2.5 秒后消失；放在 viewer/矩阵等全屏层之上。
+function Toast() {
+  const [message, setMessage] = useState('');
+  useEffect(() => {
+    let timer = 0;
+    const show = (e: Event) => { setMessage((e as CustomEvent<string>).detail); window.clearTimeout(timer); timer = window.setTimeout(() => setMessage(''), 2500); };
+    window.addEventListener('omnihub-notice', show);
+    return () => { window.removeEventListener('omnihub-notice', show); window.clearTimeout(timer); };
+  }, []);
+  return message ? <div role="status" className="fixed bottom-20 left-1/2 z-[100] -translate-x-1/2 rounded-full bg-[#30363d] px-4 py-2 text-sm text-white shadow-lg">{message}</div> : null;
 }

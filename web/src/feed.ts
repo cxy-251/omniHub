@@ -1,3 +1,4 @@
+import { explain, notify } from './ui';
 import { useCallback, useEffect, useState } from 'react';
 import { api, post } from './api';
 
@@ -35,7 +36,7 @@ export function useGroups(domain: Domain, active: boolean) {
     return () => controller.abort();
   }, [domain, active]);
   const setPinned = useCallback((group: string, pinned: boolean) => {
-    post<string[]>(feedPath(domain, 'pin'), { group, pinned }).then(setPins).catch(() => undefined);
+    post<string[]>(feedPath(domain, 'pin'), { group, pinned }).then(setPins).catch((e: Error) => notify(explain(e, '固定博主')));
   }, [domain]);
   return { groups, pins, setPinned };
 }
@@ -46,7 +47,7 @@ export function useLiked(domain: Domain) {
   const isLiked = useCallback((item?: { id: string; liked?: boolean }) => !!item && (item.id in override ? override[item.id] : !!item.liked), [override]);
   const toggle = useCallback((item: { id: string; liked?: boolean }) => {
     const next = !(item.id in override ? override[item.id] : !!item.liked);
-    like(domain, item.id, next).then(() => setOverride(o => ({ ...o, [item.id]: next }))).catch(() => undefined);
+    like(domain, item.id, next).then(() => setOverride(o => ({ ...o, [item.id]: next }))).catch((e: Error) => notify(explain(e, '点赞')));
   }, [domain, override]);
   return { isLiked, toggle };
 }

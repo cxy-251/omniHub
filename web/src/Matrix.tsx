@@ -3,7 +3,7 @@ import { api } from './api';
 import { playableCodecs } from './codecs';
 import { feedPath, feedQuery, newSeed, sendEvent, trash as trashItem, like, useGroups, type Domain } from './feed';
 import { useAudio } from './AudioEngine';
-import { chip, select, store, stored } from './ui';
+import { chip, explain, notify, select, store, stored } from './ui';
 
 // 多联放映（短视频与相册共用，与桌面端一致）：2/3 屏并排，只放竖屏内容。
 //   shortvideo：视频（只取本浏览器能解码的编码），播完换下一条；可焦点出声、静音
@@ -21,7 +21,7 @@ const shortcuts: [string, string, boolean?][] = [
   ['B', '伴听暂停 / 继续'], ['Tab', '固定 / 收起顶栏'], ['F', '全屏'], ['? 或 H', '显示 / 隐藏快捷键说明'], ['Esc', '关闭说明 / 退出全屏 / 返回浏览'],
 ];
 
-type SlotHandle = { step(delta: number, auto?: boolean): void; togglePause(): void; toggleLike(): void; trash(): void; seekBy(s: number): void; item?: Item };
+type SlotHandle = { step(delta: number, auto?: boolean): void; togglePause(): void; toggleLike(): void; trash(): Promise<void>; seekBy(s: number): void; item?: Item };
 
 function Screen({ domain, slot, index, focused, playing, audible, slideSeconds, onFocus, onChange, register }: {
   domain: Domain; slot: Slot; index: number; focused: boolean; playing: boolean; audible: boolean; slideSeconds: number;
@@ -87,13 +87,14 @@ function Screen({ domain, slot, index, focused, playing, audible, slideSeconds, 
       step,
       togglePause: () => setPaused(p => !p),
       seekBy: s => { if (video.current) video.current.currentTime += s; },
-      toggleLike: () => { const it = live.current.item; if (it) like(domain, it.id, !it.liked).then(() => setItem(cur => cur && cur.id === it.id ? { ...cur, liked: !it.liked } : cur)).catch(() => undefined); },
+      toggleLike: () => { const it = live.current.item; if (it) like(domain, it.id, !it.liked).then(() => setItem(cur => cur && cur.id === it.id ? { ...cur, liked: !it.liked } : cur)).catch((e: Error) => notify(explain(e, '点赞'))); },
       trash: () => {
         const it = live.current.item;
-        if (!it) return;
+        if (!it) return Promise.resolve();
+        // 先卸下视频（文件句柄释放后才能移到系统回收站）；失败时重新加载这一条。
         video.current?.removeAttribute('src');
-        trashItem(domain, it.id).then(() => { onChange({ itemId: '', pos: 0 }); setReload(n => n + 1); })
-          .catch((e: Error) => setError(e.message));
+        return trashItem(domain, it.id).then(() => { onChange({ itemId: '', pos: 0 }); setReload(n => n + 1); })
+          .catch((e: Error) => { setReload(n => n + 1); throw e; });
       },
     });
     return () => register(index, undefined);
@@ -158,7 +159,10 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
 
   const trashFocused = () => {
     if (!focusedHandle?.item) return;
-    if (trashArmed) { setTrashArmed(false); focusedHandle.trash(); setToast('已移到回收站'); } else { setTrashArmed(true); setToast('再按一次移到回收站'); }
+    if (trashArmed) {
+      setTrashArmed(false);
+      focusedHandle.trash().then(() => setToast('已移到回收站')).catch((e: Error) => setToast(/admin/i.test(e.message) ? '只有管理员能移到回收站（需本机或局域网登录）' : `移到回收站失败：${e.message}`));
+    } else { setTrashArmed(true); setToast('再按一次移到回收站'); }
   };
   const toggleFullscreen = () => { if (document.fullscreenElement) void document.exitFullscreen(); else void container.current?.requestFullscreen(); };
   const keys = useRef<(e: KeyboardEvent) => void>(() => undefined);
