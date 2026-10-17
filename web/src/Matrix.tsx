@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
-import { playableCodecs } from './codecs';
+import { webCodecs } from './codecs';
 import { feedPath, feedQuery, newSeed, sendEvent, trash as trashItem, like, useGroups, type Domain } from './feed';
 import { useAudio } from './AudioEngine';
 import { chip, explain, notify, select, store, stored } from './ui';
@@ -46,7 +46,7 @@ function Screen({ domain, slot, index, focused, playing, audible, slideSeconds, 
     const resume = slot.itemId && slot.pos > 1 ? { id: slot.itemId, pos: slot.pos } : undefined;
     setError(''); setItem(undefined);
     const q = feedQuery({ channel: slot.channel, seed: slot.seed, index: slot.index, portrait: true,
-      kind: isVideo ? 'video' : undefined, codecs: isVideo ? playableCodecs().join(',') : undefined,
+      kind: isVideo ? 'video' : undefined, codecs: isVideo ? webCodecs() : undefined,
       order: slot.shuffle && slot.channel !== 'recommend' ? 'shuffle' : undefined });
     api<{ total: number; item: Item }>(`${feedPath(domain, 'sequence')}?${q}`, { signal: controller.signal }).then(r => {
       setTotal(r.total); setItem(r.item); shownAt.current = Date.now();

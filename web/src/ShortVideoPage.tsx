@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { usePaged } from './paged';
 import VirtualGrid from './VirtualGrid';
 import ChannelBar from './ChannelBar';
-import { canPlayCodec } from './codecs';
+import { canPlayCodec, webCodecs } from './codecs';
 import { feedPath, feedQuery, newSeed, sendEvent, trash, useGroups, useLiked } from './feed';
 import { button, chip, iconButton, store, stored } from './ui';
 
@@ -12,7 +12,7 @@ type Post = { id: string; creator_id: string; kind: 'video' | 'album'; title: st
 const query = (post: Post, extra: Record<string, string> = {}) => new URLSearchParams({ library_id: post.library_id, id: post.id, ...extra }).toString();
 
 // 短视频：频道（推荐 | 我的点赞 | 平台 | 📌 固定的博主 | 其余博主）+ 作品网格 + 查看器；也可切到多联放映。
-// 推荐、点赞、回收站、行为上报与桌面端共用 /api/feed/shortvideo。
+// 推荐、点赞、回收站、行为上报与桌面端共用 /api/feed/shortvideo。网页端不展示 HEVC 视频（codecs 过滤，图集不受影响）。
 export default function ShortVideoPage({ active }: { active: boolean }) {
   const [mode, setMode] = useState<'browse' | 'matrix'>(() => window.location.hash.endsWith('/matrix') ? 'matrix' : stored('omnihub.sv.mode', 'browse'));
   const [channel, setChannel] = useState(() => stored('omnihub.sv.channel', 'recommend'));
@@ -25,7 +25,7 @@ export default function ShortVideoPage({ active }: { active: boolean }) {
   const liked = useLiked('shortvideo');
   const platforms = [...new Set(groups.map(g => g.platform).filter(Boolean))].map(p => ({ channel: `tag:platform:${p}`, label: p! }));
   const browsing = active && mode === 'browse';
-  const endpoint = browsing ? `${feedPath('shortvideo', 'items')}?${feedQuery({ channel, seed, r: reload || undefined })}` : '';
+  const endpoint = browsing ? `${feedPath('shortvideo', 'items')}?${feedQuery({ channel, seed, r: reload || undefined, codecs: webCodecs() })}` : '';
   const paged = usePaged<Post>(endpoint);
   const group = channel.startsWith('group:') ? channel.slice(6) : '';
   // 列表变短（移到回收站后）时，查看器停在原位置看下一个；原来就是最后一个则退到前一个。

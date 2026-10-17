@@ -20,3 +20,8 @@ export function playableCodecs(): string[] {
 export function canPlayCodec(codec?: string) {
   return !codec || codec === '?' || playableCodecs().includes(codec);
 }
+
+// 网页端展示的视频编码：浏览器能播的，且一律不要 HEVC（体积大、多数浏览器不能解，交给桌面端）。
+export function webCodecs(): string {
+  return playableCodecs().filter(c => c !== 'hevc').join(',');
+}
