@@ -74,13 +74,32 @@ Item {
                     text: "允许局域网访问"
                     property bool loaded: false
                     enabled: loaded
-                    Component.onCompleted: lanApi.getJSON("/api/network/lan", function (r) { lanSwitch.checked = r.enabled; lanSwitch.loaded = true })
+                    property var urls: []
+                    Component.onCompleted: lanApi.getJSON("/api/network/lan", function (r) { lanSwitch.checked = r.enabled; lanSwitch.urls = r.urls || []; lanSwitch.loaded = true })
                     onToggled: lanApi.send("POST", "/api/network/lan", {enabled: checked}, function (r) { lanSwitch.checked = r.enabled })
                 }
                 Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
-                    text: lanApi.error || (lanSwitch.checked ? "手机、电脑可以在浏览器里打开 http://omnihub.local:8998 使用网页端（需要登录账号）。" : "只有这台 Deck 能访问，局域网设备会被拒绝，也不再广播 omnihub.local。")
+                    text: lanApi.error || (lanSwitch.checked ? "手机、电脑在浏览器里打开下面任一网址即可使用网页端（同一个 Wi-Fi；omnihub.local 部分安卓设备不认，用 IP 那个）。" : "只有这台 Deck 能访问，局域网设备会被拒绝，也不再广播 omnihub.local。")
                     color: lanApi.error ? "#f85149" : "#8b949e"
+                }
+                // 局域网网址，一键复制
+                TextEdit { id: copier; visible: false }
+                Repeater {
+                    model: lanSwitch.checked ? lanSwitch.urls : []
+                    delegate: RowLayout {
+                        required property string modelData
+                        spacing: 8
+                        Label { text: modelData; color: "#e6edf3"; font.pixelSize: 14; font.family: "monospace" }
+                        Button {
+                            id: copyButton
+                            property bool done: false
+                            text: done ? "已复制" : "复制"
+                            implicitHeight: 28
+                            onClicked: { copier.text = modelData; copier.selectAll(); copier.copy(); done = true; copyTimer.restart() }
+                            Timer { id: copyTimer; interval: 1500; onTriggered: copyButton.done = false }
+                        }
+                    }
                 }
                 Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12; color: "#8b949e"

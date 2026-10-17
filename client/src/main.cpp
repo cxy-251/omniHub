@@ -6,6 +6,8 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
+#include <QOpenGLContext>
+#include <atomic>
 #include <QSGRendererInterface>
 #include <QEvent>
 #include <QPalette>
@@ -32,6 +34,40 @@ static void startupMark(const char *what)
 {
     if (qEnvironmentVariableIsSet("OMNIHUB_DEV_STARTUP")) fprintf(stderr, "startup %6lld ms  %s\n", startupClock.elapsed(), what);
 }
+
+// 窗口刚显示、还没被窗口管理器画到屏幕上时，开着垂直同步的 eglSwapBuffers 会等将近 1 秒才放行，
+// 主线程同步时跟着卡住，整个界面点不动（实测 swap=973ms；vblank_mode=0 时没有）。
+// 所以每个窗口显示后的头 2 秒关掉垂直同步，之后恢复，平时仍按刷新率节流。
+class FastFirstFrames : public QObject
+{
+public:
+    using QObject::QObject;
+protected:
+    bool eventFilter(QObject *object, QEvent *event) override
+    {
+        if (event->type() == QEvent::Show) {
+            if (auto *window = qobject_cast<QQuickWindow *>(object); window && !window->property("_fastFirstFrames").toBool()) {
+                window->setProperty("_fastFirstFrames", true);
+                auto *interval = new std::atomic<int>(0);   // 渲染线程读、主线程写；随窗口释放
+                auto *applied = new int(-1);                  // 只在渲染线程用
+                QObject::connect(window, &QQuickWindow::beforeRendering, window, [interval, applied] {
+                    const int want = interval->load();
+                    if (*applied == want) return;
+                    auto *context = QOpenGLContext::currentContext();
+                    auto *egl = context ? context->nativeInterface<QNativeInterface::QEGLContext>() : nullptr;
+                    using SwapInterval = unsigned (*)(void *, int);
+                    if (egl) {
+                        if (auto swap = reinterpret_cast<SwapInterval>(context->getProcAddress("eglSwapInterval"))) swap(egl->display(), want);
+                    }
+                    *applied = want;
+                }, Qt::DirectConnection);
+                QTimer::singleShot(2000, window, [window, interval] { interval->store(1); window->update(); });
+                QObject::connect(window, &QObject::destroyed, [interval, applied] { delete interval; delete applied; });
+            }
+        }
+        return QObject::eventFilter(object, event);
+    }
+};
 
 int main(int argc, char *argv[])
 {
@@ -143,9 +179,23 @@ int main(int argc, char *argv[])
                 QCoreApplication::exit(-1);
         }, Qt::QueuedConnection);
 
+        app.installEventFilter(new FastFirstFrames(&app));
         startupMark("engine ready, loading QML");
         engine.load(url);
         startupMark("QML loaded");
+        // 开发验证：OMNIHUB_DEV_STALLS=<秒> 在这段时间内每 20ms 打一次点，主线程被占住超过 100ms 时打印（界面点不动的时段）。
+        if (const int seconds = qEnvironmentVariableIntValue("OMNIHUB_DEV_STALLS"); seconds > 0) {
+            auto *tick = new QTimer(&app);
+            auto *last = new qint64(startupClock.elapsed());
+            tick->setInterval(20);
+            QObject::connect(tick, &QTimer::timeout, &app, [tick, last, seconds] {
+                const qint64 now = startupClock.elapsed();
+                if (now - *last > 100) fprintf(stderr, "stall %5lld ms ending at %6lld ms\n", now - *last, now);
+                *last = now;
+                if (now > seconds * 1000) tick->stop();
+            });
+            tick->start();
+        }
         // 开发验证：OMNIHUB_DEV_KEYS="毫秒:键,毫秒:键,…"（如 "4000:Delete,4300:Delete"）在指定时刻向窗口发按键，
         // 离屏测试键盘操作用。键名同 Qt::Key_ 后缀（Delete、Z、Space、Right、P、Escape、1、Question……）。
         if (!engine.rootObjects().isEmpty())

@@ -1,3 +1,4 @@
+#include <QElapsedTimer>
 #include "mpv_item.h"
 #include "media_address.h"
 #include <mpv/client.h>
@@ -127,7 +128,10 @@ private:
             {x11 ? MPV_RENDER_PARAM_X11_DISPLAY : MPV_RENDER_PARAM_INVALID, x11},
             {MPV_RENDER_PARAM_INVALID, nullptr}
         };
+        QElapsedTimer clock;
+        clock.start();
         const int status = mpv_render_context_create(&m_context, m_core->handle, params);
+        if (qEnvironmentVariableIsSet("OMNIHUB_DEV_STARTUP")) fprintf(stderr, "mpv render context %lld ms\n", clock.elapsed());
         if (status < 0) { reportError(status); return; }
         m_core->renderAvailable.store(true);
         const bool egl = QOpenGLContext::currentContext()->nativeInterface<QNativeInterface::QEGLContext>() != nullptr;
