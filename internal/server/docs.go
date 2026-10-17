@@ -44,6 +44,10 @@ func (r *Router) handleDocsTree(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "permission store unavailable", 503)
 		return
 	}
+	if q := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("q"))); q != "" {
+		r.searchDocs(w, req, access, q)
+		return
+	}
 	dir := req.URL.Query().Get("dir")
 	var dirs []string
 	if dir == "" {
@@ -144,3 +148,52 @@ func (r *Router) handleDocRaw(w http.ResponseWriter, req *http.Request) {
 	_, _ = io.Copy(w, io.LimitReader(f, maxDocBytes))
 }
 
+
+// searchDocs 在各在线库的文档目录里按文件名（不含扩展名也算）搜索，最多返回 300 条、最多看 50000 个条目。
+func (r *Router) searchDocs(w http.ResponseWriter, req *http.Request, access *accessChecker, q string) {
+	out := []docEntry{}
+	seen := 0
+	for _, lib := range r.libMgr.ListLibraries() {
+		if !lib.IsOnline {
+			continue
+		}
+		root, err := r.libMgr.ResolveCategoryPath(lib.ID+":"+docsCategory, docsCategory)
+		if err != nil {
+			continue
+		}
+		_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+			if err != nil || req.Context().Err() != nil {
+				return filepath.SkipDir
+			}
+			seen++
+			if seen > 50000 || len(out) >= 300 {
+				return filepath.SkipAll
+			}
+			name := d.Name()
+			if p != root && strings.HasPrefix(name, ".") {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.IsDir() || d.Type()&os.ModeSymlink != 0 || !isDocFile(name) || !strings.Contains(strings.ToLower(name), q) {
+				return nil
+			}
+			rel, err := filepath.Rel(root, p)
+			if err != nil {
+				return nil
+			}
+			logical := lib.ID + ":" + docsCategory + "/" + filepath.ToSlash(rel)
+			if !access.allows(logical) {
+				return nil
+			}
+			info, err := d.Info()
+			if err == nil {
+				out = append(out, docEntry{Name: name, Path: logical, Size: info.Size(), Library: lib.ID})
+			}
+			return nil
+		})
+	}
+	sort.SliceStable(out, func(a, b int) bool { return ordering.NaturalLess(out[a].Path, out[b].Path) })
+	writeJSON(w, http.StatusOK, out)
+}

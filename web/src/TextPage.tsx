@@ -36,7 +36,13 @@ function Novels() {
   const [category, setCategory] = useState(() => stored('omnihub.text.category', '__recent'));
   const [book, setBook] = useState<Novel | undefined>(linkedBook);
   const [error, setError] = useState('');
+  // 一级分组：standard（标准）与 nsfw 分开浏览、分开搜索；nsfw 只有等级够的账号才会出现。
+  const [group, setGroup] = useState(() => stored('omnihub.text.group', 'standard'));
+  const [query, setQuery] = useState('');
+  const [search, setSearch] = useState('');
   useEffect(() => store('omnihub.text.category', category), [category]);
+  useEffect(() => store('omnihub.text.group', group), [group]);
+  useEffect(() => { const t = window.setTimeout(() => setSearch(query.trim()), 300); return () => window.clearTimeout(t); }, [query]);
   useEffect(() => {
     const hash = book ? bookPrefix + encodeURIComponent(book.id) : '#text';
     if (window.location.hash !== hash) window.history.replaceState(null, '', hash);
@@ -48,18 +54,32 @@ function Novels() {
     api<Novel[]>('/api/media/text/recent', { signal: controller.signal }).then(setRecent).catch(() => undefined);
     return () => controller.abort();
   }, [book]);
-  const showRecent = category === '__recent';
-  const paged = usePaged<Novel>(!book && !showRecent ? `/api/media/text/novels?category=${encodeURIComponent(category)}` : '');
+  const groupOf = (c: string) => c.split('/')[0];
+  const groups = [...new Set(categories.map(c => groupOf(c.category)))].sort((a, b) => (a === 'standard' ? -1 : b === 'standard' ? 1 : a.localeCompare(b)));
+  const currentGroup = groups.includes(group) ? group : groups[0] ?? 'standard';
+  const inGroup = categories.filter(c => groupOf(c.category) === currentGroup);
+  const showRecent = !search && category === '__recent';
+  const endpoint = book ? '' : search ? `/api/media/text/novels?${new URLSearchParams({ group: currentGroup, q: search })}`
+    : showRecent ? '' : `/api/media/text/novels?category=${encodeURIComponent(category)}`;
+  const paged = usePaged<Novel>(endpoint);
+  const shownRecent = recent.filter(b => groupOf(b.category) === currentGroup);
   if (book) return <BookReader book={book} onClose={() => setBook(undefined)} />;
-  const total = showRecent ? recent.length : paged.total;
-  const item = (i: number) => showRecent ? recent[i] : paged.item(i);
+  const total = showRecent ? shownRecent.length : paged.total;
+  const item = (i: number) => showRecent ? shownRecent[i] : paged.item(i);
+  const groupName = (g: string) => g === 'nsfw' ? 'NSFW' : g === 'standard' ? '标准' : g || '未分组';
   return <div className="space-y-2">
-    <div className="flex gap-1.5 overflow-x-auto pb-1">
-      <button className={chip(showRecent)} onClick={() => setCategory('__recent')}>最近阅读</button>
-      {categories.map(c => <button key={c.category} className={chip(c.category === category)} onClick={() => setCategory(c.category)}>{c.category.split('/').pop() || '未分类'} <span className="text-xs">{c.count}</span></button>)}
+    <div className="flex flex-wrap items-center gap-1.5">
+      {groups.length > 1 ? groups.map(g => <button key={g} className={`rounded-md px-3 py-1 text-sm ${g === currentGroup ? 'bg-panel text-primary' : 'text-muted hover:text-foreground'}`}
+        onClick={() => { setGroup(g); setCategory('__recent'); }}>{groupName(g)}</button>) : null}
+      <input className={`${select} ml-auto w-48`} placeholder={`搜索${groupName(currentGroup)}书名`} value={query} onChange={e => setQuery(e.target.value)} />
+      {search ? <span className="text-xs text-muted">{paged.total} 本</span> : null}
     </div>
+    {!search ? <div className="flex gap-1.5 overflow-x-auto pb-1">
+      <button className={chip(showRecent)} onClick={() => setCategory('__recent')}>最近阅读</button>
+      {inGroup.map(c => <button key={c.category} className={chip(c.category === category)} onClick={() => setCategory(c.category)}>{c.category.split('/').pop() || '未分类'} <span className="text-xs">{c.count}</span></button>)}
+    </div> : null}
     {error || paged.error ? <p className="text-sm text-danger">{error || paged.error}</p> : null}
-    {showRecent && !recent.length ? <p className="text-sm text-muted">{categories.length ? '还没有阅读记录（登录后才会记录进度）。从上面选一个分类。' : '没有小说。'}</p> : null}
+    {showRecent && !shownRecent.length ? <p className="text-sm text-muted">{categories.length ? '还没有阅读记录（登录后才会记录进度）。从上面选一个分类。' : '没有小说。'}</p> : null}
     <VirtualGrid total={total} minColumnWidth={130} aspect={3 / 4} extraHeight={40} render={i => {
       const b = item(i);
       if (!b) return <div className="h-full rounded-lg border border-line bg-panel" />;
@@ -69,7 +89,7 @@ function Novels() {
           {b.format === 'epub' ? <img className="absolute inset-0 h-full w-full object-cover" src={`/api/media/text/epub/cover?path=${encodeURIComponent(b.id)}`} alt="" loading="lazy" decoding="async" /> : null}
         </div>
         <div className="h-10 px-1.5 py-0.5"><p className="truncate text-xs">{b.title}</p>
-          <p className="truncate text-xs text-muted">{showRecent ? `读到第 ${(b.chapter_index ?? 0) + 1} 章` : b.format.toUpperCase()}</p></div>
+          <p className="truncate text-xs text-muted">{showRecent ? `读到第 ${(b.chapter_index ?? 0) + 1} 章` : search ? b.category.split('/').pop() : b.format.toUpperCase()}</p></div>
       </button>;
     }} />
   </div>;
@@ -265,6 +285,17 @@ function Docs() {
   const [entries, setEntries] = useState<DocEntry[]>([]);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('');
+  // 输入框：当前目录即时筛选；同时按文件名搜索全部文档（停顿 300ms 后请求），结果显示在下面。
+  const [hits, setHits] = useState<DocEntry[]>();
+  useEffect(() => {
+    const q = filter.trim();
+    if (!q) { setHits(undefined); return; }
+    const controller = new AbortController();
+    const t = window.setTimeout(() => {
+      api<DocEntry[]>(`/api/media/text/docs?q=${encodeURIComponent(q)}`, { signal: controller.signal }).then(setHits).catch(() => undefined);
+    }, 300);
+    return () => { window.clearTimeout(t); controller.abort(); };
+  }, [filter]);
   useEffect(() => store('omnihub.docs.dir', dir), [dir]);
   useEffect(() => {
     store('omnihub.docs.open', doc);
@@ -291,7 +322,7 @@ function Docs() {
         {crumbs.map((c, i) => <span key={i} className="flex items-center gap-1"><span className="text-muted">/</span>
           <button className="text-primary hover:underline" onClick={() => setDir(dir.slice(0, dir.indexOf(':') + 1) + 'media_library/docs/' + crumbs.slice(0, i + 1).join('/'))}>{c}</button></span>)}
       </div>
-      <input className={`${select} w-full`} placeholder="筛选当前目录" value={filter} onChange={e => setFilter(e.target.value)} />
+      <input className={`${select} w-full`} placeholder="搜索文档（文件名）" value={filter} onChange={e => setFilter(e.target.value)} />
       {error ? <p className="text-sm text-danger">{error}</p> : null}
       {!error && !entries.length ? <p className="text-sm text-muted">这里没有文档。</p> : null}
       <div className={doc ? '' : 'grid gap-1 sm:grid-cols-2 lg:grid-cols-3'}>
@@ -300,6 +331,14 @@ function Docs() {
           <span className="shrink-0">{e.is_dir ? '📁' : /\.rst$/i.test(e.name) ? '📘' : '📄'}</span><span className="min-w-0 truncate">{e.name}</span>
         </button>)}
       </div>
+      {hits ? <div className="space-y-0.5 border-t border-line pt-2">
+        <p className="text-xs text-muted">全部文档中匹配 {hits.length}{hits.length >= 300 ? '+' : ''} 篇</p>
+        {hits.filter(h => !shown.some(e => e.path === h.path)).map(h => <button key={h.path} className={`block w-full rounded px-2 py-1 text-left text-sm ${h.path === doc ? 'bg-panel text-primary' : 'hover:bg-panel'}`}
+          onClick={() => open(h.path)} title={h.path.slice(h.path.indexOf(':') + 1)}>
+          <span className="block truncate">{h.name}</span>
+          <span className="block truncate text-xs text-muted">{h.path.slice(h.path.indexOf(':') + 1).split('/').slice(2, -1).join(' / ')}</span>
+        </button>)}
+      </div> : null}
     </aside>
     {doc ? <DocReader key={doc} path={doc} onOpen={open} onClose={() => setDoc('')}
       prev={index > 0 ? files[index - 1].path : undefined} next={index >= 0 && index < files.length - 1 ? files[index + 1].path : undefined} /> : null}

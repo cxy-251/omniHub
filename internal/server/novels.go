@@ -128,6 +128,26 @@ func (r *Router) handleNovels(w http.ResponseWriter, req *http.Request) {
 		}
 		all = filtered
 	}
+	// group：一级分组（standard / nsfw），分类名以它开头。
+	if g := req.URL.Query().Get("group"); g != "" {
+		filtered := all[:0]
+		for _, n := range all {
+			if n.Category == g || strings.HasPrefix(n.Category, g+"/") {
+				filtered = append(filtered, n)
+			}
+		}
+		all = filtered
+	}
+	// q：书名关键字（不分大小写），跨分类搜索时不带 category。
+	if q := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("q"))); q != "" {
+		filtered := all[:0]
+		for _, n := range all {
+			if strings.Contains(strings.ToLower(n.Title), q) {
+				filtered = append(filtered, n)
+			}
+		}
+		all = filtered
+	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(len(all)))
 	writeJSON(w, http.StatusOK, all[min(offset, len(all)):min(offset+limit, len(all))])
 }
