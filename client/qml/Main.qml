@@ -37,7 +37,7 @@ DarkWindow {
     // 开发验证：OMNIHUB_DEV_SWITCH=<毫秒> 在几个页面之间轮流切换，打印「建页耗时」和「到下一帧画完」的耗时。
     property double switchStarted: 0
     property double switchCreated: 0
-    onFrameSwapped: if (switchStarted > 0) { console.log("switch-timing page", stack.currentIndex, "create", switchCreated - switchStarted, "ms frame", Date.now() - switchStarted, "ms"); switchStarted = 0 }
+    onFrameSwapped: if (switchStarted > 0) { if (devStartup) console.log("switch-timing page", stack.currentIndex, "create", switchCreated - switchStarted, "ms frame", Date.now() - switchStarted, "ms"); switchStarted = 0 }
     Timer {
         property var order: [4, 5, 1, 3, 6, 7]
         property int step: 0

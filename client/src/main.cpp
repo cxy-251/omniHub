@@ -90,6 +90,8 @@ int main(int argc, char *argv[])
     // xcb 默认用 GLX；mpv 的 VA-API 显卡直出（解码帧不拷回内存）只能在 EGL 上做。
     // 实测三路 4K HEVC：拷回方式每路只有约 24 帧/秒（卡顿），直出约 41 帧/秒且几乎不占 CPU。
     if (qEnvironmentVariableIsEmpty("QT_XCB_GL_INTEGRATION")) qputenv("QT_XCB_GL_INTEGRATION", "xcb_egl");
+    // 「OpenType support missing for "Noto Sans", script N」：字体缺某些文字（天城文、泰文等）的排版表，只是提示，不影响显示。
+    if (qEnvironmentVariableIsEmpty("QT_LOGGING_RULES")) qputenv("QT_LOGGING_RULES", "qt.text.font.db=false");
 #endif
     QGuiApplication app(argc, argv);
     startupMark("QGuiApplication");

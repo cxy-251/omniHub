@@ -117,7 +117,19 @@ func (r *Router) handleWebGameOpen(w http.ResponseWriter, req *http.Request) {
 		encoded = append(encoded, url.PathEscape(part))
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, 201, map[string]any{"token": grant.token, "kind": kind, "url": "/game-content/" + grant.token + "/" + strings.Join(encoded, "/"), "expires_at": grant.expires})
+	out := map[string]any{"token": grant.token, "kind": kind, "url": "/game-content/" + grant.token + "/" + strings.Join(encoded, "/"), "expires_at": grant.expires}
+	if kind == "retro" {
+		system := retroSystem(filepath.Base(gameDir))
+		out["system"] = system
+		if bios := retroBios(system, entry); bios != "" {
+			if _, ok := r.retroBiosPath(selected.ID, bios); ok {
+				out["bios"] = "/game-content/" + grant.token + "/__bios/" + bios
+			} else {
+				out["bios_missing"] = bios
+			}
+		}
+	}
+	writeJSON(w, 201, out)
 }
 
 func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
@@ -148,7 +160,8 @@ func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	if !games.PublicWebAsset(parts[1]) {
+	biosName, isBios := strings.CutPrefix(parts[1], "__bios/")
+	if isBios && !retroBiosFiles[biosName] || !isBios && !games.PublicWebAsset(parts[1]) {
 		http.Error(w, "invalid game asset", 400)
 		return
 	}
@@ -188,6 +201,16 @@ func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 	}
 	if level < required || !r.sectionEnabled("games") || r.libMgr.IsCategoryDisabled(grant.category) {
 		http.Error(w, "game access disabled", 403)
+		return
+	}
+	if isBios {
+		p, ok := r.retroBiosPath(grant.libraryID, biosName)
+		if !ok {
+			http.NotFound(w, req)
+			return
+		}
+		w.Header().Set("Content-Type", "application/zip")
+		http.ServeFile(w, req, p)
 		return
 	}
 	gameDir, err := r.libMgr.ResolveCategoryPath(grant.libraryID+":standalone_games/"+grant.relative, grant.category)

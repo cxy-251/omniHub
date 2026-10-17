@@ -3,9 +3,22 @@ import { api, post, request } from './api';
 import { button, chip, explain, notify, select, store, stored } from './ui';
 
 type Game = { id: string; name: string; category: string; library_id: string; favorite?: boolean; last_played_at?: string };
-type Grant = { token: string; kind: 'html' | 'retro'; url: string; expires_at: string };
+type Grant = { token: string; kind: 'html' | 'retro'; url: string; expires_at: string; system?: string; bios?: string; bios_missing?: string };
 const categories = [['', '全部'], ['fav', '★ 收藏'], ['rpg', 'RPG'], ['slg', 'SLG'], ['retro', '模拟器']] as const;
 const art = (g: Game) => `/api/games/art?${new URLSearchParams({ library_id: g.library_id, id: g.id })}`;
+// 模拟器游戏按系列分组（同 omni-deck），卡片上标机种（游戏目录名末尾括号，如 (GBA)）。
+const franchises: [string, string, RegExp][] = [
+  ['kov', '🐉 三国战纪与街机清版', /valour|oriental legend|warriors of fate|三国|西游/i],
+  ['kof', '🥊 拳皇', /fighters|kof|热斗/i],
+  ['mslug', '🪖 合金弹头', /metal slug|mslug/i],
+  ['pokemon', '🐾 宝可梦', /pokemon|宝可梦|口袋妖怪/i],
+  ['zelda', '🗡️ 塞尔达传说', /zelda|塞尔达/i],
+  ['mario', '🍄 马里奥与瓦里奥', /mario|wario|yoshi|princess peach|马里奥|瓦里奥|耀西|碧姬/i],
+  ['ff', '🔮 最终幻想', /final fantasy|最终幻想/i],
+  ['contra', '🔫 魂斗罗', /contra|operation c|魂斗罗/i],
+];
+const franchiseOf = (g: Game) => franchises.find(([, , re]) => re.test(g.name))?.[0] ?? 'other';
+const systemOf = (g: Game) => /\(([^()]+)\)\s*$/.exec(g.name)?.[1] ?? '';
 const playUrl = (g: Game) => `/#play/${encodeURIComponent(g.library_id)}/${encodeURIComponent(g.id)}`;
 
 // 网页游戏（RPG/SLG 的 HTML 版与复古模拟器）：服务端一次返回全部（几百个），这里按分类、收藏、名字筛选。
@@ -42,21 +55,33 @@ export default function GameLibrary() {
       <button className={button} disabled={loading} onClick={() => setRevision(value => value + 1)}>刷新</button>
     </div>
     {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
-    {loading ? <p role="status">正在加载游戏…</p> : <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
-      {shown.map(game => <article key={game.id} className="group relative overflow-hidden rounded-lg border border-line bg-panel hover:border-primary">
+    {loading ? <p role="status">正在加载游戏…</p> : category === 'retro' && !needle ? <div className="space-y-4">
+      {[...franchises.map(([key, label]) => [key, label] as const), ['other', '🕹️ 其他复古经典'] as const].map(([key, label]) => {
+        const list = shown.filter(g => franchiseOf(g) === key);
+        return list.length ? <div key={key} className="space-y-2"><h3 className="text-sm font-semibold text-muted">{label} <span className="text-xs">{list.length}</span></h3>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">{list.map(game => <Card key={game.id} game={game} onFavorite={favorite} />)}</div></div> : null;
+      })}
+    </div> : <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
+      {shown.map(game => <Card key={game.id} game={game} onFavorite={favorite} />)}
+      {!shown.length ? <p className="col-span-full text-muted">{category === 'fav' ? '还没有收藏的游戏。' : '没有匹配的游戏。'}</p> : null}
+    </div>}
+  </section>;
+}
+
+function Card({ game, onFavorite }: { game: Game; onFavorite(g: Game): void }) {
+  const system = game.category === 'retro' ? systemOf(game) : '';
+  return <article className="group relative overflow-hidden rounded-lg border border-line bg-panel hover:border-primary">
         <a className="block" href={playUrl(game)} target="_blank" rel="noopener" title={`在新标签页打开 ${game.name}`}>
           <div className="relative aspect-[4/3] bg-background">
             <span className="absolute inset-0 flex items-center justify-center p-2 text-center text-sm text-muted">{game.name}</span>
             <img className="absolute inset-0 h-full w-full object-cover" src={art(game)} alt="" loading="lazy" decoding="async" onError={e => { e.currentTarget.style.display = 'none'; }} />
+            {system ? <span className="absolute left-1 top-1 rounded bg-black/70 px-1.5 text-xs text-white">{system}</span> : null}
           </div>
-          <p className="truncate px-2 pt-1 text-sm">{game.name}</p>
-          <p className="px-2 pb-1.5 text-xs text-muted">{game.category === 'retro' ? '模拟器' : game.category.toUpperCase()}</p>
+          <p className="truncate px-2 pt-1 text-sm">{system ? game.name.replace(/\s*\([^()]+\)\s*$/, '') : game.name}</p>
+          <p className="px-2 pb-1.5 text-xs text-muted">{game.category === 'retro' ? `模拟器 · ${system || '未知机种'}` : game.category.toUpperCase()}</p>
         </a>
-        <button className={`absolute right-1 top-1 rounded-full bg-black/60 px-1.5 text-sm ${game.favorite ? 'text-[#e3b341]' : 'text-white/70 opacity-60 hover:opacity-100'}`} onClick={() => favorite(game)} title={game.favorite ? '取消收藏' : '收藏'}>{game.favorite ? '★' : '☆'}</button>
-      </article>)}
-      {!shown.length ? <p className="col-span-full text-muted">{category === 'fav' ? '还没有收藏的游戏。' : '没有匹配的游戏。'}</p> : null}
-    </div>}
-  </section>;
+        <button className={`absolute right-1 top-1 rounded-full bg-black/60 px-1.5 text-sm ${game.favorite ? 'text-[#e3b341]' : 'text-white/70 opacity-60 hover:opacity-100'}`} onClick={() => onFavorite(game)} title={game.favorite ? '取消收藏' : '收藏'}>{game.favorite ? '★' : '☆'}</button>
+      </article>;
 }
 
 // GamePlayer：新标签页里的游戏本体，铺满窗口。打开时申请授权，标签关闭（pagehide）时释放。
@@ -84,7 +109,13 @@ export function GamePlayer({ libraryId, id }: { libraryId: string; id: string })
   const focus = () => frame.current?.focus();
   if (error) return <div className="flex h-screen items-center justify-center bg-black p-6 text-center text-[#ff7b72]">打不开「{name}」：{error}</div>;
   if (!grant) return <div className="flex h-screen items-center justify-center bg-black text-[#8b949e]">正在打开「{name}」…</div>;
-  const source = grant.kind === 'html' ? grant.url : `/players/${grant.kind}.html?url=${encodeURIComponent(grant.url)}`;
+  const source = grant.kind === 'html' ? grant.url
+    : `/players/${grant.kind}.html?${new URLSearchParams({ url: grant.url, ...(grant.system ? { core: grant.system } : {}), ...(grant.bios ? { bios: grant.bios } : {}) })}`;
+  if (grant.bios_missing) return <div className="flex h-screen items-center justify-center bg-black p-6 text-center leading-relaxed text-[#e6edf3]">
+    <div>「{name}」是街机基板游戏，需要 BIOS 固件 <b>{grant.bios_missing}</b>。<br />
+    请把 {grant.bios_missing} 放到资源库的 <code>standalone_games/retro_games/bios/</code> 目录里再打开。
+    {grant.bios_missing === 'pgm2.zip' ? <><br />（三国战纪 3 是 IGS PGM2 二代基板，需要 pgm2.zip，里面包含 ddp3_bios.u37 与 bios.u42。）</> : null}</div>
+  </div>;
   return <>
     <iframe ref={frame} title={name} src={source} onLoad={focus} className="fixed inset-0 h-full w-full border-0 bg-black"
       sandbox="allow-scripts allow-pointer-lock allow-modals allow-forms allow-downloads" allow="autoplay; fullscreen; screen-wake-lock *; gamepad *" referrerPolicy="no-referrer" />
