@@ -80,7 +80,7 @@ Item {
                 }
                 Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
-                    text: lanApi.error || (lanSwitch.checked ? "手机、电脑在浏览器里打开下面任一网址即可使用网页端（同一个 Wi-Fi；omnihub.local 部分安卓设备不认，用 IP 那个）。" : "只有这台 Deck 能访问，局域网设备会被拒绝，也不再广播 omnihub.local。")
+                    text: lanApi.error || (lanSwitch.checked ? "手机、电脑连同一个 Wi-Fi，在浏览器里打开下面的网址即可使用网页端。" : "只有这台 Deck 能访问，局域网设备会被拒绝。")
                     color: lanApi.error ? "#f85149" : "#8b949e"
                 }
                 // 局域网网址，一键复制

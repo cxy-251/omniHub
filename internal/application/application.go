@@ -533,7 +533,7 @@ func (a *Application) handleLAN(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// urls：局域网里其它设备可用的网址（本机私有 IPv4 + omnihub.local），端口取本次连接实际用的端口。
+	// urls：局域网里其它设备可用的网址（本机私有 IPv4），端口取本次连接实际用的端口。
 	_, port, err := net.SplitHostPort(req.Host)
 	if err != nil {
 		port = strconv.Itoa(a.cfg.Server.Port)
@@ -544,7 +544,6 @@ func (a *Application) handleLAN(w http.ResponseWriter, req *http.Request) {
 			urls = append(urls, "http://"+ip+":"+port)
 		}
 	}
-	urls = append(urls, "http://omnihub.local:"+port)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"enabled": a.lanEnabled.Load(), "urls": urls})
 }
