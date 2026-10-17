@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { api, request, type Status } from './api';
+import { api, post, request, type Status } from './api';
+import VirtualGrid from './VirtualGrid';
+import { chip, explain, notify, select, store, stored } from './ui';
 import { MangaWindow } from './mangaWindow';
 
 type Book = { metadata_error?: string; title: string; logical_path: string; library_name: string; read_only: boolean; total_pages: number };
@@ -269,43 +271,100 @@ function BookReader({ book, active, onBack }: { book: Book; active: boolean; onB
   </section>;
 }
 
-// MangaLibrary pages the shelf and mounts only the selected reader, whose image
-// sources are bounded to the visible vicinity and cleared when inactive.
+// MangaLibrary：书架一次取全（几百本，元数据很小，本页会话内缓存），在本地搜索与筛选：
+// 书名/作者/标签关键字、标签栏（出现最多的标签）、♥ 我的点赞、连载未完；卡片上的标签点一下即按它筛选。
+// 阅读器只挂载选中的那本，图片只加载可视区附近。
+type ShelfBook = Book & { author?: string; tags?: string[] | null; is_complete?: boolean };
+let shelfCache: ShelfBook[] | undefined;
+
+async function loadShelf(signal: AbortSignal) {
+  const all: ShelfBook[] = [];
+  for (let offset = 0; ; offset += 100) {
+    const response = await request(`/api/media/manga/list?offset=${offset}&limit=100`, { signal });
+    const rows = await response.json() as ShelfBook[];
+    all.push(...rows);
+    if (response.headers.get('X-Has-More') !== 'true' || !rows.length) return all;
+  }
+}
+
 export default function MangaLibrary({ active }: { active: boolean }) {
-  const [books, setBooks] = useState<Book[]>([]);
+  const [books, setBooks] = useState<ShelfBook[] | undefined>(shelfCache);
   const [selected, setSelected] = useState<Book>();
-  const [offset, setOffset] = useState(0);
-  const [more, setMore] = useState(false);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   const [recent, setRecent] = useState<Recent[]>([]);
+  const [likes, setLikes] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState(() => stored('omnihub.manga.filter', ''));   // '' 全部 | '__liked' | '__incomplete' | 标签
+  useEffect(() => store('omnihub.manga.filter', filter), [filter]);
   useEffect(() => {
     if (!active || selected) return;
     const controller = new AbortController();
     api<Recent[]>('/api/media/manga/recent', { signal: controller.signal }).then(setRecent).catch(() => undefined);
+    api<string[]>('/api/media/manga/likes', { signal: controller.signal }).then(list => setLikes(new Set(list))).catch(() => undefined);
     return () => controller.abort();
   }, [active, selected]);
   useEffect(() => {
-    if (!active || selected) return;
+    if (!active || (shelfCache && !revision)) return;
     const controller = new AbortController(); setError('');
-    request(`/api/media/manga/list?offset=${offset}&limit=24`, { signal: controller.signal }).then(async response => {
-      const next = await response.json() as Book[];
-      if (!controller.signal.aborted) { setBooks(next); setMore(response.headers.get('X-Has-More') === 'true'); }
-    }).catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
+    loadShelf(controller.signal).then(list => { shelfCache = list; setBooks(list); })
+      .catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
-  }, [active, selected, offset, revision]);
+  }, [active, revision]);
+  const toggleLike = (book: ShelfBook) => {
+    const next = !likes.has(book.logical_path);
+    post('/api/media/manga/likes', { path: book.logical_path, liked: next })
+      .then(() => setLikes(old => { const s = new Set(old); if (next) s.add(book.logical_path); else s.delete(book.logical_path); return s; }))
+      .catch((e: Error) => notify(explain(e, '点赞')));
+  };
+  const all = books ?? [];
+  const tagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const b of all) for (const t of b.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
+    return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 30);
+  }, [all]);
+  const needle = query.trim().toLowerCase();
+  const shown = all.filter(b => (filter === '' ? true : filter === '__liked' ? likes.has(b.logical_path) : filter === '__incomplete' ? b.is_complete === false : (b.tags ?? []).includes(filter))
+    && (!needle || b.title.toLowerCase().includes(needle) || (b.author ?? '').toLowerCase().includes(needle) || (b.tags ?? []).some(t => t.toLowerCase().includes(needle))));
   if (selected) return <BookReader key={selected.logical_path} book={selected} active={active} onBack={() => { setSelected(undefined); setRevision(value => value + 1); }} />;
-  return <section className="space-y-4"><button className={button} onClick={() => setRevision(value => value + 1)}>刷新书架</button>
-    {recent.length ? <div className="space-y-1"><p className="text-sm text-muted">继续阅读</p>
-      <div className="flex gap-2 overflow-x-auto pb-1">{recent.map(r => <button key={r.logical_path} className="w-28 shrink-0 overflow-hidden rounded-lg border border-line bg-surface text-left hover:border-primary"
+  const incomplete = all.filter(b => b.is_complete === false).length;
+  return <section className="space-y-2">
+    <div className="flex flex-wrap items-center gap-1.5">
+      <button className={chip(filter === '')} onClick={() => setFilter('')}>全部 {all.length}</button>
+      <button className={chip(filter === '__liked')} onClick={() => setFilter('__liked')}>♥ 我的点赞 {likes.size}</button>
+      {incomplete ? <button className={chip(filter === '__incomplete')} onClick={() => setFilter('__incomplete')}>连载/未完 {incomplete}</button> : null}
+      <input className={`${select} ml-auto w-52`} placeholder="搜索书名、作者、标签" value={query} onChange={e => setQuery(e.target.value)} />
+      <button className={button} onClick={() => setRevision(value => value + 1)}>刷新</button>
+    </div>
+    <div className="flex gap-1.5 overflow-x-auto pb-1">
+      {tagCounts.map(([t, n]) => <button key={t} className={chip(filter === t)} onClick={() => setFilter(filter === t ? '' : t)}>🏷 {t} <span className="text-xs">{n}</span></button>)}
+      {filter && !['__liked', '__incomplete'].includes(filter) && !tagCounts.some(([t]) => t === filter) ? <button className={chip(true)} onClick={() => setFilter('')}>🏷 {filter} ✕</button> : null}
+    </div>
+    {error ? <p role="alert" className="text-danger">{error}</p> : null}
+    {!books && !error ? <p role="status">正在读取书架…</p> : null}
+    {recent.length && !filter && !needle ? <div className="space-y-1"><p className="text-sm text-muted">继续阅读</p>
+      <div className="flex gap-2 overflow-x-auto pb-1">{recent.map(r => <button key={r.logical_path} className="w-24 shrink-0 overflow-hidden rounded-lg border border-line bg-panel text-left hover:border-primary"
         onClick={() => setSelected({ title: r.title, logical_path: r.logical_path, library_name: '', read_only: true, total_pages: 0 })}>
         <img className="aspect-[3/4] w-full object-cover" loading="lazy" decoding="async" src={`/api/media/manga/cover?path=${encodeURIComponent(r.logical_path)}&revision=${revision}`} alt="" />
-        <span className="block truncate px-1.5 pt-1 text-xs">{r.title}</span><span className="block px-1.5 pb-1 text-xs text-muted">读到第 {r.page_index + 1} 页</span>
+        <span className="block truncate px-1.5 pt-1 text-xs">{r.title}</span><span className="block px-1.5 pb-1 text-xs text-muted">第 {r.page_index + 1} 页</span>
       </button>)}</div></div> : null}
-    {error ? <p role="alert" className="text-danger">{error}</p> : null}
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">{books.map(book => <button key={book.logical_path} className="overflow-hidden rounded-lg border border-line bg-surface text-left" onClick={() => setSelected(book)}>
-      <img className="aspect-[3/4] w-full object-cover" loading="lazy" decoding="async" src={active ? `/api/media/manga/cover?path=${encodeURIComponent(book.logical_path)}&revision=${revision}` : undefined} alt={book.title} />
-      <span className="block break-all p-2 text-sm">{book.title}<span className="block text-xs text-muted">{book.library_name} · {book.metadata_error ? '页数未知' : `${book.total_pages} 页`}</span>{book.metadata_error ? <span className="block text-xs text-danger">{book.metadata_error}</span> : null}</span>
-    </button>)}</div><div className="flex gap-3"><button className={button} disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 24))}>上一页</button><button className={button} disabled={!more} onClick={() => setOffset(value => value + 24)}>下一页</button></div>
+    {books && (filter || needle) ? <p className="text-xs text-muted">{shown.length} 本</p> : null}
+    <VirtualGrid total={shown.length} minColumnWidth={150} aspect={3 / 4} extraHeight={64} render={i => {
+      const book = shown[i];
+      const liked = likes.has(book.logical_path);
+      return <div className="relative flex h-full flex-col overflow-hidden rounded-lg border border-line bg-panel hover:border-primary">
+        <button className="relative min-h-0 flex-1" onClick={() => setSelected(book)} title={book.title}>
+          <img className="h-full w-full object-cover" loading="lazy" decoding="async" src={active ? `/api/media/manga/cover?path=${encodeURIComponent(book.logical_path)}&revision=${revision}` : undefined} alt="" />
+          {book.is_complete === false ? <span className="absolute left-1 top-1 rounded bg-[#d29922] px-1 text-xs text-black">未完</span> : null}
+        </button>
+        <button className={`absolute right-1 top-1 rounded-full bg-black/60 px-1.5 text-sm ${liked ? 'text-[#f778ba]' : 'text-white/70'}`} onClick={() => toggleLike(book)} title={liked ? '取消点赞' : '点赞'}>{liked ? '♥' : '♡'}</button>
+        <div className="h-16 px-1.5 py-1">
+          <p className="truncate text-xs" title={book.title}>{book.title}</p>
+          <p className="truncate text-xs text-muted">{book.metadata_error ? '页数未知' : `${book.total_pages} 页`}{book.author ? ` · ${book.author}` : ''}</p>
+          <div className="flex gap-1 overflow-hidden">{(book.tags ?? []).slice(0, 3).map(t => <button key={t} className="shrink-0 rounded bg-background px-1 text-[11px] text-muted hover:text-primary" onClick={() => setFilter(t)}>{t}</button>)}</div>
+        </div>
+      </div>;
+    }} />
+    {books && !shown.length ? <p className="text-muted">{filter === '__liked' ? '还没有点赞的漫画。' : '没有匹配的漫画。'}</p> : null}
   </section>;
 }

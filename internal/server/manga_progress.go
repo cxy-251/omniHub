@@ -198,3 +198,60 @@ func (r *Router) handleMangaRecent(w http.ResponseWriter, req *http.Request) {
 	}
 	writeJSON(w, 200, out)
 }
+
+// handleMangaLikes：GET 返回当前账号点赞的漫画（逻辑路径）；POST {"path": "...", "liked": true} 点赞或取消。
+// 与短视频、相册共用按账号的点赞表（domain = manga）。
+func (r *Router) handleMangaLikes(w http.ResponseWriter, req *http.Request) {
+	if !r.checkSectionAccess(w, req, "manga", auth.TargetAll) {
+		return
+	}
+	user := auth.UserFromContext(req.Context())
+	if r.userState == nil {
+		http.Error(w, "user state unavailable", 503)
+		return
+	}
+	switch req.Method {
+	case http.MethodGet:
+		if user.ID <= 0 {
+			writeJSON(w, 200, []string{})
+			return
+		}
+		likes, err := r.userState.Likes(req.Context(), user.ID, "manga")
+		if err != nil {
+			http.Error(w, "like storage unavailable", 503)
+			return
+		}
+		if likes == nil {
+			likes = []string{}
+		}
+		writeJSON(w, 200, likes)
+	case http.MethodPost:
+		if user.ID <= 0 {
+			http.Error(w, "login required", http.StatusForbidden)
+			return
+		}
+		var in struct {
+			Path  string `json:"path"`
+			Liked bool   `json:"liked"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 8<<10)).Decode(&in); err != nil {
+			http.Error(w, "invalid body", 400)
+			return
+		}
+		if _, _, err := r.mangaIdentity(in.Path); err != nil {
+			http.Error(w, "book unavailable", 404)
+			return
+		}
+		if !r.allowPath(w, req, in.Path) {
+			return
+		}
+		// 点赞按书架条目用的逻辑路径（<库ID>:media_library/manga/…）记。
+		if err := r.userState.SetLike(req.Context(), user.ID, "manga", in.Path, in.Liked); err != nil {
+			http.Error(w, "like storage unavailable", 503)
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"liked": in.Liked})
+	default:
+		http.Error(w, "method not allowed", 405)
+	}
+}

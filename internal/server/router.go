@@ -302,6 +302,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/manga/page", r.handleMangaPage)
 	r.mux.HandleFunc("/api/media/manga/progress", r.handleMangaProgress)
 	r.mux.HandleFunc("/api/media/manga/recent", r.handleMangaRecent)
+	r.mux.HandleFunc("/api/media/manga/likes", r.handleMangaLikes)
 
 	// 游戏中心接口（双端过滤）
 	r.mux.HandleFunc("/api/games/list", r.handleGamesList)
