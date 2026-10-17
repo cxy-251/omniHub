@@ -13,13 +13,15 @@ import (
 // 子分类分级（规格第 5 节的细化）：媒体分类下的一级目录是一个子分类，
 // ID 为「大分类/目录」，如 text/novels/nsfw、audio/nsfw。
 // 没有单独设置的子分类沿用大分类的等级；名为 nsfw 的目录默认仅管理员可见。
+// 文档的一级目录是主题（C++、Graphic…）而不是分级，所以只有 nsfw 目录单独分级，其余跟随「文本」。
 var subsectionRoots = []struct {
 	category, section, prefix string
+	nsfwOnly                  bool
 }{
-	{"media_library/novels", "text", "text/novels"},
-	{"media_library/docs", "text", "text/docs"},
-	{"media_library/audio", "audio", "audio"},
-	{"media_library/manga", "manga", "manga"},
+	{"media_library/novels", "text", "text/novels", false},
+	{"media_library/docs", "text", "text/docs", true},
+	{"media_library/audio", "audio", "audio", false},
+	{"media_library/manga", "manga", "manga", false},
 }
 
 // subsectionOf 由逻辑路径（<库ID>:media_library/...）得到所属大分类与子分类；不在分级目录内时 sub 为空。
@@ -32,6 +34,9 @@ func subsectionOf(logical string) (section, sub string) {
 		if rest, ok := strings.CutPrefix(rel, root.category+"/"); ok {
 			// 一级目录本身（如以目录为单位的音频专辑 audio/nsfw）同样属于该子分类。
 			dir, _, _ := strings.Cut(rest, "/")
+			if root.nsfwOnly && dir != "nsfw" {
+				return root.section, ""
+			}
 			return root.section, root.prefix + "/" + dir
 		}
 	}
@@ -127,7 +132,7 @@ func (r *Router) handleAdminSubsections(w http.ResponseWriter, req *http.Request
 				continue
 			}
 			for _, e := range entries {
-				if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || (root.nsfwOnly && e.Name() != "nsfw") {
 					continue
 				}
 				id := root.prefix + "/" + e.Name()
