@@ -16,7 +16,7 @@ void (async () => {
       EJS_player: '#game', EJS_core: core, EJS_gameUrl: source.href,
       EJS_pathtodata: '/vendor/players/emulatorjs/data/', EJS_startOnLoaded: true,
       EJS_disableDatabases: true, EJS_forceLegacyCores: true, EJS_threads: false,
-      EJS_disableLocalStorage: true, EJS_DEBUG_XX: true,
+      EJS_DEBUG_XX: true,
       EJS_language: 'zh-CN', EJS_gameName: decodeURIComponent(source.pathname.split('/').pop() ?? ''),
     };
     // 街机 BIOS（如 pgm.zip）要以原文件名、不解压地放进模拟器的系统目录：EmulatorJS 把相对地址原样当文件名写入，
@@ -31,6 +31,7 @@ void (async () => {
       settings.EJS_biosUrl = url.pathname.split('/').pop();
       settings.EJS_dontExtractBIOS = true;
     }
+    await settingsStorage(source);
     Object.assign(window, settings, persistence(source), touchControls());
     window.addEventListener('error', event => showError(event.message || '模拟器运行失败'));
     window.addEventListener('unhandledrejection', event => showError(event.reason || '模拟器运行失败'));
@@ -92,6 +93,34 @@ function persistence(source: URL): Record<string, unknown> {
       }, () => emulator().displayMessage('读取即时存档失败'));
     },
   };
+}
+
+// 模拟器设置（键位、秘籍、音量与菜单里的选项）：EmulatorJS 存在 localStorage 的 "ejs-…" 键里，沙箱页没有 localStorage。
+// 换成一个按账号存在服务端的替身（同一授权下的 __save 键值接口，按游戏分开）；只收 "ejs-" 开头的键。访客只留在本页。
+async function settingsStorage(source: URL): Promise<void> {
+  const endpoint = `/game-content/${source.pathname.split('/')[2]}/__save`;
+  const data = new Map<string, string>();
+  try {
+    const response = await fetch(endpoint, { cache: 'no-store' });
+    if (response.ok) for (const [key, value] of Object.entries(await response.json() as Record<string, string>)) if (key.startsWith('ejs-')) data.set(key, value);
+  } catch { /* 读不到就用默认设置 */ }
+  const pending = new Map<string, number>();
+  const persist = (key: string, value: string | null) => {
+    if (!key.startsWith('ejs-')) return;
+    window.clearTimeout(pending.get(key));
+    pending.set(key, window.setTimeout(() => {
+      void fetch(endpoint, { method: 'POST', body: JSON.stringify({ key, value }), keepalive: true }).catch(() => undefined);
+    }, 500));
+  };
+  const storage: Storage = {
+    get length() { return data.size; },
+    key: index => [...data.keys()][index] ?? null,
+    getItem: key => data.get(String(key)) ?? null,
+    setItem: (key, value) => { data.set(String(key), String(value)); persist(String(key), String(value)); },
+    removeItem: key => { data.delete(String(key)); persist(String(key), null); },
+    clear: () => { for (const key of [...data.keys()]) storage.removeItem(key); },
+  };
+  Object.defineProperty(window, 'localStorage', { configurable: true, get: () => storage });
 }
 
 // 触屏按键：EmulatorJS 自带按机种布局的虚拟手柄，但只在手机浏览器标识、或手指点了它的开始按钮时才显示；

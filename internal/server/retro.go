@@ -113,7 +113,8 @@ func (r *Router) retroCommand(libID, dir string, meta games.Meta) (string, []str
 	if core == "" {
 		return "", nil, fmt.Errorf("RetroArch 缺少核心 %s：在 RetroArch 主菜单「在线更新 → 核心下载」里安装后再打开", cores[0])
 	}
-	argv := []string{tools.RetroArch, "--fullscreen", "-L", core}
+	// 按 RetroArch 自己的设置开窗口（默认窗口模式，游戏里按 F 切换全屏），不强制全屏。
+	argv := []string{tools.RetroArch, "-L", core}
 	if bios, err := r.libMgr.ResolveCategoryPath(libID+":standalone_games/retro_games/bios", "standalone_games/retro_games"); err == nil && filepath.Base(core) == "fbneo_libretro.so" {
 		// 只对这次启动生效的追加配置：系统目录（BIOS）指向资源库。
 		cfg := filepath.Join(r.cacheDir, "retroarch-"+libID+".cfg")
