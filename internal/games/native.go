@@ -13,8 +13,8 @@ import (
 )
 
 // 本地客户端（gui_only）的游戏分类：standalone_games/<分类>_games。
-// 网页游戏（rpg、slg、retro）只在 Web 端；Flash 不再支持。
-var NativeCategories = []string{"steam", "unity", "wine", "godot", "unreal", "renpy", "3ds", "app"}
+// 网页游戏（rpg、slg）只在 Web 端；模拟器游戏（retro）两端都有：Web 用 EmulatorJS，桌面用本机 RetroArch。Flash 不再支持。
+var NativeCategories = []string{"steam", "unity", "wine", "godot", "unreal", "renpy", "3ds", "retro", "app"}
 
 // Meta 是游戏目录下 omni.json 的内容，全部字段可选（与 omni-deck 兼容）。
 type Meta struct {
@@ -242,6 +242,8 @@ type Tools struct {
 	SteamRoot    string // 含 steamapps/common/Proton* 与 steamapps/compatdata
 	ProtonPrefix string // 默认 Wine 容器（存档在里面，沿用 omni-deck 的容器）
 	Lime3DS      string // Lime3DS 可执行文件（AppImage）
+	RetroArch    string // RetroArch 可执行文件（桌面端运行模拟器游戏）
+	RetroCores   string // RetroArch 核心目录
 	RenpySDK     string // renpy.sh
 	SC2Dir       string // 星际争霸 2 安装目录（含 Maps/）
 	SC2ModDir    string // omniMod 的 sc2Mod 项目（bake.py，可选）

@@ -26,10 +26,15 @@ func resolveGameTools(override config.GameTools, configDir string) games.Tools {
 	tools := games.Tools{
 		SteamRoot: first(override.SteamRoot, filepath.Join(home, ".local/share/Steam"), filepath.Join(home, ".steam/steam")),
 		Lime3DS:   first(override.Lime3DS, filepath.Join(home, "Applications/Lime3DS/Lime3DS.AppImage")),
+		RetroArch: first(override.RetroArch, filepath.Join(home, "Applications/RetroArch/retroarch")),
 		RenpySDK:  first(override.RenpySDK, filepath.Join(home, "Applications/renpy-*-sdk/renpy.sh")),
 		// SC2 不在资源库里（与 omni-deck 相同的位置）；sc2Mod 是另一个项目，可选。
 		SC2Dir:    first(override.SC2Dir, filepath.Join(home, "Games/StarCraft II")),
 		SC2ModDir: first(override.SC2ModDir, filepath.Join(home, "Games/claude/omniMod/sc2Mod")),
+	}
+	// 核心目录：便携版 AppImage 把 HOME 设到旁边的 .home 目录；安装版在 ~/.config/retroarch。
+	if tools.RetroArch != "" {
+		tools.RetroCores = first(override.RetroCores, filepath.Join(filepath.Dir(tools.RetroArch), "*.AppImage.home/.config/retroarch/cores"), filepath.Join(home, ".config/retroarch/cores"))
 	}
 	tools.ProtonPrefix = first(override.ProtonPrefix, filepath.Join(home, ".local/share/omni_deck_pfx"))
 	if tools.ProtonPrefix == "" {

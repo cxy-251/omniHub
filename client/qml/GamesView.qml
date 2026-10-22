@@ -17,8 +17,8 @@ Item {
 
     Settings { id: prefs; category: "games"; property string tab: "__recent" }
 
-    readonly property var categoryNames: ({steam: "Steam", unity: "Unity", wine: "Wine", godot: "Godot", unreal: "Unreal", renpy: "Ren'Py", "3ds": "3DS", app: "应用"})
-    readonly property var categoryOrder: ["steam", "unity", "wine", "godot", "unreal", "renpy", "3ds", "app"]
+    readonly property var categoryNames: ({steam: "Steam", unity: "Unity", wine: "Wine", godot: "Godot", unreal: "Unreal", renpy: "Ren'Py", "3ds": "3DS", retro: "模拟器", app: "应用"})
+    readonly property var categoryOrder: ["steam", "unity", "wine", "godot", "unreal", "renpy", "3ds", "retro", "app"]
     readonly property var counts: {
         var c = {}
         gamesList.forEach(function (g) { c[g.category] = (c[g.category] || 0) + 1 })

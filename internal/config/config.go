@@ -66,11 +66,13 @@ type DownloadSettings struct {
 	YtdlpCookies string `json:"ytdlp_cookies,omitempty"`
 }
 
-// GameTools 是 Proton、Wine 容器、Lime3DS、Ren'Py SDK 的位置。
+// GameTools 是 Proton、Wine 容器、Lime3DS、RetroArch、Ren'Py SDK 的位置。
 type GameTools struct {
 	SteamRoot    string `json:"steam_root,omitempty"`
 	ProtonPrefix string `json:"proton_prefix,omitempty"`
 	Lime3DS      string `json:"lime3ds,omitempty"`
+	RetroArch    string `json:"retroarch,omitempty"`       // RetroArch 可执行文件
+	RetroCores   string `json:"retroarch_cores,omitempty"` // RetroArch 核心目录（*_libretro.so）
 	RenpySDK     string `json:"renpy_sdk,omitempty"`
 	SC2Dir       string `json:"sc2_dir,omitempty"`
 	SC2ModDir    string `json:"sc2mod_dir,omitempty"`

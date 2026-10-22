@@ -125,11 +125,12 @@ export function GamePlayer({ libraryId, id }: { libraryId: string; id: string })
   </div>;
   if (grant.bios_lacking?.length) return <div className="flex h-screen items-center justify-center bg-black p-6 text-center leading-relaxed text-[#e6edf3]">
     <div>「{name}」需要的 BIOS 包 <b>{grant.bios?.slice(grant.bios.lastIndexOf('/') + 1)}</b> 不完整，缺少：<b>{grant.bios_lacking.join('、')}</b>。<br />
-    网页模拟器用的是 FBNeo，它的 BIOS 包比 MAME 版多几个文件；请换成 FBNeo 版的包，放到资源库的 <code>standalone_games/retro_games/bios/</code>。</div>
+    网页模拟器用的是 FBNeo，它的 BIOS 包比 MAME 版多几个文件；请换成 FBNeo 版的包，放到资源库的 <code>standalone_games/retro_games/bios/</code>。<br />
+    也可以在 omniHub 桌面客户端里打开：桌面端用 MAME 核心，现有的 pgm.zip 就够用。</div>
   </div>;
   if (grant.unsupported) return <div className="flex h-screen items-center justify-center bg-black p-6 text-center leading-relaxed text-[#e6edf3]">
     <div>「{name}」是 IGS PGM2 二代基板游戏，网页模拟器（FBNeo）没有这个基板的驱动，在浏览器里玩不了。<br />
-    需要用桌面端的 MAME 之类的模拟器运行。</div>
+    在 omniHub 桌面客户端的「游戏 → 模拟器」里打开，会用本机 RetroArch 的 MAME 核心运行。</div>
   </div>;
   return <>
     <iframe ref={frame} title={name} src={source} onLoad={focus} className="fixed inset-0 h-full w-full border-0 bg-black"

@@ -2,9 +2,14 @@ package server
 
 import (
 	"archive/zip"
+	"errors"
+	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
+
+	"omnihub/internal/games"
 )
 
 // 复古游戏的机种与街机 BIOS。
@@ -58,6 +63,70 @@ func retroUnsupported(system, entry string) bool {
 		}
 	}
 	return false
+}
+
+// 桌面端各机种按顺序尝试的 RetroArch 核心（取第一个已装的）。
+var retroDesktopCores = map[string][]string{
+	"gb": {"gambatte", "mgba", "sameboy"}, "gba": {"mgba", "vba_next"}, "nes": {"fceumm", "nestopia", "mesen"},
+	"snes": {"snes9x", "bsnes"}, "n64": {"mupen64plus_next", "parallel_n64"}, "nds": {"melonds", "desmume"},
+	"psx": {"swanstation", "pcsx_rearmed", "mednafen_psx_hw"}, "segaMD": {"genesis_plus_gx", "picodrive"},
+	"segaMS": {"genesis_plus_gx", "picodrive"}, "segaGG": {"genesis_plus_gx"}, "pce": {"mednafen_pce_fast", "mednafen_pce"},
+	"arcade": {"fbneo", "mame"},
+}
+
+// 没有机种标记时按 ROM 扩展名判断（与网页播放页相同）。
+var retroExtensionSystems = map[string]string{
+	".nes": "nes", ".sfc": "snes", ".smc": "snes", ".gb": "gb", ".gbc": "gb", ".gba": "gba", ".n64": "n64", ".z64": "n64", ".v64": "n64",
+	".nds": "nds", ".md": "segaMD", ".gen": "segaMD", ".sms": "segaMS", ".gg": "segaGG", ".pce": "pce", ".zip": "arcade",
+}
+
+// retroCommand 生成桌面端用 RetroArch 运行模拟器游戏的命令。PGM 一、二代街机用 MAME 核心：
+// FBNeo 没有 PGM2 驱动，而 PGM 一代要的是 FBNeo 版 BIOS 包，MAME 用普通的 pgm.zip 就能跑。
+// 其余街机用 FBNeo，系统目录指向资源库的 BIOS 目录（neogeo.zip 等）。
+func (r *Router) retroCommand(libID, dir string, meta games.Meta) (string, []string, error) {
+	tools := r.gameTools
+	if tools.RetroArch == "" || tools.RetroCores == "" {
+		return "", nil, errors.New("没有找到 RetroArch（默认位置 ~/Applications/RetroArch/retroarch，或在配置 game_tools.retroarch 里指定）")
+	}
+	_, entry, err := games.WebEntry(dir, &games.Game{Target: "web_only", Category: "retro", Exe: meta.Exe})
+	if err != nil {
+		return "", nil, err
+	}
+	system := retroSystem(filepath.Base(dir))
+	if system == "" {
+		system = retroExtensionSystems[strings.ToLower(path.Ext(entry))]
+	}
+	cores := retroDesktopCores[system]
+	if system == "arcade" && (retroUnsupported(system, entry) || retroBios(system, entry) == "pgm.zip") {
+		cores = []string{"mame"}
+	}
+	if len(cores) == 0 {
+		return "", nil, fmt.Errorf("认不出「%s」的机种", filepath.Base(dir))
+	}
+	core := ""
+	for _, name := range cores {
+		if p := filepath.Join(tools.RetroCores, name+"_libretro.so"); fileExists(p) {
+			core = p
+			break
+		}
+	}
+	if core == "" {
+		return "", nil, fmt.Errorf("RetroArch 缺少核心 %s：在 RetroArch 主菜单「在线更新 → 核心下载」里安装后再打开", cores[0])
+	}
+	argv := []string{tools.RetroArch, "--fullscreen", "-L", core}
+	if bios, err := r.libMgr.ResolveCategoryPath(libID+":standalone_games/retro_games/bios", "standalone_games/retro_games"); err == nil && filepath.Base(core) == "fbneo_libretro.so" {
+		// 只对这次启动生效的追加配置：系统目录（BIOS）指向资源库。
+		cfg := filepath.Join(r.cacheDir, "retroarch-"+libID+".cfg")
+		if err := os.WriteFile(cfg, []byte(fmt.Sprintf("system_directory = %q\n", bios)), 0o600); err == nil {
+			argv = append(argv, "--appendconfig="+cfg)
+		}
+	}
+	return entry, append(argv, filepath.Join(dir, filepath.FromSlash(entry))), nil
+}
+
+func fileExists(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // retroBiosNeeds 是网页街机核心 FBNeo 对 BIOS 包内文件的要求。FBNeo 的 pgm.zip 比 MAME 的多两个文件，

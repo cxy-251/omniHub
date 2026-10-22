@@ -304,12 +304,13 @@ func (r *Router) handleGameLaunch(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	meta := games.ReadMeta(dir)
-	exe, err := games.FindExecutable(dir, category, meta)
-	if err != nil {
-		http.Error(w, err.Error(), 422)
-		return
+	var exe string
+	var argv, env []string
+	if category == "retro" {
+		exe, argv, err = r.retroCommand(input.LibraryID, dir, meta)
+	} else if exe, err = games.FindExecutable(dir, category, meta); err == nil {
+		argv, env, err = games.Command(dir, category, exe, meta, r.gameTools)
 	}
-	argv, env, err := games.Command(dir, category, exe, meta, r.gameTools)
 	if err != nil {
 		http.Error(w, err.Error(), 422)
 		return
