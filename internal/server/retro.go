@@ -1,6 +1,7 @@
 package server
 
 import (
+	"archive/zip"
 	"os"
 	"path"
 	"strings"
@@ -57,6 +58,32 @@ func retroUnsupported(system, entry string) bool {
 		}
 	}
 	return false
+}
+
+// retroBiosNeeds 是网页街机核心 FBNeo 对 BIOS 包内文件的要求。FBNeo 的 pgm.zip 比 MAME 的多两个文件，
+// 拿 MAME 版的 pgm.zip 打开任何 PGM 游戏都会报 "ddp3_bios.u37 ... is required"。
+var retroBiosNeeds = map[string][]string{
+	"pgm.zip": {"pgm_t01s.rom", "pgm_m01s.rom", "pgm_p01s.u20", "ddp3_bios.u37", "bios.u42"},
+}
+
+// retroBiosLacking 列出 BIOS 包里缺的文件（按文件名，不分大小写）；读不了包时当作都不缺，交给模拟器报错。
+func retroBiosLacking(file, name string) []string {
+	archive, err := zip.OpenReader(file)
+	if err != nil {
+		return nil
+	}
+	defer archive.Close()
+	have := map[string]bool{}
+	for _, f := range archive.File {
+		have[strings.ToLower(path.Base(f.Name))] = true
+	}
+	var lacking []string
+	for _, need := range retroBiosNeeds[name] {
+		if !have[need] {
+			lacking = append(lacking, need)
+		}
+	}
+	return lacking
 }
 
 // retroBiosPath 返回某个库里 BIOS 文件的路径（存在时）。

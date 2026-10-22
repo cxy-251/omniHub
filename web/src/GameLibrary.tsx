@@ -3,7 +3,7 @@ import { api, post, request } from './api';
 import { button, chip, explain, notify, select, store, stored } from './ui';
 
 type Game = { id: string; name: string; category: string; library_id: string; favorite?: boolean; last_played_at?: string };
-type Grant = { token: string; kind: 'html' | 'retro'; url: string; expires_at: string; system?: string; bios?: string; bios_missing?: string; unsupported?: boolean };
+type Grant = { token: string; kind: 'html' | 'retro'; url: string; expires_at: string; system?: string; bios?: string; bios_missing?: string; unsupported?: boolean; bios_lacking?: string[] };
 const categories = [['', '全部'], ['fav', '★ 收藏'], ['rpg', 'RPG'], ['slg', 'SLG'], ['retro', '模拟器']] as const;
 const art = (g: Game) => `/api/games/art?${new URLSearchParams({ library_id: g.library_id, id: g.id })}`;
 // 模拟器游戏按系列分组（同 omni-deck），卡片上标机种（游戏目录名末尾括号，如 (GBA)）。
@@ -122,6 +122,10 @@ export function GamePlayer({ libraryId, id }: { libraryId: string; id: string })
   if (grant.bios_missing) return <div className="flex h-screen items-center justify-center bg-black p-6 text-center leading-relaxed text-[#e6edf3]">
     <div>「{name}」是街机基板游戏，需要 BIOS 固件 <b>{grant.bios_missing}</b>。<br />
     请把 {grant.bios_missing} 放到资源库的 <code>standalone_games/retro_games/bios/</code> 目录里再打开。</div>
+  </div>;
+  if (grant.bios_lacking?.length) return <div className="flex h-screen items-center justify-center bg-black p-6 text-center leading-relaxed text-[#e6edf3]">
+    <div>「{name}」需要的 BIOS 包 <b>{grant.bios?.slice(grant.bios.lastIndexOf('/') + 1)}</b> 不完整，缺少：<b>{grant.bios_lacking.join('、')}</b>。<br />
+    网页模拟器用的是 FBNeo，它的 BIOS 包比 MAME 版多几个文件；请换成 FBNeo 版的包，放到资源库的 <code>standalone_games/retro_games/bios/</code>。</div>
   </div>;
   if (grant.unsupported) return <div className="flex h-screen items-center justify-center bg-black p-6 text-center leading-relaxed text-[#e6edf3]">
     <div>「{name}」是 IGS PGM2 二代基板游戏，网页模拟器（FBNeo）没有这个基板的驱动，在浏览器里玩不了。<br />

@@ -128,8 +128,11 @@ func (r *Router) handleWebGameOpen(w http.ResponseWriter, req *http.Request) {
 			out["unsupported"] = true
 		}
 		if bios := retroBios(system, entry); bios != "" {
-			if _, ok := r.retroBiosPath(selected.ID, bios); ok {
+			if file, ok := r.retroBiosPath(selected.ID, bios); ok {
 				out["bios"] = "/game-content/" + grant.token + "/__bios/" + bios
+				if lacking := retroBiosLacking(file, bios); len(lacking) > 0 {
+					out["bios_lacking"] = lacking
+				}
 			} else {
 				out["bios_missing"] = bios
 			}
