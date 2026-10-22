@@ -17,7 +17,7 @@ var retroSystems = map[string]string{
 }
 
 // retroBiosFiles 是允许提供的 BIOS 文件名。
-var retroBiosFiles = map[string]bool{"pgm.zip": true, "pgm2.zip": true, "neogeo.zip": true, "awbios.zip": true}
+var retroBiosFiles = map[string]bool{"pgm.zip": true, "neogeo.zip": true, "awbios.zip": true}
 
 func retroSystem(folder string) string {
 	open := strings.LastIndex(folder, "(")
@@ -34,14 +34,29 @@ func retroBios(system, entry string) string {
 	}
 	set := strings.ToLower(strings.TrimSuffix(path.Base(entry), path.Ext(entry)))
 	switch {
-	case strings.HasPrefix(set, "kov3"):
-		return "pgm2.zip" // 三国战纪 3：IGS PGM2 二代基板
+	case retroUnsupported(system, entry):
+		return ""
 	case strings.HasPrefix(set, "kov"), strings.HasPrefix(set, "orlegend"), strings.HasPrefix(set, "ddp"), strings.HasPrefix(set, "dmnfrnt"), strings.HasPrefix(set, "martmast"), strings.HasPrefix(set, "photoy2k"), strings.HasPrefix(set, "puzlstar"), strings.HasPrefix(set, "olds"), strings.HasPrefix(set, "killbld"):
 		return "pgm.zip"
 	case strings.HasPrefix(set, "kof"), strings.HasPrefix(set, "mslug"), strings.HasPrefix(set, "samsh"), strings.HasPrefix(set, "garou"), strings.HasPrefix(set, "rbff"), strings.HasPrefix(set, "fatfur"), strings.HasPrefix(set, "lastblad"), strings.HasPrefix(set, "sengoku"), strings.HasPrefix(set, "blazstar"), strings.HasPrefix(set, "pulstar"), strings.HasPrefix(set, "neobombe"), strings.HasPrefix(set, "aof"), strings.HasPrefix(set, "wh"), strings.HasPrefix(set, "matrim"), strings.HasPrefix(set, "svc"):
 		return "neogeo.zip"
 	}
 	return ""
+}
+
+// retroUnsupported 报告网页模拟器跑不了的街机基板：IGS PGM2（三国战纪 3、西游释厄传 2 等）。
+// 网页端的街机核心是 FBNeo，它没有 PGM2 驱动，补什么 BIOS 都没用（PGM2 的固件本来就在各游戏自己的 ROM 包里）。
+func retroUnsupported(system, entry string) bool {
+	if system != "arcade" {
+		return false
+	}
+	set := strings.ToLower(strings.TrimSuffix(path.Base(entry), path.Ext(entry)))
+	for _, prefix := range []string{"kov3", "orleg2", "kov2nl", "ddpdoj", "kof98umh", "bubbub"} {
+		if strings.HasPrefix(set, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // retroBiosPath 返回某个库里 BIOS 文件的路径（存在时）。

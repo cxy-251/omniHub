@@ -124,6 +124,9 @@ func (r *Router) handleWebGameOpen(w http.ResponseWriter, req *http.Request) {
 	if kind == "retro" {
 		system := retroSystem(filepath.Base(gameDir))
 		out["system"] = system
+		if retroUnsupported(system, entry) {
+			out["unsupported"] = true
+		}
 		if bios := retroBios(system, entry); bios != "" {
 			if _, ok := r.retroBiosPath(selected.ID, bios); ok {
 				out["bios"] = "/game-content/" + grant.token + "/__bios/" + bios
