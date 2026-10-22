@@ -89,6 +89,7 @@ function Card({ game, onFavorite }: { game: Game; onFavorite(g: Game): void }) {
 export function GamePlayer({ libraryId, id }: { libraryId: string; id: string }) {
   const [grant, setGrant] = useState<Grant>();
   const [error, setError] = useState('');
+  const [ignoreNoGL, setIgnoreNoGL] = useState(false);
   const frame = useRef<HTMLIFrameElement>(null);
   const name = id.slice(id.indexOf('/') + 1);
   useEffect(() => {
@@ -111,6 +112,13 @@ export function GamePlayer({ libraryId, id }: { libraryId: string; id: string })
   if (!grant) return <div className="flex h-screen items-center justify-center bg-black text-[#8b949e]">正在打开「{name}」…</div>;
   const source = grant.kind === 'html' ? grant.url
     : `/players/${grant.kind}.html?${new URLSearchParams({ url: grant.url, ...(grant.system ? { core: grant.system } : {}), ...(grant.bios ? { bios: grant.bios } : {}) })}`;
+  // 模拟器、RPG Maker MZ、Ren'Py 网页版都要 WebGL；浏览器关了图形加速时先说清楚，不让游戏自己报看不懂的错。
+  if (!ignoreNoGL && !hasWebGL()) return <div className="flex h-screen items-center justify-center bg-black p-6 text-center leading-relaxed text-[#e6edf3]">
+    <div>这个浏览器现在用不了 WebGL，「{name}」大概率会报错或无法开始。<br />
+    通常是关了图形加速：Chrome 打开 <code>chrome://settings/system</code>，开启「使用图形加速功能（如果可用）」，然后重启浏览器。<br />
+    也可以在 <code>chrome://gpu</code> 查看 WebGL 一栏的状态。<br />
+    <button type="button" onClick={() => setIgnoreNoGL(true)} className="mt-4 rounded border border-[#30363d] px-3 py-1 text-[#8b949e] hover:text-[#e6edf3]">仍然打开</button></div>
+  </div>;
   if (grant.bios_missing) return <div className="flex h-screen items-center justify-center bg-black p-6 text-center leading-relaxed text-[#e6edf3]">
     <div>「{name}」是街机基板游戏，需要 BIOS 固件 <b>{grant.bios_missing}</b>。<br />
     请把 {grant.bios_missing} 放到资源库的 <code>standalone_games/retro_games/bios/</code> 目录里再打开。
@@ -121,6 +129,10 @@ export function GamePlayer({ libraryId, id }: { libraryId: string; id: string })
       sandbox="allow-scripts allow-pointer-lock allow-modals allow-forms allow-downloads" allow="autoplay; fullscreen; screen-wake-lock *; gamepad *" referrerPolicy="no-referrer" />
     {grant.kind === 'retro' ? <KeyHint /> : null}
   </>;
+}
+
+function hasWebGL() {
+  try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch { return false; }
 }
 
 // 模拟器键位（EmulatorJS 默认，可在模拟器右下角菜单的「控制设置」里改）。开始 10 秒显示，之后收起。
