@@ -1,6 +1,7 @@
 package games
 
 import (
+	"io/fs"
 	"errors"
 	"io"
 	"os"
@@ -117,11 +118,19 @@ func OpenWebAsset(root *os.Root, name string) (*os.File, error) {
 	var err error
 	prefix := ""
 	for _, part := range strings.Split(name, "/") {
+		parent := prefix
 		if prefix != "" {
 			prefix += "/"
 		}
 		prefix += part
 		expected, err = root.Lstat(filepath.FromSlash(prefix))
+		if errors.Is(err, fs.ErrNotExist) {
+			// 这些游戏大多来自 Windows（文件名不分大小写），脚本里写的大小写常和实际文件不一致：找不到时按忽略大小写再找一次。
+			if actual, ok := foldMatch(root, parent, part); ok {
+				prefix = strings.TrimSuffix(prefix, part) + actual
+				expected, err = root.Lstat(filepath.FromSlash(prefix))
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -132,7 +141,7 @@ func OpenWebAsset(root *os.Root, name string) (*os.File, error) {
 	if !expected.Mode().IsRegular() {
 		return nil, errors.New("game asset must be a regular file")
 	}
-	file, err := root.Open(filepath.FromSlash(name))
+	file, err := root.Open(filepath.FromSlash(prefix))
 	if err != nil {
 		return nil, err
 	}
@@ -144,4 +153,73 @@ func OpenWebAsset(root *os.Root, name string) (*os.File, error) {
 		return nil, errors.Join(errors.New("game asset changed during open"), file.Close())
 	}
 	return file, nil
+}
+
+// foldMatch 在 root 下的 dir 目录里找与 name 忽略大小写相同的条目（唯一匹配才算）。
+func foldMatch(root *os.Root, dir, name string) (string, bool) {
+	d := dir
+	if d == "" {
+		d = "."
+	}
+	f, err := root.Open(filepath.FromSlash(d))
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	entries, err := f.ReadDir(-1)
+	if err != nil {
+		return "", false
+	}
+	found := ""
+	for _, e := range entries {
+		if strings.EqualFold(e.Name(), name) {
+			if found != "" {
+				return "", false
+			}
+			found = e.Name()
+		}
+	}
+	return found, found != ""
+}
+
+// ListWebDir 列出游戏目录下某个子目录的条目名（忽略大小写解析路径；私有目录与链接不列）。
+func ListWebDir(root *os.Root, dir string) []string {
+	dir = strings.Trim(path.Clean("/"+strings.ReplaceAll(dir, "\\", "/")), "/")
+	actual := ""
+	if dir != "" {
+		if !PublicWebAsset(dir) {
+			return []string{}
+		}
+		for _, part := range strings.Split(dir, "/") {
+			next := part
+			if _, err := root.Lstat(filepath.FromSlash(strings.TrimPrefix(actual+"/"+part, "/"))); err != nil {
+				m, ok := foldMatch(root, actual, part)
+				if !ok {
+					return []string{}
+				}
+				next = m
+			}
+			actual = strings.TrimPrefix(actual+"/"+next, "/")
+		}
+	}
+	d := actual
+	if d == "" {
+		d = "."
+	}
+	f, err := root.Open(filepath.FromSlash(d))
+	if err != nil {
+		return []string{}
+	}
+	defer f.Close()
+	entries, err := f.ReadDir(-1)
+	if err != nil {
+		return []string{}
+	}
+	out := []string{}
+	for _, e := range entries {
+		if e.Type()&os.ModeSymlink == 0 && !strings.HasPrefix(e.Name(), ".") {
+			out = append(out, e.Name())
+		}
+	}
+	return out
 }

@@ -12,7 +12,10 @@ import (
 // protectRoutes applies section permissions to every resource endpoint, including binary streams.
 func (r *Router) protectRoutes(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != http.MethodOptions {
+		// 网页游戏存档（/game-content/<token>/__save）由沙箱里的游戏页发出，来源是 "null"；
+		// 它只凭地址里的授权 token，不用登录凭证，不受跨站伪造影响，所以不做同源检查。
+		gameSave := req.Method == http.MethodPost && strings.HasPrefix(req.URL.Path, "/game-content/") && (strings.HasSuffix(req.URL.Path, "/__save") || strings.Contains(req.URL.Path, "/__savefile/"))
+		if req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != http.MethodOptions && !gameSave {
 			if origin := req.Header.Get("Origin"); origin != "" {
 				u, err := url.Parse(origin)
 				if err != nil || u.Host != req.Host || (u.Scheme != "http" && u.Scheme != "https") {

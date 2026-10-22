@@ -45,6 +45,10 @@ func Open(path string) (*DB, error) {
 		play_time_ms INTEGER NOT NULL DEFAULT 0,
 		last_played_at TEXT NOT NULL, PRIMARY KEY(user_id,game_id)
 	);
+	CREATE TABLE IF NOT EXISTS web_game_saves (
+		user_id INTEGER NOT NULL, game_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL,
+		PRIMARY KEY(user_id, game_id, key)
+	);
 	CREATE TABLE IF NOT EXISTS game_favorites (
 		user_id INTEGER NOT NULL, game_id TEXT NOT NULL, created_at TEXT NOT NULL,
 		PRIMARY KEY(user_id, game_id)

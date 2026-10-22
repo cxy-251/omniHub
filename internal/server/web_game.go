@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,9 +12,11 @@ import (
 	"omnihub/internal/auth"
 	"omnihub/internal/games"
 	"omnihub/internal/library"
+	"omnihub/internal/userstate"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -134,7 +137,7 @@ func (r *Router) handleWebGameOpen(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS, DELETE")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS, DELETE, POST")
 	w.Header().Set("Access-Control-Allow-Headers", "Range")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -156,12 +159,16 @@ func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(204)
 		return
 	}
-	if req.Method != http.MethodGet && req.Method != http.MethodHead {
+	saveFile, isSaveFile := strings.CutPrefix(parts[1], "__savefile/")
+	isSaveFile = isSaveFile && saveFile != "" && !strings.ContainsAny(saveFile, "/\\\x00") && len(saveFile) <= 255
+	isSave := parts[1] == "__save" || isSaveFile
+	isList := parts[1] == "__list"
+	if req.Method != http.MethodGet && req.Method != http.MethodHead && !(isSave && req.Method == http.MethodPost) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
 	biosName, isBios := strings.CutPrefix(parts[1], "__bios/")
-	if isBios && !retroBiosFiles[biosName] || !isBios && !games.PublicWebAsset(parts[1]) {
+	if isBios && !retroBiosFiles[biosName] || !isBios && !isSave && !isList && !games.PublicWebAsset(parts[1]) {
 		http.Error(w, "invalid game asset", 400)
 		return
 	}
@@ -201,6 +208,14 @@ func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 	}
 	if level < required || !r.sectionEnabled("games") || r.libMgr.IsCategoryDisabled(grant.category) {
 		http.Error(w, "game access disabled", 403)
+		return
+	}
+	if isSaveFile {
+		r.serveWebGameSaveFile(w, req, grant, saveFile)
+		return
+	}
+	if isSave {
+		r.serveWebGameSave(w, req, grant)
 		return
 	}
 	if isBios {
@@ -245,6 +260,10 @@ func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "game directory changed during open", 409)
 		return
 	}
+	if isList {
+		writeJSON(w, http.StatusOK, games.ListWebDir(root, req.URL.Query().Get("path")))
+		return
+	}
 	file, err := games.OpenWebAsset(root, parts[1])
 	if err != nil {
 		http.NotFound(w, req)
@@ -269,7 +288,7 @@ func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			http.ServeContent(w, req, filepath.Base(parts[1]), info.ModTime(), bytes.NewReader(withCORSImages(page)))
+			http.ServeContent(w, req, filepath.Base(parts[1]), info.ModTime(), bytes.NewReader(withGameRuntime(page, strings.HasSuffix(grant.category, "/rpg_games"))))
 			return
 		}
 	}
@@ -278,14 +297,20 @@ func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 
 const maxGamePageBytes = 1 << 20
 
-// 游戏页面运行在沙箱的不透明源里，同服务器的图片对它来说是跨源的：不带 crossOrigin 加载的图片
-// 画进 canvas 后 getImageData 会报 SecurityError（RPG Maker 就是这样）。资源响应带
-// Access-Control-Allow-Origin: *，所以在页面最前面插一段脚本，让没指定 crossOrigin 的图片默认用 anonymous。
-const corsImageScript = `<script>(()=>{const d=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src');` +
-	`Object.defineProperty(HTMLImageElement.prototype,'src',{configurable:true,enumerable:d.enumerable,get(){return d.get.call(this)},` +
-	`set(v){if(this.getAttribute('crossorigin')===null&&!/^(data|blob):/i.test(String(v)))this.crossOrigin='anonymous';d.set.call(this,v)}})})();</script>`
+// 游戏 HTML 的 <head> 最前面注入 game_runtime.js（沙箱补丁：图片 CORS、Worker、存档、adapter.js）；
+// RPG 游戏再加 rpg_runtime.js（NW.js 环境模拟，移植自 omni-deck），adapter.js 由它加载。
+//
+//go:embed game_runtime.js
+var gameRuntime string
 
-func withCORSImages(page []byte) []byte {
+//go:embed rpg_runtime.js
+var rpgRuntime string
+
+func withGameRuntime(page []byte, rpg bool) []byte {
+	inject := "<script>" + gameRuntime + "</script>"
+	if rpg {
+		inject = "<script>window.__omniRpg=true;\n" + gameRuntime + "</script><script>" + rpgRuntime + "</script>"
+	}
 	lower := bytes.ToLower(page)
 	at := 0
 	if i := bytes.Index(lower, []byte("<head")); i >= 0 {
@@ -297,6 +322,100 @@ func withCORSImages(page []byte) []byte {
 			at = i + j + 1
 		}
 	}
-	out := make([]byte, 0, len(page)+len(corsImageScript))
-	return append(append(append(out, page[:at]...), corsImageScript...), page[at:]...)
+	out := make([]byte, 0, len(page)+len(inject))
+	return append(append(append(out, page[:at]...), inject...), page[at:]...)
+}
+
+// serveWebGameSave：GET 返回本账号该游戏的全部存档（访客为空）；POST {"key","value"}（value 为 null 时删除）。
+// 存档按授权里的账号与游戏目录记，游戏脚本拿不到账号凭证。
+func (r *Router) serveWebGameSave(w http.ResponseWriter, req *http.Request, grant webGameGrant) {
+	w.Header().Set("Cache-Control", "no-store")
+	if grant.userID <= 0 || r.userState == nil {
+		if req.Method == http.MethodPost {
+			http.Error(w, "guest saves stay in this page", http.StatusForbidden)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	if req.Method == http.MethodGet || req.Method == http.MethodHead {
+		saves, err := r.userState.WebGameSaves(req.Context(), grant.userID, grant.relative)
+		if err != nil {
+			http.Error(w, "save storage unavailable", 503)
+			return
+		}
+		writeJSON(w, http.StatusOK, saves)
+		return
+	}
+	var in struct {
+		Key   string  `json:"key"`
+		Value *string `json:"value"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, userstate.MaxWebSaveValue+4096)).Decode(&in); err != nil {
+		http.Error(w, "invalid save", 400)
+		return
+	}
+	value := ""
+	if in.Value != nil {
+		value = *in.Value
+	}
+	if err := r.userState.SetWebGameSave(req.Context(), grant.userID, grant.relative, in.Key, value, in.Value == nil); err != nil {
+		status := 503
+		if errors.Is(err, userstate.ErrWebSaveTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		} else if errors.Is(err, userstate.ErrInvalidProgress) {
+			status = 400
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// serveWebGameSaveFile：rpg_runtime 的存档文件（file1.rpgsave、config.rmmzsave…）。GET/HEAD 读，POST 原文写入；
+// 与 __save 同一张表，键为 "file:<文件名>"。访客读不到、写入被拒（运行时那边仍留在本页内存里）。
+func (r *Router) serveWebGameSaveFile(w http.ResponseWriter, req *http.Request, grant webGameGrant, name string) {
+	w.Header().Set("Cache-Control", "no-store")
+	key := "file:" + name
+	if grant.userID <= 0 || r.userState == nil {
+		if req.Method == http.MethodPost {
+			http.Error(w, "guest saves stay in this page", http.StatusForbidden)
+		} else {
+			http.NotFound(w, req)
+		}
+		return
+	}
+	if req.Method == http.MethodPost {
+		data, err := io.ReadAll(http.MaxBytesReader(w, req.Body, userstate.MaxWebSaveValue))
+		if err != nil {
+			http.Error(w, "save too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if err := r.userState.SetWebGameSave(req.Context(), grant.userID, grant.relative, key, string(data), false); err != nil {
+			status := 503
+			if errors.Is(err, userstate.ErrWebSaveTooLarge) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	saves, err := r.userState.WebGameSaves(req.Context(), grant.userID, grant.relative)
+	if err != nil {
+		http.Error(w, "save storage unavailable", 503)
+		return
+	}
+	value, ok := saves[key]
+	if !ok {
+		http.NotFound(w, req)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if req.Method == http.MethodHead {
+		w.Header().Set("Content-Length", strconv.Itoa(len(value)))
+		return
+	}
+	_, _ = io.WriteString(w, value)
 }

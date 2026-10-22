@@ -79,6 +79,9 @@ func ScanCategory(categoryDir, category, libraryID string) ([]Entry, error) {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
+		if category == "retro" && e.Name() == "bios" {
+			continue // 模拟器 BIOS 存放处，不是游戏
+		}
 		dir := filepath.Join(categoryDir, e.Name())
 		meta := ReadMeta(dir)
 		if meta.Hidden {

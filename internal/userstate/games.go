@@ -96,3 +96,54 @@ func (d *DB) GameStats(ctx context.Context, userID int64, ids []string) (map[str
 	}
 	return result, errors.Join(rows.Err(), rows.Close())
 }
+
+// 网页游戏存档：游戏在沙箱里用不了浏览器存储，运行时把 localStorage 的读写转到这里，按账号、按游戏保存。
+const (
+	MaxWebSaveValue = 8 << 20  // 单个键
+	MaxWebSaveTotal = 64 << 20 // 单个游戏合计
+)
+
+var ErrWebSaveTooLarge = errors.New("web game save too large")
+
+// WebGameSaves 返回某账号某游戏的全部存档键值。
+func (d *DB) WebGameSaves(ctx context.Context, userID int64, gameID string) (map[string]string, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT key, value FROM web_game_saves WHERE user_id=? AND game_id=?`, userID, gameID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}
+
+// SetWebGameSave 写入或删除（remove 为真）一个存档键。
+func (d *DB) SetWebGameSave(ctx context.Context, userID int64, gameID, key, value string, remove bool) error {
+	if userID <= 0 || gameID == "" || len(gameID) > 512 || key == "" || len(key) > 1024 {
+		return ErrInvalidProgress
+	}
+	if remove {
+		_, err := d.db.ExecContext(ctx, `DELETE FROM web_game_saves WHERE user_id=? AND game_id=? AND key=?`, userID, gameID, key)
+		return err
+	}
+	if len(value) > MaxWebSaveValue {
+		return ErrWebSaveTooLarge
+	}
+	var total int64
+	if err := d.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(LENGTH(value)),0) FROM web_game_saves WHERE user_id=? AND game_id=? AND key<>?`, userID, gameID, key).Scan(&total); err != nil {
+		return err
+	}
+	if total+int64(len(value)) > MaxWebSaveTotal {
+		return ErrWebSaveTooLarge
+	}
+	_, err := d.db.ExecContext(ctx, `INSERT INTO web_game_saves(user_id,game_id,key,value,updated_at) VALUES(?,?,?,?,?)
+		ON CONFLICT(user_id,game_id,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+		userID, gameID, key, value, time.Now().UTC().Format(time.RFC3339))
+	return err
+}
