@@ -68,8 +68,8 @@ func retroUnsupported(system, entry string) bool {
 // 桌面端各机种按顺序尝试的 RetroArch 核心（取第一个已装的）。
 var retroDesktopCores = map[string][]string{
 	"gb": {"gambatte", "mgba", "sameboy"}, "gba": {"mgba", "vba_next"}, "nes": {"fceumm", "nestopia", "mesen"},
-	"snes": {"snes9x", "bsnes"}, "n64": {"mupen64plus_next", "parallel_n64"}, "nds": {"melonds", "desmume"},
-	"psx": {"swanstation", "pcsx_rearmed", "mednafen_psx_hw"}, "segaMD": {"genesis_plus_gx", "picodrive"},
+	"snes": {"snes9x", "bsnes"}, "n64": {"mupen64plus_next", "parallel_n64"}, "nds": {"melondsds", "melonds", "desmume"},
+	"psx": {"pcsx_rearmed", "swanstation", "mednafen_psx_hw"}, // PCSX-ReARMed 自带 HLE BIOS "segaMD": {"genesis_plus_gx", "picodrive"},
 	"segaMS": {"genesis_plus_gx", "picodrive"}, "segaGG": {"genesis_plus_gx"}, "pce": {"mednafen_pce_fast", "mednafen_pce"},
 	"arcade": {"fbneo", "mame"},
 }
