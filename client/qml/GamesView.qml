@@ -15,10 +15,32 @@ Item {
     property bool busy: false
     property alias category: prefs.tab
 
-    Settings { id: prefs; category: "games"; property string tab: "__recent" }
+    Settings { id: prefs; category: "games"; property string tab: "__recent"; property string retroGroup: "" }
 
     readonly property var categoryNames: ({steam: "Steam", unity: "Unity", wine: "Wine", godot: "Godot", unreal: "Unreal", renpy: "Ren'Py", "3ds": "3DS", retro: "模拟器", app: "应用"})
     readonly property var categoryOrder: ["steam", "unity", "wine", "godot", "unreal", "renpy", "3ds", "retro", "app"]
+    // 模拟器游戏按系列分组（与网页端、omni-deck 相同），卡片标机种（目录名末尾括号，如 (GBA)）。
+    readonly property var franchises: [
+        {key: "kov", label: "🐉 三国战纪与街机清版", re: /valour|oriental legend|warriors of fate|三国|西游/i},
+        {key: "kof", label: "🥊 拳皇", re: /fighters|kof|热斗/i},
+        {key: "mslug", label: "🪖 合金弹头", re: /metal slug|mslug/i},
+        {key: "pokemon", label: "🐾 宝可梦", re: /pokemon|宝可梦|口袋妖怪/i},
+        {key: "zelda", label: "🗡️ 塞尔达传说", re: /zelda|塞尔达/i},
+        {key: "mario", label: "🍄 马里奥与瓦里奥", re: /mario|wario|yoshi|princess peach|马里奥|瓦里奥|耀西|碧姬/i},
+        {key: "ff", label: "🔮 最终幻想", re: /final fantasy|最终幻想/i},
+        {key: "contra", label: "🔫 魂斗罗", re: /contra|operation c|魂斗罗/i},
+        {key: "other", label: "🕹️ 其他复古经典", re: null}
+    ]
+    function franchiseOf(g) {
+        for (var i = 0; i < franchises.length - 1; i++) if (franchises[i].re.test(g.name)) return franchises[i].key
+        return "other"
+    }
+    function systemOf(g) { var m = /\(([^()]+)\)\s*$/.exec(g.name); return g.category === "retro" && m ? m[1] : "" }
+    readonly property var retroCounts: {
+        var c = {}
+        gamesList.forEach(function (g) { if (g.category === "retro") { var k = franchiseOf(g); c[k] = (c[k] || 0) + 1 } })
+        return c
+    }
     readonly property var counts: {
         var c = {}
         gamesList.forEach(function (g) { c[g.category] = (c[g.category] || 0) + 1 })
@@ -29,7 +51,7 @@ Item {
             return gamesList.filter(function (g) { return !!g.last_played_at }).sort(function (a, b) { return a.last_played_at < b.last_played_at ? 1 : -1 })
         if (category === "__all") return gamesList
         if (category === "__fav") return gamesList.filter(function (g) { return !!g.favorite })
-        return gamesList.filter(function (g) { return g.category === category })
+        return gamesList.filter(function (g) { return g.category === category && (category !== "retro" || !prefs.retroGroup || franchiseOf(g) === prefs.retroGroup) })
     }
 
     function request(method, path, body, done) {
@@ -50,7 +72,8 @@ Item {
         request("GET", "/api/games/list", null, function (list) { view.gamesList = list })
         request("GET", "/api/games/session", null, function (s) { view.active = s && s.state !== "exited" ? s : null; if (view.active) sessionPoll.start() })
     }
-    function displayName(g) { return g.name.replace(/^\d+\s*-\s*/, "") }
+    function displayName(g) { var n = g.name.replace(/^\d+\s*-\s*/, ""); return systemOf(g) ? n.replace(/\s*\([^()]+\)\s*$/, "") : n }
+    function kindLabel(g) { return g.category === "retro" ? "模拟器 · " + (systemOf(g) || "未知机种") : categoryNames[g.category] }
     function playTime(sec) {
         if (!sec) return "未玩过"
         var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60)
@@ -128,6 +151,21 @@ Item {
             Item { Layout.fillWidth: true }
             IconButton { glyph: "list"; size: 30; onClicked: view.reload(); ToolTip.text: "刷新" }
         }
+        Flow {
+            Layout.fillWidth: true
+            visible: view.category === "retro"
+            spacing: 4
+            Chip { text: "全部系列"; selected: !prefs.retroGroup; onClicked: prefs.retroGroup = "" }
+            Repeater {
+                model: view.franchises.filter(function (f) { return view.retroCounts[f.key] })
+                delegate: Chip {
+                    required property var modelData
+                    text: modelData.label + " · " + view.retroCounts[modelData.key]
+                    selected: prefs.retroGroup === modelData.key
+                    onClicked: prefs.retroGroup = modelData.key
+                }
+            }
+        }
         Label {
             Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
             visible: text.length > 0
@@ -184,6 +222,13 @@ Item {
                                 source: backendApi.apiUrl("/api/games/art?library_id=" + encodeURIComponent(cell.modelData.library_id) + "&id=" + encodeURIComponent(cell.modelData.id))
                             }
                         }
+                        Rectangle {
+                            anchors.left: parent.left; anchors.top: parent.top; anchors.margins: 4
+                            visible: badge.text.length > 0
+                            width: badge.implicitWidth + 10; height: badge.implicitHeight + 2; radius: 3
+                            color: "#b3000000"
+                            Label { id: badge; anchors.centerIn: parent; text: view.systemOf(cell.modelData); color: "white"; font.pixelSize: 11 }
+                        }
                         Label {
                             anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4
                             visible: !!cell.modelData.favorite
@@ -192,7 +237,7 @@ Item {
                         Column {
                             anchors.top: art.bottom; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 5
                             Label { width: parent.width; text: view.displayName(cell.modelData); elide: Text.ElideRight; color: "#c9d1d9"; font.pixelSize: 12 }
-                            Label { width: parent.width; text: view.categoryNames[cell.modelData.category] + " · " + view.playTime(cell.modelData.play_time_sec); elide: Text.ElideRight; color: "#8b949e"; font.pixelSize: 11 }
+                            Label { width: parent.width; text: view.kindLabel(cell.modelData) + " · " + view.playTime(cell.modelData.play_time_sec); elide: Text.ElideRight; color: "#8b949e"; font.pixelSize: 11 }
                         }
                         TapHandler { id: tap; onTapped: view.selected = cell.modelData; onDoubleTapped: if (!view.active && cell.modelData.kind !== "sc2") view.launch(cell.modelData) }
                     }
@@ -218,7 +263,7 @@ Item {
                     anchors.fill: parent; anchors.margins: 12
                     spacing: 8
                     Label { Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#e6edf3"; font.pixelSize: 17; font.bold: true; text: view.selected ? view.displayName(view.selected) : "" }
-                    Label { color: "#8b949e"; text: view.selected ? view.categoryNames[view.selected.category] : "" }
+                    Label { color: "#8b949e"; text: view.selected ? view.kindLabel(view.selected) : "" }
                     Label { color: "#c9d1d9"; text: view.selected ? "游玩时长：" + view.playTime(view.selected.play_time_sec) : "" }
                     Label { color: "#c9d1d9"; visible: !!(view.selected && view.selected.last_played_at); text: view.selected && view.selected.last_played_at ? "上次游玩：" + new Date(view.selected.last_played_at).toLocaleString(Qt.locale(), "yyyy-MM-dd hh:mm") : "" }
                     Label { Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; color: "#6e7681"; font.pixelSize: 11; text: view.selected ? view.selected.folder : "" }
