@@ -70,6 +70,8 @@ type Config struct {
 type DownloadSettings struct {
 	YtdlpProxy   string `json:"ytdlp_proxy,omitempty"`
 	YtdlpCookies string `json:"ytdlp_cookies,omitempty"`
+	// ChromeProfile 是读取 Cookie 用的 Chrome 用户数据目录；留空时自动找。
+	ChromeProfile string `json:"chrome_profile,omitempty"`
 }
 
 // GameTools 是 Proton、Wine 容器、Lime3DS、RetroArch、Ren'Py SDK 的位置。

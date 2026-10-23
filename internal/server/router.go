@@ -282,6 +282,8 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/gallery/trash", r.handleGalleryTrash)
 	r.mux.HandleFunc("/api/media/gallery/admin/import", r.handleGalleryImport)
 	r.mux.HandleFunc("/api/staging/", r.handleStaging)
+	r.mux.HandleFunc("/api/cookies", r.handleCookies)
+	r.mux.HandleFunc("/api/cookies/", r.handleCookies)
 
 	// 短视频与图集接口
 	r.mux.HandleFunc("/api/media/shortvideo/stream", r.handleShortVideoStream)

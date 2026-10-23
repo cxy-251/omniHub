@@ -28,6 +28,13 @@ class QuietLogger:
         print("错误：" + str(msg), file=sys.stderr)
 
 
+def posix_expiry(value):
+    """yt-dlp 读 Chrome 时有的版本把过期时间原样给出（1601 年起的微秒数），换成 Unix 秒。"""
+    if value and value > 10**11:
+        return int(value / 1_000_000 - 11644473600)
+    return value
+
+
 def matches(domain, wanted):
     d = domain.lstrip(".").lower()
     return any(d == w or d.endswith("." + w) for w in wanted)
@@ -50,6 +57,7 @@ def main():
     for c in jar:
         if not matches(c.domain, wanted):
             continue
+        c.expires = posix_expiry(c.expires)
         if c.expires and c.expires < now:
             continue
         out.set_cookie(c)
