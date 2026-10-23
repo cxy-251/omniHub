@@ -4,7 +4,7 @@ import QtQuick.Layouts
 
 // 下载方案页（音乐、YouTube、B 站、X、其他链接）：按服务端给的方案说明生成。
 //   一行流程 + 去向 → 链接（一行一个）→ 两种下法：
-//     直接下载：每个链接（频道、歌单、合集）取最新 N 个，排成一个任务按顺序下完，设好就不用管；
+//     直接下载：每个链接（频道、歌单、合集）提取单个视频、逐个读数据，按重播率/点赞率/播放量取前 N 个，排成一个任务下完，设好就不用管；
 //     读取列表挑选：逐个读出列表（只读元数据，/api/downloads/probe），按列表分组显示，勾选后一起下。
 // 每个方案有「已下载」名单：下过的标出、跳过，所以同一批链接以后再下就只下新的。
 ColumnLayout {
@@ -120,7 +120,8 @@ ColumnLayout {
         return (h ? h + ":" + (m < 10 ? "0" : "") : "") + m + ":" + (sec < 10 ? "0" : "") + sec
     }
     function count(n) { return n === null || n === undefined ? "" : n >= 1e8 ? (n / 1e8).toFixed(1) + "亿" : n >= 1e4 ? (n / 1e4).toFixed(1) + "万" : String(n) }
-    function perListLabel() { var f = field("per_list"); var o = f ? f.options.find(function (x) { return x.value === values.per_list }) : null; return o ? o.label : "" }
+    function optionLabel(name) { var f = field(name); var o = f ? f.options.find(function (x) { return x.value === values[name] }) : null; return o ? o.label : "" }
+    readonly property var rankFields: ["rank", "top", "pool"]
     Timer { id: analyzeTimer; interval: 300; onTriggered: if (panel.kind.id === "other") api.send("POST", "/api/downloads/analyze", {urls: panel.input, mode: "video", library: panel.values.library || ""}, function (r) { panel.analysis = r }) }
 
     // 流程与去向
@@ -164,7 +165,7 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: 6
         Repeater {
-            model: panel.kind.fields.filter(function (f) { return ["urls", "library", "per_list"].indexOf(f.name) < 0 && !(f.name === "album" && panel.groups.length !== 1) })
+            model: panel.kind.fields.filter(function (f) { return ["urls", "library"].indexOf(f.name) < 0 && panel.rankFields.indexOf(f.name) < 0 && !(f.name === "album" && panel.groups.length !== 1) })
             delegate: RowLayout {
                 required property var modelData
                 spacing: 4
@@ -202,13 +203,22 @@ ColumnLayout {
         visible: panel.scheme.probe
         Layout.fillWidth: true
         spacing: 6
-        Label { text: "直接下载：每个链接取"; color: "#c9d1d9"; font.pixelSize: 12 }
-        ComboBox {
-            implicitHeight: 30; Layout.preferredWidth: 120; font.pixelSize: 12
-            textRole: "label"; valueRole: "value"
-            model: panel.field("per_list") ? panel.field("per_list").options : []
-            currentIndex: Math.max(0, (panel.field("per_list") ? panel.field("per_list").options : []).findIndex(function (o) { return o.value === panel.values.per_list }))
-            onActivated: panel.set("per_list", currentValue)
+        Label { text: "直接下载："; color: "#c9d1d9"; font.pixelSize: 12 }
+        Repeater {
+            model: panel.kind.fields.filter(function (f) { return panel.rankFields.indexOf(f.name) >= 0 && (f.name === "rank" || panel.values.rank !== "none") })
+            delegate: RowLayout {
+                required property var modelData
+                spacing: 4
+                Label { text: modelData.label; color: "#8b949e"; font.pixelSize: 12 }
+                ComboBox {
+                    implicitHeight: 30; Layout.preferredWidth: modelData.name === "rank" ? 150 : 110; font.pixelSize: 12
+                    textRole: "label"; valueRole: "value"
+                    model: modelData.options || []
+                    currentIndex: Math.max(0, (modelData.options || []).findIndex(function (o) { return o.value === panel.values[modelData.name] }))
+                    onActivated: panel.set(modelData.name, currentValue)
+                    ToolTip.visible: hovered && !!modelData.help; ToolTip.text: modelData.help || ""
+                }
+            }
         }
         PrimaryButton { text: "直接下载 " + panel.lines.length + " 个链接"; enabled: panel.canDirect && panel.probingIndex < 0; onClicked: panel.startDirect() }
         Divider { Layout.leftMargin: 4; Layout.rightMargin: 4 }
@@ -294,7 +304,10 @@ ColumnLayout {
             Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12; color: "#8b949e"
             text: panel.scheme.probe
                 ? (panel.groups.length ? "已勾选 " + panel.pickedCount + " 条。" : "")
-                  + "直接下载：" + panel.lines.length + " 个链接各取" + panel.perListLabel() + "，排成一个任务按顺序下完，可以不用管；下过的自动跳过，同一批链接以后再下就只下新的。"
+                  + "直接下载：" + panel.lines.length + " 个链接" + (panel.values.rank === "none" ? "全部下载"
+                      : "各自在" + panel.optionLabel("pool") + "里逐个读数据、按" + panel.optionLabel("rank") + "排名取" + panel.optionLabel("top")
+                        + "（每个视频约 1～2 秒，排名表写进任务日志）")
+                  + "，排成一个任务按顺序下完，可以不用管；下过的自动跳过。"
                   + "都先进暂存区，确认后「移入资源库」才会出现在 " + panel.scheme.destination + "。"
                 : (panel.lines.length ? panel.lines.length + " 项下载到暂存区（新批次），下过的自动跳过；确认后「移入资源库」才会出现在 " + panel.scheme.destination + "。" : "先填上面的内容。")
         }

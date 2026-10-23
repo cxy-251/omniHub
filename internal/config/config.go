@@ -72,6 +72,8 @@ type DownloadSettings struct {
 	YtdlpCookies string `json:"ytdlp_cookies,omitempty"`
 	// ChromeProfile 是读取 Cookie 用的 Chrome 用户数据目录；留空时自动找。
 	ChromeProfile string `json:"chrome_profile,omitempty"`
+	// LastfmKey 是用户自己申请的 Last.fm API key（查歌曲听众数与总播放数，算重播率）。
+	LastfmKey string `json:"lastfm_key,omitempty"`
 }
 
 // GameTools 是 Proton、Wine 容器、Lime3DS、RetroArch、Ren'Py SDK 的位置。

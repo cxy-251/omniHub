@@ -23,6 +23,7 @@ import (
 //   POST /api/cookies/read  {platform}    从 Chrome 读取
 //   POST /api/cookies/clear {platform}    删除已存的
 //   POST /api/cookies/profile {path}      指定 Chrome 用户数据目录（空 = 自动找）
+//   POST /api/cookies/lastfm {path: key}  保存 Last.fm API key（空 = 删除），用于算音乐的重播率
 
 // cookiePlatform 是一个下载平台：读 Cookie 的域名、链接认哪些域名、下载用什么工具、存到短视频的哪个平台目录。
 // 这是唯一的平台表：通用下载脚本经环境变量 OMNIHUB_PLATFORMS 拿到同一份。
@@ -135,6 +136,30 @@ func (r *Router) handleCookies(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
+	if action == "lastfm" { // Last.fm API key：空串表示删除
+		key := strings.TrimSpace(in.Path)
+		if len(key) > 64 || strings.ContainsAny(key, " \t\r\n") {
+			http.Error(w, "API key 格式不对", http.StatusBadRequest)
+			return
+		}
+		r.downloads.mu.Lock()
+		next := r.downloads.settings
+		next.LastfmKey = key
+		var err error
+		if r.downloads.save != nil {
+			err = r.downloads.save(next)
+		}
+		if err == nil {
+			r.downloads.settings = next
+		}
+		r.downloads.mu.Unlock()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		r.cookieStatus(w)
+		return
+	}
 	if action == "profile" {
 		if in.Path != "" && !filepath.IsAbs(in.Path) {
 			http.Error(w, "路径要是绝对路径", http.StatusBadRequest)
@@ -207,7 +232,10 @@ func (r *Router) cookieStatus(w http.ResponseWriter) {
 		}
 		rows = append(rows, entry)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"profile": profile, "profiles_found": found, "platforms": rows})
+	r.downloads.mu.Lock()
+	hasLastfm := r.downloads.settings.LastfmKey != ""
+	r.downloads.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"profile": profile, "profiles_found": found, "platforms": rows, "has_lastfm": hasLastfm})
 }
 
 // readChromeCookies 用下载环境里的 yt-dlp 从 Chrome 读出该平台的 Cookie（第一次要建虚拟环境，可能要等一会儿）。

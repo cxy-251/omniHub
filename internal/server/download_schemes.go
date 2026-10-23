@@ -42,34 +42,41 @@ func (r *Router) schemeKinds() []*dlKind {
 	library := dlField{Name: "library", Label: "暂存到", Type: "choice", Options: libs, Default: def, Help: "暂存区在资源库里；移入时同一块盘上只是改名"}
 	height := dlField{Name: "max_height", Label: "最高分辨率", Type: "choice", Default: "1080", Options: []dlOption{{"2160", "4K"}, {"1440", "1440p"}, {"1080", "1080p"}, {"720", "720p"}, {"480", "480p"}, {"0", "不限"}}}
 	urls := dlField{Name: "urls", Label: "链接", Type: "lines", Required: true}
-	// 直接下载（不读列表）时每个链接取多少：频道、播放列表按新到旧，取前 N 个就是最新的 N 个
-	perList := dlField{Name: "per_list", Label: "每个链接取", Type: "choice", Default: "30", Options: []dlOption{{"10", "最新 10 个"}, {"30", "最新 30 个"}, {"100", "最新 100 个"}, {"0", "全部"}}}
+	// 直接下载（不读列表）时怎么挑：先提取每个链接的单个视频、逐个补充数据（音乐再查 Last.fm），按分数取前 N 个
+	rankField := func(options []dlOption, def string) dlField {
+		return dlField{Name: "rank", Label: "按什么挑", Type: "choice", Default: def, Options: options}
+	}
+	musicRank := rankField([]dlOption{{"replay", "重播率（Last.fm）"}, {"ratio", "点赞率"}, {"views", "播放量"}, {"none", "不挑，全下"}}, "replay")
+	videoRank := rankField([]dlOption{{"ratio", "点赞率"}, {"views", "播放量"}, {"none", "不挑，全下"}}, "ratio")
+	top := dlField{Name: "top", Label: "每个链接取", Type: "choice", Default: "30", Options: []dlOption{{"10", "前 10 个"}, {"30", "前 30 个"}, {"100", "前 100 个"}}}
+	pool := dlField{Name: "pool", Label: "在前多少个里排名", Type: "choice", Default: "200", Options: []dlOption{{"100", "前 100 个"}, {"200", "前 200 个"}, {"500", "前 500 个"}, {"0", "全部（很慢）"}},
+		Help: "排名要逐个读每个视频的数据，每个约 1～2 秒"}
 	steps := func(first string) []string {
-		return []string{first, "直接下（每个链接取最新 N 个），或读取列表挑选", "下载到暂存区（下过的跳过）", "在「暂存区」试看试听、删掉不要的", "移入资源库"}
+		return []string{first, "提取每个链接里的单个视频", "逐个读数据、按质量排名取前 N 个（或读取列表自己挑）", "依次下载到暂存区（下过的跳过）", "在「暂存区」试看试听、删掉不要的", "移入资源库"}
 	}
 	return []*dlKind{
 		{
-			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑或单曲（YouTube、YouTube Music、B 站等），每个歌单放进自己的文件夹。只取最好的音轨，不转码，嵌入封面和标签；下过的自动跳过。",
+			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑或单曲（YouTube、YouTube Music、B 站等），直接下时按重播率（Last.fm：总播放 ÷ 听众，听过的人平均听几遍）或点赞率取前 N 首，每个歌单放进自己的文件夹。只取最好的音轨，不转码，嵌入封面和标签；下过的自动跳过。",
 			Scheme: &dlScheme{Steps: steps("粘贴歌单/专辑链接（一行一个）"), Destination: "音声 / 音乐 / <专辑名>/", Probe: true,
 				Input: "歌单、专辑或单曲链接，一行一个", Placeholder: "https://music.youtube.com/playlist?list=…\nhttps://www.youtube.com/playlist?list=…\nhttps://www.youtube.com/watch?v=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, perList, {Name: "album", Label: "专辑名", Type: "text", Help: "只在读取一个列表挑选时可改；直接下载时每个歌单用自己的名字"}, library},
+			Fields: []dlField{urls, musicRank, top, pool, {Name: "album", Label: "专辑名", Type: "text", Help: "只在读取一个列表挑选时可改；直接下载时每个歌单用自己的名字"}, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("music", p) },
 		},
 		{
-			ID: "youtube", Title: "YouTube", Description: "一次可以填很多个频道、播放列表或视频。直接下：每个取最新 N 个，排成一个任务下完，设好就不用管；也可以读取列表逐条挑。下过的自动跳过，以后同一批链接再下就只下新的。",
+			ID: "youtube", Title: "YouTube", Description: "一次可以填很多个频道、播放列表或视频。直接下：逐个读每个视频的数据，按点赞率或播放量取前 N 个，排成一个任务下完，设好就不用管；也可以读取列表逐条挑。下过的自动跳过。",
 			Scheme: &dlScheme{Steps: steps("粘贴频道/播放列表链接（一行一个）"), Destination: "短视频 / YouTube / <频道>/", Probe: true,
 				Input: "频道、播放列表或视频链接，一行一个", Placeholder: "https://www.youtube.com/@频道名\nhttps://www.youtube.com/@另一个频道\nhttps://www.youtube.com/playlist?list=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, perList, height, library},
+			Fields: []dlField{urls, videoRank, top, pool, height, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("youtube", p) },
 		},
 		{
-			ID: "bilibili", Title: "B 站", Description: "一次可以填很多个 UP 主、合集或视频。直接下：每个取最新 N 个，设好就不用管；也可以读取列表逐条挑。下过的自动跳过。",
+			ID: "bilibili", Title: "B 站", Description: "一次可以填很多个 UP 主、合集或视频。直接下：逐个读数据，按点赞率或播放量取前 N 个，设好就不用管；也可以读取列表逐条挑。下过的自动跳过。",
 			Scheme: &dlScheme{Steps: steps("粘贴 UP 主空间/合集链接（一行一个）"), Destination: "短视频 / B站 / <UP主>/", Probe: true,
 				Input: "UP 主空间、合集或视频链接，一行一个", Placeholder: "https://space.bilibili.com/<UID>/video\nhttps://www.bilibili.com/video/BV…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, perList, height, library},
+			Fields: []dlField{urls, videoRank, top, pool, height, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("bilibili", p) },
 		},
 		{
@@ -136,8 +143,10 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 	if a := p.text("album"); a != "" {
 		args = append(args, "--album", a)
 	}
-	if n := p.text("per_list"); n != "" && p.text("mode") == "direct" {
-		args = append(args, "--per-list", n)
+	if p.text("mode") == "direct" {
+		if rank := p.text("rank"); rank != "" {
+			args = append(args, "--rank", rank, "--top", p.text("top"), "--pool", p.text("pool"))
+		}
 	}
 	if m := p.text("x_media"); m != "" {
 		args = append(args, "--x-media", m)

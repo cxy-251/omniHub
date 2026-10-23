@@ -614,6 +614,9 @@ func (r *Router) startDownload(kindID string, params dlParams) (dlJob, error) {
 	if settings.YtdlpCookies != "" {
 		env = append(env, "OMNIHUB_YTDLP_COOKIES="+settings.YtdlpCookies)
 	}
+	if settings.LastfmKey != "" {
+		env = append(env, "OMNIHUB_LASTFM_KEY="+settings.LastfmKey)
+	}
 	if err := os.MkdirAll(plan.resource, 0o755); err != nil {
 		return dlJob{}, err
 	}

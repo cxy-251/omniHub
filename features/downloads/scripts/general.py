@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from urllib.parse import urlparse
 
 # 平台表由服务端给出（与「账号与 Cookie」页同一份）：[{"id","hosts":[…],"dir","tool"}]
@@ -169,6 +170,42 @@ def gallerydl(urls, a):
     return files, skipped, errors
 
 
+def ranked(a):
+    """按质量挑：每个链接依次 提取列表 → 补充数据 →（音乐）查重播率 → 排名取前 N → 下载这些单个视频。
+    排名表写进日志，也存进批次的 ranking-<时间>.json（移入资源库时收进下载元数据）。"""
+    import rank
+    done = set()
+    if a.archive and os.path.isfile(a.archive):
+        with open(a.archive, encoding="utf-8", errors="replace") as f:
+            done = {line.split(" ", 1)[1].strip() for line in f if " " in line}
+    files, skipped, errors, report = [], 0, 0, []
+    for n, url in enumerate(a.urls):
+        url = normalize(url)
+        platform = platform_of(url)
+        cookies = cookie_file(platform["id"])
+        log(f"[{n + 1}/{len(a.urls)}] {url}")
+        try:
+            title, chosen, rule = rank.pick(url, cookies, a.rank, a.top, a.pool, done, progress, log)
+        except Exception as e:
+            log(f"   提取或排名失败：{e}")
+            errors += 1
+            continue
+        report.append({"url": url, "title": title, "rule": rule, "chosen": chosen})
+        if not chosen:
+            continue
+        sub = argparse.Namespace(**vars(a))
+        sub.per_list, sub.items = 0, ""
+        if a.scheme == "music" and not a.album:
+            sub.album = title   # 每个歌单、专辑进自己的文件夹（专辑的序号就是原曲序）
+        f, s, e = ytdlp([c["url"] for c in chosen], sub, platform)
+        files, skipped, errors = files + f, skipped + s, errors + e
+    if report:
+        name = os.path.join(a.batch, time.strftime("ranking-%Y%m%d-%H%M%S.json"))
+        with open(name, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=1)
+    return files, skipped, errors
+
+
 def main():
     p = argparse.ArgumentParser(description="按方案下载到暂存区")
     p.add_argument("urls", nargs="+")
@@ -177,7 +214,11 @@ def main():
     p.add_argument("--max-height", type=int, default=1080, help="视频最高分辨率（高），0 表示不限")
     p.add_argument("--album", default="", help="音乐：专辑名（不给时用播放列表名）")
     p.add_argument("--items", default="", help="只下播放列表里的这些序号，如 1-10,15")
-    p.add_argument("--per-list", type=int, default=0, help="每个列表/频道只取前 N 个（最新的），0 表示全部")
+    p.add_argument("--per-list", type=int, default=0, help="每个列表/频道只取前 N 个，0 表示全部")
+    p.add_argument("--rank", choices=["none", "replay", "ratio", "views"], default="none",
+                   help="按质量挑：replay 重播率（Last.fm）、ratio 点赞率、views 播放量；none 不挑，全下")
+    p.add_argument("--top", type=int, default=30, help="按质量挑时每个链接取前多少个")
+    p.add_argument("--pool", type=int, default=200, help="按质量挑时只在每个链接的前多少个里排名（逐个读数据较慢），0 表示全部")
     p.add_argument("--archive", default="", help="已下载名单文件（下过的不再下）")
     p.add_argument("--x-media", choices=["all", "image", "video"], default="all")
     p.add_argument("--x-limit", type=int, default=0, help="X：每个用户最多下最近这么多个文件，0 表示不限")
@@ -193,6 +234,8 @@ def main():
         for urls in groups.values():
             f, s, e = ytdlp(urls, a, platform_of(urls[0]))
             files, skipped, errors = files + f, skipped + s, errors + e
+    elif a.rank != "none":
+        files, skipped, errors = ranked(a)
     else:
         # 音乐也可能来自 B 站等：按第一个链接认平台（决定用哪份 Cookie）
         platform = platform_of(a.urls[0]) if a.scheme == "music" else next(

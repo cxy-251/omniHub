@@ -71,6 +71,27 @@ ColumnLayout {
             }
         }
     }
+    // Last.fm API key：音乐按重播率挑要用（总播放 ÷ 听众）
+    Rectangle {
+        Layout.fillWidth: true
+        implicitHeight: lastfmRow.implicitHeight + 16
+        radius: 6; color: "#161b22"; border.color: "#30363d"
+        RowLayout {
+            id: lastfmRow
+            anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; anchors.margins: 10
+            spacing: 8
+            Label { text: "Last.fm"; color: "#e6edf3"; font.pixelSize: 14; Layout.preferredWidth: 100 }
+            Label {
+                Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
+                color: panel.info.has_lastfm ? "#3fb950" : "#8b949e"
+                text: panel.info.has_lastfm ? "已填 API key：音乐可以按重播率挑" : "填自己的 API key 后，音乐可以按重播率（听过的人平均听几遍）挑。免费申请：last.fm/api/account/create"
+                TapHandler { enabled: !panel.info.has_lastfm; onTapped: Qt.openUrlExternally("https://www.last.fm/api/account/create") }
+            }
+            TextField { id: lastfmKey; implicitHeight: 30; Layout.preferredWidth: 220; placeholderText: "API key"; echoMode: TextInput.Password; font.pixelSize: 12 }
+            Chip { text: "保存"; enabled: lastfmKey.text.trim() !== ""; onClicked: { panel.send("lastfm", {path: lastfmKey.text.trim()}); lastfmKey.text = "" } }
+            Chip { text: "删除"; visible: !!panel.info.has_lastfm; onClicked: panel.send("lastfm", {path: ""}) }
+        }
+    }
     Label {
         Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#6e7681"; font.pixelSize: 11
         text: "「已登录」是按各平台常见的会话 Cookie 判断的，不保证一定有效；下载时提示要登录就在 Chrome 里重新登录再读。第一次读取要准备下载环境，可能要等一两分钟。"
