@@ -54,7 +54,8 @@ func ImportDirectory(ctx context.Context, galleryDir, srcDir string, onProgress 
 			}
 			return nil
 		}
-		if d.Type().IsRegular() {
+		// .json 是下载工具写的元数据，不是图片，不计入「不支持」
+		if d.Type().IsRegular() && !strings.HasSuffix(strings.ToLower(d.Name()), ".json") {
 			files = append(files, path)
 		}
 		return nil

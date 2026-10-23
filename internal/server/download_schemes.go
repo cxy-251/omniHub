@@ -30,8 +30,7 @@ type dlScheme struct {
 	Destination string   `json:"destination"` // 下到哪里（移入资源库后）
 	Input       string   `json:"input"`       // 输入框说明
 	Placeholder string   `json:"placeholder"`
-	Probe       bool     `json:"probe"`  // 有「读取列表」
-	Single      bool     `json:"single"` // 一次读一个链接（列表）；否则多行
+	Probe       bool     `json:"probe"` // 有「读取列表」；也可按「每个链接取」直接下载
 }
 
 func archivePath(root, scheme string) string {
@@ -43,32 +42,34 @@ func (r *Router) schemeKinds() []*dlKind {
 	library := dlField{Name: "library", Label: "暂存到", Type: "choice", Options: libs, Default: def, Help: "暂存区在资源库里；移入时同一块盘上只是改名"}
 	height := dlField{Name: "max_height", Label: "最高分辨率", Type: "choice", Default: "1080", Options: []dlOption{{"2160", "4K"}, {"1440", "1440p"}, {"1080", "1080p"}, {"720", "720p"}, {"480", "480p"}, {"0", "不限"}}}
 	urls := dlField{Name: "urls", Label: "链接", Type: "lines", Required: true}
+	// 直接下载（不读列表）时每个链接取多少：频道、播放列表按新到旧，取前 N 个就是最新的 N 个
+	perList := dlField{Name: "per_list", Label: "每个链接取", Type: "choice", Default: "30", Options: []dlOption{{"10", "最新 10 个"}, {"30", "最新 30 个"}, {"100", "最新 100 个"}, {"0", "全部"}}}
 	steps := func(first string) []string {
-		return []string{first, "勾选要下的", "下载到暂存区", "在「暂存区」试看试听、删掉不要的", "移入资源库"}
+		return []string{first, "直接下（每个链接取最新 N 个），或读取列表挑选", "下载到暂存区（下过的跳过）", "在「暂存区」试看试听、删掉不要的", "移入资源库"}
 	}
 	return []*dlKind{
 		{
-			ID: "music", Title: "音乐", Description: "下载歌单、专辑或单曲的音频（YouTube、YouTube Music、B 站等）。只取最好的音轨，不转码，嵌入封面和标签。",
-			Scheme: &dlScheme{Steps: steps("粘贴歌单/专辑链接 → 读取列表"), Destination: "音声 / 音乐 / <专辑名>/", Probe: true, Single: true,
-				Input: "歌单、专辑或单曲链接", Placeholder: "https://music.youtube.com/playlist?list=…  或  https://www.youtube.com/watch?v=…"},
+			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑或单曲（YouTube、YouTube Music、B 站等），每个歌单放进自己的文件夹。只取最好的音轨，不转码，嵌入封面和标签；下过的自动跳过。",
+			Scheme: &dlScheme{Steps: steps("粘贴歌单/专辑链接（一行一个）"), Destination: "音声 / 音乐 / <专辑名>/", Probe: true,
+				Input: "歌单、专辑或单曲链接，一行一个", Placeholder: "https://music.youtube.com/playlist?list=…\nhttps://www.youtube.com/playlist?list=…\nhttps://www.youtube.com/watch?v=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, {Name: "album", Label: "专辑名", Type: "text", Help: "默认用歌单名；同一专辑的歌放进同一个文件夹"}, library},
+			Fields: []dlField{urls, perList, {Name: "album", Label: "专辑名", Type: "text", Help: "只在读取一个列表挑选时可改；直接下载时每个歌单用自己的名字"}, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("music", p) },
 		},
 		{
-			ID: "youtube", Title: "YouTube", Description: "下载频道、播放列表或单个视频。读取列表后勾选（或按最新、播放量挑），一次下完；下过的会标出并跳过。",
-			Scheme: &dlScheme{Steps: steps("粘贴频道/播放列表链接 → 读取列表"), Destination: "短视频 / YouTube / <频道>/", Probe: true, Single: true,
-				Input: "频道、播放列表或视频链接", Placeholder: "https://www.youtube.com/@频道名   https://www.youtube.com/playlist?list=…"},
+			ID: "youtube", Title: "YouTube", Description: "一次可以填很多个频道、播放列表或视频。直接下：每个取最新 N 个，排成一个任务下完，设好就不用管；也可以读取列表逐条挑。下过的自动跳过，以后同一批链接再下就只下新的。",
+			Scheme: &dlScheme{Steps: steps("粘贴频道/播放列表链接（一行一个）"), Destination: "短视频 / YouTube / <频道>/", Probe: true,
+				Input: "频道、播放列表或视频链接，一行一个", Placeholder: "https://www.youtube.com/@频道名\nhttps://www.youtube.com/@另一个频道\nhttps://www.youtube.com/playlist?list=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, height, library},
+			Fields: []dlField{urls, perList, height, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("youtube", p) },
 		},
 		{
-			ID: "bilibili", Title: "B 站", Description: "下载 UP 主的投稿、合集或单个视频。读取列表后勾选，一次下完；下过的会标出并跳过。",
-			Scheme: &dlScheme{Steps: steps("粘贴 UP 主空间/合集链接 → 读取列表"), Destination: "短视频 / B站 / <UP主>/", Probe: true, Single: true,
-				Input: "UP 主空间、合集或视频链接", Placeholder: "https://space.bilibili.com/<UID>/video   https://www.bilibili.com/video/BV…"},
+			ID: "bilibili", Title: "B 站", Description: "一次可以填很多个 UP 主、合集或视频。直接下：每个取最新 N 个，设好就不用管；也可以读取列表逐条挑。下过的自动跳过。",
+			Scheme: &dlScheme{Steps: steps("粘贴 UP 主空间/合集链接（一行一个）"), Destination: "短视频 / B站 / <UP主>/", Probe: true,
+				Input: "UP 主空间、合集或视频链接，一行一个", Placeholder: "https://space.bilibili.com/<UID>/video\nhttps://www.bilibili.com/video/BV…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, height, library},
+			Fields: []dlField{urls, perList, height, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("bilibili", p) },
 		},
 		{
@@ -116,6 +117,8 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 		label += " " + t
 	} else if scheme == "x" {
 		label += " " + strings.Join(urls[:min(3, len(urls))], " ")
+	} else {
+		label += fmt.Sprintf(" %d 个链接", len(urls))
 	}
 	batch, err := staging.NewBatch(lib.RootPath, label, scheme)
 	if err != nil {
@@ -132,6 +135,9 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 	}
 	if a := p.text("album"); a != "" {
 		args = append(args, "--album", a)
+	}
+	if n := p.text("per_list"); n != "" && p.text("mode") == "direct" {
+		args = append(args, "--per-list", n)
 	}
 	if m := p.text("x_media"); m != "" {
 		args = append(args, "--x-media", m)

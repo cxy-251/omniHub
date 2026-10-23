@@ -53,8 +53,18 @@ def safe(name):
     return name[:100] or "未分类"
 
 
+def normalize(url):
+    """YouTube 频道首页是「视频 / Shorts / 直播」几个分页；没指定分页时取视频页（与 probe.py 相同）。"""
+    if re.search(r"youtube\.com/(@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+)/?(\?.*)?$", url):
+        return re.sub(r"/?(\?.*)?$", r"/videos\1", url, count=1)
+    return url
+
+
 def ytdlp(urls, a, platform):
-    """一个 yt-dlp 进程下全部链接；返回 (下完的文件, 已在名单里跳过的数量, 出错的数量)。"""
+    """一个 yt-dlp 进程按顺序下全部链接（单个视频或整个列表）；返回 (下完的文件, 已在名单里跳过的数量, 出错的数量)。"""
+    urls = [normalize(u) for u in urls]
+    # 进度总数：每个链接取前 N 个时最多 链接数×N；否则按链接数（列表展开后会超过，随下随长）
+    expected = len(urls) * a.per_list if a.per_list > 0 else len(urls)
     cmd = [sys.executable, "-m", "yt_dlp", "--newline", "--no-colors", "--ignore-errors", "--windows-filenames",
            "--write-info-json", "--no-write-playlist-metafiles", "--no-simulate",
            "--no-quiet",  # --print 默认会静音；跳过、进度信息要留在日志里
@@ -66,7 +76,9 @@ def ytdlp(urls, a, platform):
         cmd += ["--cookies", cookies]
     if os.environ.get("OMNIHUB_YTDLP_PROXY"):
         cmd += ["--proxy", os.environ["OMNIHUB_YTDLP_PROXY"]]
-    if a.items:
+    if a.per_list > 0:
+        cmd += ["--playlist-items", f"1:{a.per_list}"]   # 每个列表/频道只取前 N 个（频道、播放列表按新→旧排列）
+    elif a.items:
         cmd += ["--playlist-items", a.items]
     if a.scheme == "music":
         album = safe(a.album) if a.album else "%(playlist_title,album,artist,uploader|未分类)s"
@@ -85,11 +97,11 @@ def ytdlp(urls, a, platform):
         line = line.rstrip("\n")
         if line.startswith("OMNIHUB_FILE "):
             files.append(line[13:])
-            progress(len(files) + skipped, len(urls), os.path.basename(files[-1]))
+            progress(len(files) + skipped, max(expected, len(files) + skipped), os.path.basename(files[-1]))
             continue
         if "has already been recorded in the archive" in line:
             skipped += 1
-            progress(len(files) + skipped, len(urls), "已下载过，跳过")
+            progress(len(files) + skipped, max(expected, len(files) + skipped), "已下载过，跳过")
         elif line.startswith("ERROR:"):
             errors += 1
             for key, hint in LOGIN_HINTS.items():
@@ -165,6 +177,7 @@ def main():
     p.add_argument("--max-height", type=int, default=1080, help="视频最高分辨率（高），0 表示不限")
     p.add_argument("--album", default="", help="音乐：专辑名（不给时用播放列表名）")
     p.add_argument("--items", default="", help="只下播放列表里的这些序号，如 1-10,15")
+    p.add_argument("--per-list", type=int, default=0, help="每个列表/频道只取前 N 个（最新的），0 表示全部")
     p.add_argument("--archive", default="", help="已下载名单文件（下过的不再下）")
     p.add_argument("--x-media", choices=["all", "image", "video"], default="all")
     p.add_argument("--x-limit", type=int, default=0, help="X：每个用户最多下最近这么多个文件，0 表示不限")

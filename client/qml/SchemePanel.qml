@@ -3,8 +3,10 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // 下载方案页（音乐、YouTube、B 站、X、其他链接）：按服务端给的方案说明生成。
-//   一行流程 + 去向 → 输入 →（有列表的方案）读取列表、勾选 → 选项 → 后果说明与「下载到暂存区」。
-// 列表只读元数据（/api/downloads/probe），已下载名单里有的会标出，默认不勾选。
+//   一行流程 + 去向 → 链接（一行一个）→ 两种下法：
+//     直接下载：每个链接（频道、歌单、合集）取最新 N 个，排成一个任务按顺序下完，设好就不用管；
+//     读取列表挑选：逐个读出列表（只读元数据，/api/downloads/probe），按列表分组显示，勾选后一起下。
+// 每个方案有「已下载」名单：下过的标出、跳过，所以同一批链接以后再下就只下新的。
 ColumnLayout {
     id: panel
     required property var kind
@@ -13,14 +15,13 @@ ColumnLayout {
     spacing: 8
 
     ApiClient { id: api }
-    readonly property var scheme: Object.assign({steps: [], destination: "", input: "", placeholder: "", probe: false, single: false}, kind.scheme || {})
+    readonly property var scheme: Object.assign({steps: [], destination: "", input: "", placeholder: "", probe: false}, kind.scheme || {})
     property var values: ({})
     property string input: ""
-    property var probe: null            // {title, uploader, entries}
-    property bool probing: false
-    property string probeError: ""
-    property var picked: ({})           // 条目序号 → true
-    property string sortBy: "order"     // order | views | likes | ratio | date
+    property var groups: []             // 读出的列表：[{url, title, uploader, entries, error}]
+    property int probingIndex: -1       // 正在读第几个链接
+    property var picked: ({})           // "组号:条目号" → true
+    property string sortBy: "order"     // order | date | views | likes | ratio
     property var analysis: ({items: []})
 
     function field(name) { return kind.fields.find(function (f) { return f.name === name }) || null }
@@ -28,47 +29,88 @@ ColumnLayout {
     function reset() {
         var v = {}
         kind.fields.forEach(function (f) { if (f.default !== undefined) v[f.name] = f.default })
-        values = v; input = ""; probe = null; probeError = ""; picked = ({}); analysis = {items: []}
+        values = v; input = ""; groups = []; picked = ({}); probingIndex = -1; analysis = {items: []}
     }
     onKindChanged: reset()
     Component.onCompleted: reset()
+    readonly property var lines: input.split("\n").map(function (s) { return s.trim() }).filter(function (s) { return s !== "" })
 
-    function readList() {
-        probing = true; probeError = ""; probe = null; picked = ({})
-        api.send("POST", "/api/downloads/probe", {url: input.trim(), library: values.library || "", scheme: kind.id}, function (r) {
-            panel.probing = false
-            panel.probe = r
-            // 短列表默认全选（没下过的）；长列表（如整个频道）默认不选，由你挑
-            var m = {}
-            if (r.entries.length <= 50) r.entries.forEach(function (e, i) { if (!e.downloaded) m[i] = true })
-            panel.picked = m
-            if (panel.field("album") && !panel.values.album) panel.set("album", r.title)
+    // 逐个读列表（一个读完再读下一个，避免同时打开太多请求被网站限制）
+    function readAll() {
+        groups = []; picked = ({})
+        readNext(0)
+    }
+    function readNext(i) {
+        if (i >= lines.length) { probingIndex = -1; return }
+        probingIndex = i
+        var url = lines[i]
+        api.error = ""   // 连续两个链接报同样的错时，第二次也要触发 onErrorChanged
+        api.send("POST", "/api/downloads/probe", {url: url, library: values.library || "", scheme: kind.id}, function (r) {
+            var g = panel.groups.slice()
+            g.push({url: url, title: r.title, uploader: r.uploader, entries: r.entries, error: ""})
+            panel.groups = g
+            // 短列表默认全选没下过的；长列表（整个频道）默认不选
+            if (r.entries.length <= 50) {
+                var m = Object.assign({}, panel.picked)
+                r.entries.forEach(function (e, k) { if (!e.downloaded) m[(g.length - 1) + ":" + k] = true })
+                panel.picked = m
+            }
+            if (panel.field("album") && g.length === 1 && !panel.values.album) panel.set("album", r.title)
+            panel.readNext(i + 1)
         })
     }
-    Connections { target: api; function onErrorChanged() { if (api.error && panel.probing) { panel.probing = false; panel.probeError = api.error } } }
+    Connections {
+        target: api
+        function onErrorChanged() {
+            if (!api.error || panel.probingIndex < 0) return
+            var g = panel.groups.slice()
+            g.push({url: panel.lines[panel.probingIndex], title: "", uploader: "", entries: [], error: api.error})
+            panel.groups = g
+            panel.readNext(panel.probingIndex + 1)
+        }
+    }
 
-    // 排序后的条目（保留原序号 i）
+    // 显示用的行：每组一个标题行 + 该组条目（组内排序）
     readonly property var rows: {
-        if (!probe) return []
-        var list = probe.entries.map(function (e, i) { return {e: e, i: i} })
+        var out = []
         var ratio = function (e) { return e.views ? (e.likes || 0) / e.views : 0 }
         var keys = {views: function (x) { return x.e.views || 0 }, likes: function (x) { return x.e.likes || 0 },
                     ratio: function (x) { return ratio(x.e) }, date: function (x) { return x.e.date || "" }}
-        if (keys[sortBy]) list.sort(function (a, b) { var ka = keys[sortBy](a), kb = keys[sortBy](b); return ka < kb ? 1 : ka > kb ? -1 : a.i - b.i })
-        return list
+        groups.forEach(function (grp, g) {
+            out.push({header: true, g: g, grp: grp})
+            var list = grp.entries.map(function (e, i) { return {e: e, i: i, g: g} })
+            if (keys[sortBy]) list.sort(function (a, b) { var ka = keys[sortBy](a), kb = keys[sortBy](b); return ka < kb ? 1 : ka > kb ? -1 : a.i - b.i })
+            out = out.concat(list)
+        })
+        return out
     }
     readonly property int pickedCount: Object.keys(picked).length
-    function pickTop(n) { var m = {}; rows.slice(0, n).forEach(function (x) { if (!x.e.downloaded) m[x.i] = true }); picked = m }
-    function pickAll(on, onlyNew) { var m = {}; if (on) probe.entries.forEach(function (e, i) { if (!onlyNew || !e.downloaded) m[i] = true }); picked = m }
-    readonly property var lines: input.split("\n").map(function (s) { return s.trim() }).filter(function (s) { return s !== "" })
-    readonly property bool ready: scheme.probe ? pickedCount > 0 : lines.length > 0
-    function start() {
+    readonly property int entryCount: groups.reduce(function (n, grp) { return n + grp.entries.length }, 0)
+    function pickEach(n) {   // 每个列表取（当前排序下）前 n 个没下过的；n<=0 为全部
+        var m = {}
+        groups.forEach(function (grp, g) {
+            var taken = 0
+            rows.forEach(function (x) { if (!x.header && x.g === g && !x.e.downloaded && (n <= 0 || taken < n)) { m[g + ":" + x.i] = true; taken++ } })
+        })
+        picked = m
+    }
+    function toggle(key, on) { var m = Object.assign({}, picked); if (on) m[key] = true; else delete m[key]; picked = m }
+
+    readonly property bool canPick: pickedCount > 0
+    readonly property bool canDirect: lines.length > 0
+    function startPicked() {
         var p = Object.assign({}, values)
-        if (scheme.probe) {
-            p.urls = Object.keys(picked).map(Number).sort(function (a, b) { return a - b }).map(function (i) { return probe.entries[i].url }).join("\n")
-            // 批次名：音乐用歌单名，视频用频道名
-            p.title = kind.id === "music" ? (probe.title || probe.uploader || "") : (probe.uploader || probe.title || "")
-        } else p.urls = lines.join("\n")
+        p.mode = "picked"
+        p.urls = Object.keys(picked).map(function (k) { var a = k.split(":"); return panel.groups[+a[0]].entries[+a[1]].url }).join("\n")
+        p.title = groups.length === 1 ? (kind.id === "music" ? groups[0].title : (groups[0].uploader || groups[0].title)) : ""
+        if (groups.length !== 1) delete p.album
+        panel.run(p)
+    }
+    function startDirect() {
+        var p = Object.assign({}, values)
+        p.mode = "direct"
+        p.urls = lines.join("\n")
+        delete p.album
         panel.run(p)
     }
     function duration(s) {
@@ -78,6 +120,7 @@ ColumnLayout {
         return (h ? h + ":" + (m < 10 ? "0" : "") : "") + m + ":" + (sec < 10 ? "0" : "") + sec
     }
     function count(n) { return n === null || n === undefined ? "" : n >= 1e8 ? (n / 1e8).toFixed(1) + "亿" : n >= 1e4 ? (n / 1e4).toFixed(1) + "万" : String(n) }
+    function perListLabel() { var f = field("per_list"); var o = f ? f.options.find(function (x) { return x.value === values.per_list }) : null; return o ? o.label : "" }
     Timer { id: analyzeTimer; interval: 300; onTriggered: if (panel.kind.id === "other") api.send("POST", "/api/downloads/analyze", {urls: panel.input, mode: "video", library: panel.values.library || ""}, function (r) { panel.analysis = r }) }
 
     // 流程与去向
@@ -103,25 +146,10 @@ ColumnLayout {
     }
     Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: panel.kind.description; color: "#8b949e"; font.pixelSize: 12 }
 
-    // 输入
-    RowLayout {
-        visible: panel.scheme.single
-        Layout.fillWidth: true
-        spacing: 6
-        TextField {
-            Layout.fillWidth: true; implicitHeight: 32; font.pixelSize: 13
-            placeholderText: panel.scheme.placeholder
-            text: panel.input
-            onTextEdited: panel.input = text
-            onAccepted: if (text.trim()) panel.readList()
-        }
-        BusyIndicator { running: panel.probing; visible: running; implicitWidth: 26; implicitHeight: 26 }
-        PrimaryButton { text: "读取列表"; enabled: panel.input.trim() !== "" && !panel.probing; onClicked: panel.readList() }
-    }
+    // 链接（一行一个）
     ScrollView {
-        visible: !panel.scheme.single
         Layout.fillWidth: true
-        implicitHeight: 90
+        implicitHeight: 96
         TextArea {
             placeholderText: panel.scheme.placeholder
             text: panel.input
@@ -130,14 +158,13 @@ ColumnLayout {
             background: Rectangle { color: "#0d1117"; border.color: parent.activeFocus ? "#58a6ff" : "#30363d"; radius: 4 }
         }
     }
-    Label { visible: panel.probeError !== ""; text: panel.probeError; color: "#f85149"; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
 
     // 选项（一行）
     RowLayout {
         Layout.fillWidth: true
         spacing: 6
         Repeater {
-            model: panel.kind.fields.filter(function (f) { return f.name !== "urls" && f.name !== "library" })
+            model: panel.kind.fields.filter(function (f) { return ["urls", "library", "per_list"].indexOf(f.name) < 0 && !(f.name === "album" && panel.groups.length !== 1) })
             delegate: RowLayout {
                 required property var modelData
                 spacing: 4
@@ -170,21 +197,37 @@ ColumnLayout {
         }
     }
 
-    // 列表
+    // 两种下法
     RowLayout {
-        visible: !!panel.probe
+        visible: panel.scheme.probe
+        Layout.fillWidth: true
+        spacing: 6
+        Label { text: "直接下载：每个链接取"; color: "#c9d1d9"; font.pixelSize: 12 }
+        ComboBox {
+            implicitHeight: 30; Layout.preferredWidth: 120; font.pixelSize: 12
+            textRole: "label"; valueRole: "value"
+            model: panel.field("per_list") ? panel.field("per_list").options : []
+            currentIndex: Math.max(0, (panel.field("per_list") ? panel.field("per_list").options : []).findIndex(function (o) { return o.value === panel.values.per_list }))
+            onActivated: panel.set("per_list", currentValue)
+        }
+        PrimaryButton { text: "直接下载 " + panel.lines.length + " 个链接"; enabled: panel.canDirect && panel.probingIndex < 0; onClicked: panel.startDirect() }
+        Divider { Layout.leftMargin: 4; Layout.rightMargin: 4 }
+        Chip { text: panel.probingIndex >= 0 ? "正在读第 " + (panel.probingIndex + 1) + "/" + panel.lines.length + " 个…" : "读取列表挑选"; enabled: panel.canDirect && panel.probingIndex < 0; onClicked: panel.readAll() }
+        BusyIndicator { running: panel.probingIndex >= 0; visible: running; implicitWidth: 24; implicitHeight: 24 }
+        Item { Layout.fillWidth: true }
+    }
+
+    // 列表（按链接分组）
+    RowLayout {
+        visible: panel.groups.length > 0
         Layout.fillWidth: true
         spacing: 4
-        Label {
-            text: panel.probe ? (panel.probe.title || panel.probe.uploader) + " · " + panel.probe.entries.length + " 条"
-                  + (panel.probe.entries.some(function (e) { return e.downloaded }) ? "（已下载 " + panel.probe.entries.filter(function (e) { return e.downloaded }).length + "）" : "") : ""
-            color: "#e6edf3"; font.pixelSize: 13; font.bold: true; elide: Text.ElideRight; Layout.maximumWidth: 360
-        }
+        Label { text: panel.groups.length + " 个列表，共 " + panel.entryCount + " 条"; color: "#e6edf3"; font.pixelSize: 13; font.bold: true }
         Divider {}
-        Chip { text: "全选未下载"; onClicked: panel.pickAll(true, true) }
-        Chip { text: "全不选"; onClicked: panel.pickAll(false) }
-        Chip { text: "前 10"; onClicked: panel.pickTop(10) }
-        Chip { text: "前 50"; onClicked: panel.pickTop(50) }
+        Chip { text: "全选未下载"; onClicked: panel.pickEach(0) }
+        Chip { text: "全不选"; onClicked: panel.picked = ({}) }
+        Chip { text: "每个列表前 10"; onClicked: panel.pickEach(10) }
+        Chip { text: "每个列表前 50"; onClicked: panel.pickEach(50) }
         Divider {}
         Label { text: "排序"; color: "#8b949e"; font.pixelSize: 12 }
         Repeater {
@@ -193,29 +236,42 @@ ColumnLayout {
         }
     }
     ListView {
-        visible: !!panel.probe
+        visible: panel.groups.length > 0
         Layout.fillWidth: true
-        Layout.preferredHeight: Math.min(contentHeight, 420)
+        Layout.preferredHeight: Math.min(contentHeight, 440)
         clip: true
         model: panel.rows
         WheelScroll { }
         ScrollBar.vertical: ScrollBar { }
-        delegate: RowLayout {
+        delegate: Item {
             required property var modelData
             width: ListView.view.width
-            height: 30
-            spacing: 6
-            CheckBox {
-                checked: !!panel.picked[modelData.i]
-                onToggled: { var m = Object.assign({}, panel.picked); if (checked) m[modelData.i] = true; else delete m[modelData.i]; panel.picked = m }
+            height: modelData.header ? 30 : 28
+            Label {
+                visible: !!modelData.header
+                anchors.fill: parent; verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight; font.pixelSize: 13; font.bold: true
+                color: modelData.header && modelData.grp.error ? "#f85149" : "#58a6ff"
+                text: !modelData.header ? "" : modelData.grp.error ? "✗ " + modelData.grp.url + "：" + modelData.grp.error
+                    : (modelData.grp.title || modelData.grp.uploader) + "  ·  " + modelData.grp.entries.length + " 条"
+                      + (modelData.grp.entries.some(function (e) { return e.downloaded }) ? "（已下载 " + modelData.grp.entries.filter(function (e) { return e.downloaded }).length + "）" : "")
             }
-            Label { text: modelData.i + 1; color: "#6e7681"; font.pixelSize: 11; Layout.preferredWidth: 30 }
-            Label { text: modelData.e.title; color: modelData.e.downloaded ? "#6e7681" : "#e6edf3"; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
-            Label { visible: modelData.e.downloaded; text: "已下载"; color: "#3fb950"; font.pixelSize: 11 }
-            Label { text: panel.duration(modelData.e.duration); color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 50; horizontalAlignment: Text.AlignRight }
-            Label { text: modelData.e.date ? modelData.e.date.slice(0, 4) + "-" + modelData.e.date.slice(4, 6) + "-" + modelData.e.date.slice(6) : ""; color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 72 }
-            Label { text: modelData.e.views ? "▶ " + panel.count(modelData.e.views) : ""; color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 64 }
-            Label { text: modelData.e.likes ? "♥ " + panel.count(modelData.e.likes) + (modelData.e.views ? " · " + (modelData.e.likes / modelData.e.views * 100).toFixed(1) + "%" : "") : ""; color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 110 }
+            RowLayout {
+                visible: !modelData.header
+                anchors.fill: parent
+                spacing: 6
+                CheckBox {
+                    checked: !modelData.header && !!panel.picked[modelData.g + ":" + modelData.i]
+                    onToggled: panel.toggle(modelData.g + ":" + modelData.i, checked)
+                }
+                Label { text: modelData.header ? "" : modelData.i + 1; color: "#6e7681"; font.pixelSize: 11; Layout.preferredWidth: 30 }
+                Label { text: modelData.header ? "" : modelData.e.title; color: !modelData.header && modelData.e.downloaded ? "#6e7681" : "#e6edf3"; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
+                Label { visible: !modelData.header && modelData.e.downloaded; text: "已下载"; color: "#3fb950"; font.pixelSize: 11 }
+                Label { text: modelData.header ? "" : panel.duration(modelData.e.duration); color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 50; horizontalAlignment: Text.AlignRight }
+                Label { text: !modelData.header && modelData.e.date ? modelData.e.date.slice(0, 4) + "-" + modelData.e.date.slice(4, 6) + "-" + modelData.e.date.slice(6) : ""; color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 72 }
+                Label { text: !modelData.header && modelData.e.views ? "▶ " + panel.count(modelData.e.views) : ""; color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 64 }
+                Label { text: !modelData.header && modelData.e.likes ? "♥ " + panel.count(modelData.e.likes) + (modelData.e.views ? " · " + (modelData.e.likes / modelData.e.views * 100).toFixed(1) + "%" : "") : ""; color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 110 }
+            }
         }
     }
 
@@ -236,10 +292,23 @@ ColumnLayout {
         spacing: 8
         Label {
             Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12; color: "#8b949e"
-            text: !panel.ready ? (panel.scheme.probe ? "先读取列表，再勾选要下的。" : "先填上面的内容。")
-                : "将下载 " + (panel.scheme.probe ? panel.pickedCount + " 个" : panel.lines.length + " 项") + "到暂存区（新批次），资源库里已有的内容不会被改动；下过的自动跳过。"
-                  + "下完在「暂存区」检查，确认后「移入资源库」，就会出现在 " + panel.scheme.destination + "。"
+            text: panel.scheme.probe
+                ? (panel.groups.length ? "已勾选 " + panel.pickedCount + " 条。" : "")
+                  + "直接下载：" + panel.lines.length + " 个链接各取" + panel.perListLabel() + "，排成一个任务按顺序下完，可以不用管；下过的自动跳过，同一批链接以后再下就只下新的。"
+                  + "都先进暂存区，确认后「移入资源库」才会出现在 " + panel.scheme.destination + "。"
+                : (panel.lines.length ? panel.lines.length + " 项下载到暂存区（新批次），下过的自动跳过；确认后「移入资源库」才会出现在 " + panel.scheme.destination + "。" : "先填上面的内容。")
         }
-        PrimaryButton { text: "下载到暂存区"; enabled: panel.ready && !(panel.kind.missing && panel.kind.missing.length); onClicked: panel.start() }
+        PrimaryButton {
+            visible: panel.scheme.probe
+            text: "下载勾选的 " + panel.pickedCount + " 条"
+            enabled: panel.canPick && !(panel.kind.missing && panel.kind.missing.length)
+            onClicked: panel.startPicked()
+        }
+        PrimaryButton {
+            visible: !panel.scheme.probe
+            text: "下载到暂存区"
+            enabled: panel.canDirect && !(panel.kind.missing && panel.kind.missing.length)
+            onClicked: panel.startDirect()
+        }
     }
 }
