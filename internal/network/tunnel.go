@@ -63,6 +63,7 @@ func (t *Tunnel) Status() TunnelStatus {
 func (t *Tunnel) SetEnabled(enabled bool) {
 	t.mu.Lock()
 	t.status.Enabled = enabled
+	t.status.Error = ""
 	if !enabled {
 		cancel, done := t.cancel, t.done
 		t.cancel, t.done = nil, nil
@@ -148,7 +149,8 @@ func (t *Tunnel) runOnce(ctx context.Context) error {
 			t.status.Error = ""
 		case strings.Contains(line, "Unregistered tunnel connection") || strings.Contains(line, "Connection terminated"):
 			t.status.Connections = max(0, t.status.Connections-1)
-		case strings.Contains(line, " ERR "):
+		// 拿不到 cfd-features（大陆网络下这个域名解析不到）只是提示，隧道照常连接，不当成错误显示。
+		case strings.Contains(line, " ERR ") && !strings.Contains(line, "Failed to fetch features"):
 			last = strings.TrimSpace(line[strings.Index(line, " ERR ")+5:])
 			t.status.Error = last
 		}
