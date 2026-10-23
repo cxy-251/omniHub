@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"sync"
 
+	"omnihub/internal/auth"
 	"omnihub/internal/library"
 	"omnihub/internal/platform"
 	"omnihub/internal/shortvideo"
@@ -163,6 +166,11 @@ func (r *Router) writableStores() (stores []*shortvideo.Store, dirs []string, li
 
 func (r *Router) runShortVideoJob(job string) {
 	w := r.svJobs
+	if rest, ok := strings.CutPrefix(job, "merge\x00"); ok {
+		libID, src, _ := strings.Cut(rest, "\x00")
+		r.mergeShortVideo(libID, src)
+		return
+	}
 	stores, dirs, _ := r.writableStores()
 	switch job {
 	case "scan":
@@ -222,6 +230,30 @@ func (r *Router) runShortVideoJob(job string) {
 		w.finish(job, fmt.Sprintf("完成 %d，失败 %d", ok, failed), errors.Join(errs...))
 		w.poke()
 	}
+}
+
+// mergeShortVideo 把 src 文件夹里另一台设备的短视频数据库并入 libID 库（结果写进工作状态）。
+func (r *Router) mergeShortVideo(libID, src string) {
+	w := r.svJobs
+	ctx := w.begin("merge", 1)
+	lib := r.findLibrary(libID)
+	if lib == nil || !lib.IsOnline || lib.ReadOnly {
+		w.finish("merge", "", errors.New("目标资源库不在线或只读"))
+		return
+	}
+	store, _, err := r.svStore(lib)
+	if err != nil {
+		w.finish("merge", "", err)
+		return
+	}
+	res, err := store.MergeFrom(ctx, src)
+	note := fmt.Sprintf("并入图集 %d，已有相同 %d，冲突 %d（保留本库的），补作品记录 %d、封面 %d", res.Albums, res.Same, len(res.Conflicts), res.Posts, res.Thumbs)
+	if len(res.Conflicts) > 0 {
+		note += "；冲突：" + strings.Join(res.Conflicts[:min(3, len(res.Conflicts))], "、")
+	}
+	w.progress(0)
+	w.finish("merge", note, err)
+	w.poke()
 }
 
 // thumbnailPass 为各库生成一小批缩略图，返回处理数量；有显式任务等待或开关关闭时提前返回。
@@ -324,6 +356,26 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 	case "scan", "import", "clean":
 		select {
 		case jobs.requests <- action:
+		default:
+			http.Error(w, "too many queued jobs", http.StatusTooManyRequests)
+			return
+		}
+	case "merge":
+		// 合并另一台设备拷来的数据库：路径是本机文件夹，只接受本机客户端。
+		if !auth.IsTrustedLocalFromContext(req.Context()) {
+			http.Error(w, "只能在 Deck 本机合并", http.StatusForbidden)
+			return
+		}
+		var body struct {
+			LibraryID string `json:"library_id"`
+			Path      string `json:"path"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.LibraryID == "" || !filepath.IsAbs(body.Path) || strings.ContainsRune(body.Path+body.LibraryID, 0) {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		select {
+		case jobs.requests <- "merge\x00" + body.LibraryID + "\x00" + body.Path:
 		default:
 			http.Error(w, "too many queued jobs", http.StatusTooManyRequests)
 			return
