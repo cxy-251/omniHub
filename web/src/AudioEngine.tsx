@@ -185,7 +185,8 @@ export function AudioProvider({ children }: { children: ReactNode }) {
 const modeLabel: Record<Mode, string> = { list: '🔁 列表', single: '🔂 单集', random: '🔀 随机' };
 
 // 曲目标签：艺人、专辑、风格，以及下载音乐时写进文件的 Last.fm 听众、播放、重播率。
-type Tags = { artist?: string; album?: string; genre?: string; lastfm_listeners?: number; lastfm_playcount?: number; lastfm_replay?: number };
+type Tags = { artist?: string; album?: string; genre?: string; lastfm_listeners?: number; lastfm_playcount?: number; lastfm_replay?: number;
+  source_views?: number; source_likes?: number; release_date?: string; download_date?: string };
 function useTrackTags(id?: string) {
   const [tags, setTags] = useState<Tags>({});
   useEffect(() => {
@@ -207,6 +208,8 @@ export function AudioBar({ onOpen }: { onOpen(): void }) {
     .filter(Boolean).join('  ·  ');
   const tip = [tags.album ? `专辑《${tags.album}》` : '', tags.genre ? `风格：${tags.genre}` : '',
     tags.lastfm_listeners ? `Last.fm：听众 ${tags.lastfm_listeners}，播放 ${tags.lastfm_playcount}${tags.lastfm_replay ? `，听过的人平均听 ${tags.lastfm_replay.toFixed(1)} 遍` : ''}` : '',
+    tags.source_views ? `来源：播放 ${tags.source_views}${tags.source_likes ? `，点赞 ${tags.source_likes}` : ''}` : '',
+    tags.release_date ? `发布 ${tags.release_date}${tags.download_date ? `  ·  下载 ${tags.download_date}` : ''}` : '',
     `${e.albumTitle}（${e.position + 1}/${e.total}）`].filter(Boolean).join('\n');
   return <div className="fixed inset-x-0 bottom-0 z-40 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-line bg-panel px-3 py-1.5">
     <button className="min-w-0 max-w-80 flex-1 text-left" onClick={onOpen} title={tip}>

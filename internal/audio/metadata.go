@@ -26,8 +26,15 @@ type Metadata struct {
 	LastfmListeners int64   `json:"lastfm_listeners,omitempty"`
 	LastfmPlaycount int64   `json:"lastfm_playcount,omitempty"`
 	LastfmReplay    float64 `json:"lastfm_replay,omitempty"`
-	Picture         []byte  `json:"-"`
-	pictureFront    bool
+	LastfmAlbum     string  `json:"lastfm_album,omitempty"`
+	// 来源网站的数据（SOURCE_* / RELEASE_DATE / DOWNLOAD_DATE），日期是 YYYY-MM-DD
+	SourceViews  int64  `json:"source_views,omitempty"`
+	SourceLikes  int64  `json:"source_likes,omitempty"`
+	SourceURL    string `json:"source_url,omitempty"`
+	ReleaseDate  string `json:"release_date,omitempty"`
+	DownloadDate string `json:"download_date,omitempty"`
+	Picture      []byte `json:"-"`
+	pictureFront bool
 }
 
 const metadataBudget = 8 << 20
@@ -501,6 +508,18 @@ func extraTag(key, value string, result *Metadata) {
 		result.LastfmPlaycount, _ = strconv.ParseInt(value, 10, 64)
 	case "LASTFM_REPLAY":
 		result.LastfmReplay, _ = strconv.ParseFloat(value, 64)
+	case "LASTFM_ALBUM":
+		result.LastfmAlbum = value
+	case "SOURCE_VIEWS":
+		result.SourceViews, _ = strconv.ParseInt(value, 10, 64)
+	case "SOURCE_LIKES":
+		result.SourceLikes, _ = strconv.ParseInt(value, 10, 64)
+	case "SOURCE_URL":
+		result.SourceURL = value
+	case "RELEASE_DATE":
+		result.ReleaseDate = value
+	case "DOWNLOAD_DATE":
+		result.DownloadDate = value
 	}
 }
 

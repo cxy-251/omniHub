@@ -4,7 +4,7 @@ import QtQuick.Layouts
 
 // 下载方案页（音乐、YouTube、B 站、X、其他链接）：按服务端给的方案说明生成。
 //   去向 → 链接（一行一个）→ 选项 →（列表类方案）怎么挑 → 开始。设好就不用管，进度在「任务」里。
-// 列表类方案每个链接只读一次列表页，音乐按 Last.fm 重播率、视频按播放量排名取前 N 个，不逐个打开视频页。
+// 视频方案可按播放量取每个链接前 N 个（只读一次列表页）；音乐全部下载不筛选，数据写进标签。
 ColumnLayout {
     id: panel
     required property var kind
@@ -122,7 +122,7 @@ ColumnLayout {
                      : "，每个读一次列表页、按" + panel.optionLabel("rank") + "取" + panel.optionLabel("top") + "（排名表写进任务日志）"
                        + (panel.kind.id === "music" ? "；完整专辑整张下" : ""))
                   + "，排成一个任务在后台下完，下过的自动跳过。"
-                  + (panel.kind.id === "music" ? "每首的 Last.fm 信息（风格、专辑、听众、重播率）写进文件，播放时显示。" : "")
+                  + (panel.kind.id === "music" ? "全部下载不筛选；每首的播放数、点赞、发布日期、下载日期和 Last.fm 信息（风格、听众、重播率）写进文件，播放时显示。" : "")
         }
         PrimaryButton { text: panel.lines.length ? "开始下载 " + panel.lines.length + " 个链接" : "开始下载"; enabled: panel.ready; onClicked: panel.start() }
     }

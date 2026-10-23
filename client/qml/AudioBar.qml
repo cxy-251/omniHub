@@ -36,14 +36,17 @@ Rectangle {
                     color: bar.engine.error ? "#f85149" : "#8b949e"; font.pixelSize: 11
                 }
             }
-            // 悬停：专辑与 Last.fm 数据
-            ToolTip.visible: tagHover.hovered && (!!bar.engine.tags.album || !!bar.engine.tags.lastfm_listeners)
+            // 悬停：专辑、Last.fm、来源网站的数据与日期
+            ToolTip.visible: tagHover.hovered && (!!bar.engine.tags.album || !!bar.engine.tags.lastfm_listeners || !!bar.engine.tags.source_views)
             ToolTip.delay: 500
             ToolTip.text: (bar.engine.tags.album ? "专辑《" + bar.engine.tags.album + "》\n" : "")
                           + (bar.engine.tags.genre ? "风格：" + bar.engine.tags.genre + "\n" : "")
                           + (bar.engine.tags.lastfm_listeners ? "Last.fm：听众 " + bar.engine.tags.lastfm_listeners + "，播放 " + bar.engine.tags.lastfm_playcount
                              + (bar.engine.tags.lastfm_replay ? "，听过的人平均听 " + bar.engine.tags.lastfm_replay.toFixed(1) + " 遍" : "") : "")
-                          + "\n" + bar.engine.albumTitle + "（" + (bar.engine.position + 1) + "/" + bar.engine.total + "）"
+                          + (bar.engine.tags.lastfm_listeners ? "\n" : "")
+                          + (bar.engine.tags.source_views ? "来源：播放 " + bar.engine.tags.source_views + (bar.engine.tags.source_likes ? "，点赞 " + bar.engine.tags.source_likes : "") + "\n" : "")
+                          + (bar.engine.tags.release_date ? "发布 " + bar.engine.tags.release_date + (bar.engine.tags.download_date ? "  ·  下载 " + bar.engine.tags.download_date : "") + "\n" : "")
+                          + bar.engine.albumTitle + "（" + (bar.engine.position + 1) + "/" + bar.engine.total + "）"
             HoverHandler { id: tagHover }
             TapHandler { onTapped: bar.openRequested() }
             HoverHandler { cursorShape: Qt.PointingHandCursor }

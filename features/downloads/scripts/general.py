@@ -170,26 +170,54 @@ def gallerydl(urls, a):
     return files, skipped, errors
 
 
-def write_tags(path, info):
-    """把 Last.fm 信息写进音频文件：风格（标准 GENRE 字段，多个标签用 ; 分隔）与 LASTFM_LISTENERS / PLAYCOUNT / REPLAY。"""
-    import mutagen
-    from mutagen.id3 import ID3, TCON, TXXX
-    from mutagen.mp4 import MP4, MP4FreeForm
+def source_fields(meta):
+    """来源网站的数据（.info.json 里有的才写）：播放数、点赞数、发布日期、下载日期、原链接。"""
+    fields = {"DOWNLOAD_DATE": time.strftime("%Y-%m-%d")}
+    for key, name in (("view_count", "SOURCE_VIEWS"), ("like_count", "SOURCE_LIKES")):
+        if isinstance(meta.get(key), int):
+            fields[name] = str(meta[key])
+    day = meta.get("release_date") or meta.get("upload_date") or ""
+    if re.fullmatch(r"\d{8}", day):
+        fields["RELEASE_DATE"] = f"{day[:4]}-{day[4:6]}-{day[6:]}"
+    elif meta.get("release_year"):
+        fields["RELEASE_DATE"] = str(meta["release_year"])
+    if meta.get("webpage_url"):
+        fields["SOURCE_URL"] = meta["webpage_url"]
+    return fields
+
+
+def lastfm_fields(info):
+    """Last.fm：听众、总播放、重播率（总播放 ÷ 听众，听众太少时不写）、Last.fm 上的专辑。"""
     fields = {"LASTFM_LISTENERS": str(info["listeners"]), "LASTFM_PLAYCOUNT": str(info["playcount"])}
     if info.get("listeners", 0) >= 50:
         fields["LASTFM_REPLAY"] = f"{info['playcount'] / info['listeners']:.2f}"
-    genre = "; ".join(info.get("tags") or [])
+    if info.get("lastfm_album"):
+        fields["LASTFM_ALBUM"] = info["lastfm_album"]
+    return fields
+
+
+def write_tags(path, fields, genre=""):
+    """把自定义字段写进音频文件：风格写标准 GENRE 字段（多个用 ; 分隔），其余按格式写
+    MP4 自由格式（----:com.apple.iTunes:键）、ID3 TXXX、Vorbis 注释（Opus、FLAC）。"""
+    import mutagen
+    from mutagen.id3 import ID3, TCON, TXXX
+    from mutagen.mp4 import MP4, MP4FreeForm
     f = mutagen.File(path)
     if f is None:
         return False
+    # 风格只用 Last.fm 的标签；yt-dlp 写进去的是 YouTube 分类（Music、Entertainment），不是风格，没有就清掉
     if isinstance(f, MP4):
         if genre:
             f["\xa9gen"] = [genre]
+        else:
+            f.pop("\xa9gen", None)
         for k, v in fields.items():
             f["----:com.apple.iTunes:" + k] = [MP4FreeForm(v.encode())]
     elif isinstance(f.tags, ID3):
         if genre:
             f.tags.add(TCON(encoding=3, text=[genre]))
+        else:
+            f.tags.delall("TCON")
         for k, v in fields.items():
             f.tags.add(TXXX(encoding=3, desc=k, text=[v]))
     else:   # Opus、Vorbis、FLAC：Vorbis 注释
@@ -197,6 +225,8 @@ def write_tags(path, info):
             f.add_tags()
         if genre:
             f.tags["GENRE"] = genre
+        elif "GENRE" in f.tags:
+            del f.tags["GENRE"]
         for k, v in fields.items():
             f.tags[k] = v
     f.save()
@@ -204,12 +234,13 @@ def write_tags(path, info):
 
 
 def enrich_music(files, known):
-    """音乐下完后：每首按 .info.json 里的标题、艺人、频道查 Last.fm（排名时查过的直接用），
-    写进音频标签与 .info.json（键 lastfm），播放时显示。没有 key 时跳过。"""
+    """音乐下完后给每首写标签，不做筛选：来源网站的播放数、点赞数、发布日期、下载日期、原链接，
+    加上 Last.fm 的风格、听众、总播放、重播率（按 .info.json 里的标题、艺人、频道查；排名时查过的直接用；没有 key 时只写来源数据）。
+    Last.fm 信息也存进 .info.json（键 lastfm）。播放时显示。"""
     import rank
     key = os.environ.get("OMNIHUB_LASTFM_KEY", "")
     audio = [f for f in files if not f.endswith(".json") and os.path.isfile(f)]
-    if not key or not audio:
+    if not audio:
         return
     metas, pairs = [], []
     for f in audio:
@@ -221,24 +252,29 @@ def enrich_music(files, known):
         metas.append((meta_path, meta))
         pairs.append(rank.guess_artist_track({"title": meta.get("title") or os.path.basename(f), "artist": meta.get("artist"),
                                               "track": meta.get("track"), "uploader": meta.get("channel") or meta.get("uploader") or ""}))
-    todo = [i for i, (_, m) in enumerate(metas) if m.get("id") not in known]
+    todo = [i for i, (_, m) in enumerate(metas) if m.get("id") not in known] if key else []
+    if todo:
+        progress(0, len(todo), f"查 Last.fm（{len(todo)} 首）")
     looked = dict(zip(todo, rank.lastfm_many([pairs[i] for i in todo], key))) if todo else {}
-    tagged = 0
+    tagged, with_lastfm = 0, 0
     for i, f in enumerate(audio):
         meta_path, meta = metas[i]
         info = known.get(meta.get("id")) or looked.get(i)
-        if not info:
-            continue
+        fields = source_fields(meta)
+        if info:
+            fields.update(lastfm_fields(info))
+            with_lastfm += 1
         try:
-            if write_tags(f, info):
+            if write_tags(f, fields, "; ".join((info or {}).get("tags") or [])):
                 tagged += 1
         except Exception as e:
             log(f"写入标签失败 {os.path.basename(f)}：{e}")
-        if os.path.isfile(meta_path):
+        if info and os.path.isfile(meta_path):
             meta["lastfm"] = {k: info.get(k) for k in ("listeners", "playcount", "lastfm_album", "tags", "lastfm_name")}
             with open(meta_path, "w", encoding="utf-8") as fh:
                 json.dump(meta, fh, ensure_ascii=False)
-    log(f"Last.fm 信息已写进 {tagged}/{len(audio)} 首（风格、听众、播放、重播率）")
+    log(f"标签已写进 {tagged}/{len(audio)} 首（播放、点赞、发布日期、下载日期）；其中 {with_lastfm} 首有 Last.fm 信息"
+        + ("" if key else "（没有 Last.fm API key，跳过）"))
 
 
 def ranked(a):

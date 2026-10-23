@@ -35,11 +35,10 @@ func (r *Router) schemeKinds() []*dlKind {
 	library := dlField{Name: "library", Label: "暂存到", Type: "choice", Options: libs, Default: def, Help: "暂存区在资源库里；移入时同一块盘上只是改名"}
 	height := dlField{Name: "max_height", Label: "最高分辨率", Type: "choice", Default: "1080", Options: []dlOption{{"2160", "4K"}, {"1440", "1440p"}, {"1080", "1080p"}, {"720", "720p"}, {"480", "480p"}, {"0", "不限"}}}
 	urls := dlField{Name: "urls", Label: "链接", Type: "lines", Required: true}
-	// 怎么挑：读一次列表页，音乐用 Last.fm 重播率、视频用列表页自带的播放量排名，每个链接取前 N 个；不逐个打开视频页
+	// 怎么挑（视频）：读一次列表页，按列表页自带的播放量排名，每个链接取前 N 个；不逐个打开视频页
 	rankField := func(options []dlOption, def string) dlField {
 		return dlField{Name: "rank", Label: "按什么挑", Type: "choice", Default: def, Options: options}
 	}
-	musicRank := rankField([]dlOption{{"replay", "重播率（Last.fm）"}, {"views", "播放量"}, {"none", "不挑，全下"}}, "replay")
 	videoRank := rankField([]dlOption{{"views", "播放量"}, {"none", "不挑，全下"}}, "views")
 	top := dlField{Name: "top", Label: "每个链接取", Type: "choice", Default: "30", Options: []dlOption{{"10", "前 10 个"}, {"30", "前 30 个"}, {"100", "前 100 个"}}}
 	steps := func(first string) []string {
@@ -47,11 +46,11 @@ func (r *Router) schemeKinds() []*dlKind {
 	}
 	return []*dlKind{
 		{
-			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑或单曲（YouTube、YouTube Music、B 站等），按重播率（Last.fm：总播放 ÷ 听众，听过的人平均听几遍）取每个歌单的前 N 首，每个歌单放进自己的文件夹。只取最好的音轨，不转码，嵌入封面和标签；下过的自动跳过。",
-			Scheme: &dlScheme{Steps: steps("粘贴歌单/专辑链接（一行一个）"), Destination: "音声 / 音乐 / <专辑名>/", Ranked: true,
+			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑或单曲（YouTube、YouTube Music、B 站等），全部下载，不筛选；每个歌单放进自己的文件夹。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
+			Scheme: &dlScheme{Steps: []string{"粘贴歌单/专辑链接（一行一个）", "全部下载到暂存区（下过的跳过）", "播放数、点赞、日期、Last.fm 信息写进标签", "在「暂存区」试听、删掉不要的", "移入资源库"}, Destination: "音声 / 音乐 / <专辑名>/",
 				Input: "歌单、专辑或单曲链接，一行一个", Placeholder: "https://music.youtube.com/playlist?list=…\nhttps://www.youtube.com/playlist?list=…\nhttps://www.youtube.com/watch?v=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, musicRank, top, {Name: "album", Label: "专辑名", Type: "text", Help: "留空时每个歌单用自己的名字"}, library},
+			Fields: []dlField{urls, {Name: "album", Label: "专辑名", Type: "text", Help: "留空时每个歌单用自己的名字"}, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("music", p) },
 		},
 		{
