@@ -51,6 +51,7 @@ Item {
 
         RowLayout {
             spacing: 4
+            Chip { text: "暂存区"; selected: prefs.tab === "staging"; onClicked: prefs.tab = "staging" }
             Chip { text: "MEGA"; selected: prefs.tab === "mega"; onClicked: prefs.tab = "mega" }
             Repeater {
                 model: view.kinds
@@ -74,9 +75,17 @@ Item {
         }
 
         Label {
-            visible: view.message !== "" && prefs.tab !== "mega"
+            visible: view.message !== "" && prefs.tab !== "mega" && prefs.tab !== "staging"
             text: view.message; color: view.messageIsError ? "#f85149" : "#3fb950"; font.pixelSize: 12
             Layout.fillWidth: true; wrapMode: Text.Wrap
+        }
+
+        Loader {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            active: prefs.tab === "staging"
+            visible: active
+            sourceComponent: Component { StagingPanel { } }
         }
 
         Loader {
@@ -88,7 +97,7 @@ Item {
         }
 
         RowLayout {
-            visible: prefs.tab !== "mega" && !!view.currentKind
+            visible: prefs.tab !== "mega" && prefs.tab !== "staging" && !!view.currentKind
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 12

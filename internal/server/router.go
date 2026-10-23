@@ -59,6 +59,7 @@ type Router struct {
 	downloads      dlState
 	galleryRatios  ratioCache
 	galleryImport  galleryImporter
+	staging        stagingWorker
 	feed           feedState
 	textCatalog    *catalog.Catalog
 	novelCatalog   *catalog.Catalog
@@ -280,6 +281,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/gallery/original", r.handleGalleryOriginal)
 	r.mux.HandleFunc("/api/media/gallery/trash", r.handleGalleryTrash)
 	r.mux.HandleFunc("/api/media/gallery/admin/import", r.handleGalleryImport)
+	r.mux.HandleFunc("/api/staging/", r.handleStaging)
 
 	// 短视频与图集接口
 	r.mux.HandleFunc("/api/media/shortvideo/stream", r.handleShortVideoStream)

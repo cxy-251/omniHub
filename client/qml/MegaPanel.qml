@@ -31,6 +31,7 @@ Item {
             if (s.logged_in) panel.loadEntries()
         })
         api.getJSON("/api/mega/destinations", function (list) {
+            if (!Array.isArray(list)) list = []   // 没装 MEGAcmd 时返回 {available:false, error}
             panel.destinations = list.concat(prefs.customDests.map(function (p) { return {label: p, path: p} }))
             if (!prefs.dest && list.length) prefs.dest = list[0].path
         })
