@@ -2,6 +2,7 @@ package userstate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"math"
 	"strings"
@@ -158,9 +159,19 @@ const (
 
 var ErrWebSaveTooLarge = errors.New("web game save too large")
 
-// WebGameSaves 返回某账号某游戏的全部存档键值。
+// WebGameSave 读一个存档键；没有时 ok 为假。
+func (d *DB) WebGameSave(ctx context.Context, userID int64, gameID, key string) (value string, ok bool, err error) {
+	err = d.db.QueryRowContext(ctx, `SELECT value FROM web_game_saves WHERE user_id=? AND game_id=? AND key=?`, userID, gameID, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return value, err == nil, err
+}
+
+// WebGameSaves 返回某账号某游戏的存档键值（localStorage 替身用），不含 "file:" 开头的存档文件（可能有几 MB，
+// 由 __savefile 按文件单独读）。
 func (d *DB) WebGameSaves(ctx context.Context, userID int64, gameID string) (map[string]string, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT key, value FROM web_game_saves WHERE user_id=? AND game_id=?`, userID, gameID)
+	rows, err := d.db.QueryContext(ctx, `SELECT key, value FROM web_game_saves WHERE user_id=? AND game_id=? AND substr(key,1,5)<>'file:'`, userID, gameID)
 	if err != nil {
 		return nil, err
 	}

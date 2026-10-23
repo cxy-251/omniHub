@@ -39,8 +39,11 @@ void (async () => {
   } catch (failure) { showError(failure); }
 })();
 
-// 存档：沙箱页里浏览器存储（IndexedDB）不可用，EmulatorJS 自己存不住。游戏内存档（.srm）和即时存档（一个槽）
-// 都存到服务端、按账号与游戏分开（同一授权下的 __savefile 接口；访客不保存）。二进制按 base64 文本存。
+// 存档：沙箱页里浏览器存储（IndexedDB）不可用，EmulatorJS 自己存不住。都存到服务端、按账号与游戏分开
+// （同一授权下的 __savefile 接口；访客不保存）。二进制按 base64 文本存。
+//   - 游戏内存档（.srm）：每 30 秒、切走标签页时写出。
+//   - 即时存档：按设置里的「存档位」1～9 分开（工具栏的保存/读取、快速存读、快捷键都走这里）；1 号位沿用旧文件名 retro.state。
+//   - 自动存档：每 5 分钟、切走标签页时存一次；下次打开时提示「继续上次进度」。
 function persistence(source: URL): Record<string, unknown> {
   const token = source.pathname.split('/')[2];
   const fileUrl = (name: string) => `/game-content/${token}/__savefile/${name}`;
@@ -51,10 +54,22 @@ function persistence(source: URL): Record<string, unknown> {
     return fromBase64(await response.text());
   };
   const store = async (name: string, data: Uint8Array) => {
-    const response = await fetch(fileUrl(name), { method: 'POST', body: await toBase64(data) });
+    const body = await toBase64(data);
+    // 关标签页时只有 keepalive 请求能送出去，但它限 64KB；小存档（NES、GB 等）才用得上。
+    const response = await fetch(fileUrl(name), { method: 'POST', body, keepalive: body.length < 60_000 });
     if (!response.ok) throw new Error(response.status === 413 ? '存档太大，服务端放不下' : response.status === 403 ? '未登录，存档只留在本页' : `存档失败（${response.status}）`);
   };
+  const setMeta = (key: string, value: string) => fetch(`/game-content/${token}/__save`, { method: 'POST', body: JSON.stringify({ key, value }), keepalive: true });
   const emulator = () => (window as unknown as { EJS_emulator: Emulator }).EJS_emulator;
+  const slot = () => String(emulator().getSettingValue('save-state-slot') || '1');
+  const slotFile = (n: string) => n === '1' ? 'retro.state' : `retro.state${n}`;
+  const saveSlot = (n: string, state: Uint8Array) => store(slotFile(n), state)
+    .then(() => emulator().displayMessage(`已保存到存档位 ${n}`), (failure: Error) => emulator().displayMessage(failure.message));
+  const loadSlot = (n: string) => load(slotFile(n)).then(state => {
+    if (!state) { emulator().displayMessage(`存档位 ${n} 是空的`); return; }
+    emulator().gameManager.loadState(state);
+    emulator().displayMessage(`已读取存档位 ${n}`);
+  }, () => emulator().displayMessage('读取即时存档失败'));
   // 服务端的存档读回来之前不往回写，免得新开的空存档盖掉旧进度；读失败就整局都不写。
   let uploaded = '', loaded = false;
   return {
@@ -62,6 +77,15 @@ function persistence(source: URL): Record<string, unknown> {
     EJS_defaultOptions: { 'save-save-interval': '30' },
     EJS_onGameStart: async () => {
       const ejs = emulator();
+      const gm = ejs.gameManager;
+      // 快速存读（菜单、快捷键）原本只写进模拟器内存里的文件，关页就没了；改成同一套服务端存档位。
+      const quickSave = gm.quickSave.bind(gm);
+      gm.quickSave = (n?: string) => {
+        const ok = quickSave(n);
+        if (ok) void saveSlot(String(n || '1'), gm.FS.readFile(`/${n || 1}-quick.state`));
+        return ok;
+      };
+      gm.quickLoad = (n?: string) => { void loadSlot(String(n || '1')); };
       ejs.on('saveSaveFiles', (data: Uint8Array | null) => {
         if (!loaded || !data?.length) return;
         void toBase64(data).then(text => {
@@ -70,29 +94,71 @@ function persistence(source: URL): Record<string, unknown> {
           return store('retro.srm', data);
         }).catch((failure: Error) => { uploaded = ''; ejs.displayMessage(failure.message); });
       });
-      document.addEventListener('visibilitychange', () => { if (document.hidden && ejs.started) ejs.gameManager.saveSaveFiles(); });
+      void autoSave(ejs);
       let saved: Uint8Array | null;
       try { saved = await load('retro.srm'); } catch (failure) { ejs.displayMessage(`${(failure as Error).message}，本局不会自动存档`); return; }
       loaded = true;
       if (!saved) return;
-      const fs = ejs.gameManager.FS, path = ejs.gameManager.getSaveFilePath();
+      const fs = gm.FS, path = gm.getSaveFilePath();
       let dir = '';
       for (const part of path.split('/').slice(1, -1)) { dir += '/' + part; if (!fs.analyzePath(dir).exists) fs.mkdir(dir); }
       fs.writeFile(path, saved);
-      ejs.gameManager.loadSaveFiles();
+      gm.loadSaveFiles();
       uploaded = await toBase64(saved);
     },
-    EJS_onSaveState: ({ state }: { state: Uint8Array }) => {
-      store('retro.state', state).then(() => emulator().displayMessage('即时存档已保存'), (failure: Error) => emulator().displayMessage(failure.message));
-    },
-    EJS_onLoadState: () => {
-      load('retro.state').then(state => {
-        if (!state) { emulator().displayMessage('还没有即时存档'); return; }
-        emulator().gameManager.loadState(state);
-        emulator().displayMessage('已读取即时存档');
-      }, () => emulator().displayMessage('读取即时存档失败'));
-    },
+    EJS_onSaveState: ({ state }: { state: Uint8Array }) => { void saveSlot(slot(), state); },
+    EJS_onLoadState: () => { void loadSlot(slot()); },
   };
+
+  // 自动存档与「继续上次进度」。上次的进度在你选择继续或放弃（或 20 秒没选）之前不会被覆盖。
+  async function autoSave(ejs: Emulator) {
+    let at = '';
+    try {
+      const response = await fetch(`/game-content/${token}/__save`, { cache: 'no-store' });
+      if (response.ok) at = (await response.json() as Record<string, string>)['retro-auto-at'] ?? '';
+    } catch { /* 没有就不提示 */ }
+    let armed = false, ready = false;
+    const arm = () => { if (!armed) { armed = true; window.setTimeout(() => { ready = true; }, 60_000); } };
+    if (at) offerResume(at, async () => {
+      const state = await load('retro.auto.state').catch(() => null);
+      if (state) { ejs.gameManager.loadState(state); ejs.displayMessage('已继续上次进度'); } else ejs.displayMessage('没有找到上次的进度');
+    }, arm); else arm();
+    let busy = false;
+    const save = () => {
+      if (!ready || busy || !ejs.started) return;
+      busy = true;
+      let state: Uint8Array;
+      try { state = ejs.gameManager.getState(); } catch { busy = false; return; }
+      store('retro.auto.state', state).then(() => setMeta('retro-auto-at', new Date().toISOString())).catch(() => undefined).finally(() => { busy = false; });
+    };
+    window.setInterval(() => { if (!document.hidden) save(); }, 5 * 60_000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) return;
+      if (ejs.started) ejs.gameManager.saveSaveFiles();
+      save();
+    });
+  }
+}
+
+// offerResume 在画面上方显示「继续上次进度」按钮，20 秒后或选择后消失；done 在消失时调用。
+function offerResume(at: string, resume: () => Promise<void>, done: () => void) {
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:10000;display:flex;gap:8px;align-items:center;background:#161b22ee;border:1px solid #30363d;border-radius:8px;padding:8px 10px;font:14px system-ui;color:#e6edf3';
+  const when = new Date(at);
+  const label = Number.isNaN(when.getTime()) ? '' : `（${when.getMonth() + 1}月${when.getDate()}日 ${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}）`;
+  const yes = document.createElement('button');
+  yes.textContent = `▶ 继续上次进度${label}`;
+  const no = document.createElement('button');
+  no.textContent = '×';
+  no.title = '从头开始（上次的进度会在 1 分钟后被新的自动存档替换）';
+  for (const b of [yes, no]) b.style.cssText = 'background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:4px 10px;cursor:pointer;font:inherit';
+  box.append(yes, no);
+  document.body.append(box);
+  let closed = false;
+  const close = () => { if (closed) return; closed = true; box.remove(); window.clearTimeout(timer); done(); };
+  const timer = window.setTimeout(close, 20_000);
+  yes.addEventListener('click', () => { void resume().finally(close); });
+  no.addEventListener('click', close);
 }
 
 // 模拟器设置（键位、秘籍、音量与菜单里的选项）：EmulatorJS 存在 localStorage 的 "ejs-…" 键里，沙箱页没有 localStorage。
@@ -139,10 +205,12 @@ type Emulator = {
   started: boolean;
   on(event: string, callback: (data: Uint8Array | null) => void): void;
   displayMessage(message: string): void;
+  getSettingValue(name: string): string | undefined;
   toggleVirtualGamepad?: (visible: boolean) => void;
   gameManager: {
-    FS: { analyzePath(path: string): { exists: boolean }; mkdir(path: string): void; writeFile(path: string, data: Uint8Array): void };
-    getSaveFilePath(): string; loadSaveFiles(): void; saveSaveFiles(): void; loadState(state: Uint8Array): void;
+    FS: { analyzePath(path: string): { exists: boolean }; mkdir(path: string): void; writeFile(path: string, data: Uint8Array): void; readFile(path: string): Uint8Array };
+    getSaveFilePath(): string; loadSaveFiles(): void; saveSaveFiles(): void; loadState(state: Uint8Array): void; getState(): Uint8Array;
+    quickSave(slot?: string): boolean; quickLoad(slot?: string): void;
   };
 };
 

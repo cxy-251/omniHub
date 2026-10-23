@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, post, request } from './api';
 import { button, chip, explain, notify, select, store, stored } from './ui';
 
-type Game = { id: string; name: string; category: string; library_id: string; favorite?: boolean; last_played_at?: string };
+type Game = { id: string; name: string; category: string; library_id: string; favorite?: boolean; last_played_at?: string; play_time_sec?: number };
 type Grant = { token: string; kind: 'html' | 'retro'; url: string; expires_at: string; system?: string; bios?: string; bios_missing?: string; unsupported?: boolean; bios_lacking?: string[] };
 const categories = [['', '全部'], ['fav', '★ 收藏'], ['rpg', 'RPG'], ['slg', 'SLG'], ['retro', '模拟器']] as const;
 const art = (g: Game) => `/api/games/art?${new URLSearchParams({ library_id: g.library_id, id: g.id })}`;
@@ -68,6 +68,12 @@ export default function GameLibrary() {
   </section>;
 }
 
+// 游玩时长（网页与桌面端合计，按账号）。
+function playTime(sec: number) {
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60);
+  return h > 0 ? `${h} 小时 ${m} 分` : `${Math.max(1, m)} 分钟`;
+}
+
 function Card({ game, onFavorite }: { game: Game; onFavorite(g: Game): void }) {
   const system = game.category === 'retro' ? systemOf(game) : '';
   return <article className="group relative overflow-hidden rounded-lg border border-line bg-panel hover:border-primary">
@@ -78,7 +84,7 @@ function Card({ game, onFavorite }: { game: Game; onFavorite(g: Game): void }) {
             {system ? <span className="absolute left-1 top-1 rounded bg-black/70 px-1.5 text-xs text-white">{system}</span> : null}
           </div>
           <p className="truncate px-2 pt-1 text-sm">{system ? game.name.replace(/\s*\([^()]+\)\s*$/, '') : game.name}</p>
-          <p className="px-2 pb-1.5 text-xs text-muted">{game.category === 'retro' ? `模拟器 · ${system || '未知机种'}` : game.category.toUpperCase()}</p>
+          <p className="truncate px-2 pb-1.5 text-xs text-muted">{game.category === 'retro' ? `模拟器 · ${system || '未知机种'}` : game.category.toUpperCase()}{game.play_time_sec ? ` · ${playTime(game.play_time_sec)}` : ''}</p>
         </a>
         <button className={`absolute right-1 top-1 rounded-full bg-black/60 px-1.5 text-sm ${game.favorite ? 'text-[#e3b341]' : 'text-white/70 opacity-60 hover:opacity-100'}`} onClick={() => onFavorite(game)} title={game.favorite ? '取消收藏' : '收藏'}>{game.favorite ? '★' : '☆'}</button>
       </article>;
@@ -104,7 +110,11 @@ export function GamePlayer({ libraryId, id }: { libraryId: string; id: string })
         current = g; setGrant(g);
       }).catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
     window.addEventListener('pagehide', revoke);
-    return () => { controller.abort(); window.removeEventListener('pagehide', revoke); revoke(); };
+    // 游玩时长：标签页在前台时每分钟告诉服务端「还在玩」；关标签时由 revoke 结束计时。
+    const ping = window.setInterval(() => {
+      if (current && document.visibilityState === 'visible') void request(`/game-content/${encodeURIComponent(current.token)}/__ping`, { method: 'POST' }).catch(() => undefined);
+    }, 60_000);
+    return () => { controller.abort(); window.clearInterval(ping); window.removeEventListener('pagehide', revoke); revoke(); };
   }, [libraryId, id, name]);
   // 游戏加载后把键盘焦点交给它（不用先点一下画面）。
   const focus = () => frame.current?.focus();

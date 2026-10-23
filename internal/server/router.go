@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -131,6 +133,17 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		mangaDiscovery: manga.NewDiscoveryCache(),
 		mangaCatalog:   catalog.New(".cbz"),
 		mediaReads:     make(chan struct{}, 2),
+	}
+	// 网页游戏的游玩时长：授权结束时按「打开 → 最后一次确认还在玩」记一次，不到 30 秒的不算。
+	r.webGames.onEnd = func(g webGameGrant) {
+		if g.userID <= 0 || r.userState == nil || g.gameID == "" || g.seen.Sub(g.started) < 30*time.Second {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := r.userState.RecordGamePlay(ctx, g.userID, g.gameID, g.started, g.seen); err != nil {
+			log.Printf("web game play time not saved: %v", err)
+		}
 	}
 	r.registerRoutes()
 	go r.runShortVideoWorker()

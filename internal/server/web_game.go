@@ -110,7 +110,7 @@ func (r *Router) handleWebGameOpen(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "web open cancelled", 503)
 		return
 	}
-	grant, err := r.webGames.issue(webGameGrant{libraryID: selected.ID, relative: relative, category: category, sessionHash: sessionHash, deviceCredential: auth.AuthenticationMethod(req.Context()) == "device", deviceID: auth.DeviceID(req.Context()), userID: user.ID, folder: folder, clientID: input.ClientID})
+	grant, err := r.webGames.issue(webGameGrant{gameID: input.ID, libraryID: selected.ID, relative: relative, category: category, sessionHash: sessionHash, deviceCredential: auth.AuthenticationMethod(req.Context()) == "device", deviceID: auth.DeviceID(req.Context()), userID: user.ID, folder: folder, clientID: input.ClientID})
 	if err != nil {
 		http.Error(w, err.Error(), 503)
 		return
@@ -161,7 +161,13 @@ func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 	// that capability requires no account cookie, so late cleanup after an account
 	// switch cannot leave an old privileged grant active.
 	if req.Method == http.MethodDelete && parts[1] == "" {
-		r.webGames.revoke(parts[0])
+		r.webGames.touch(parts[0], true)
+		w.WriteHeader(204)
+		return
+	}
+	// 游戏页可见时每分钟报一次「还在玩」，只更新内存里的时间，用来算游玩时长。
+	if req.Method == http.MethodPost && parts[1] == "__ping" {
+		r.webGames.touch(parts[0], false)
 		w.WriteHeader(204)
 		return
 	}
@@ -408,12 +414,11 @@ func (r *Router) serveWebGameSaveFile(w http.ResponseWriter, req *http.Request, 
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	saves, err := r.userState.WebGameSaves(req.Context(), grant.userID, grant.relative)
+	value, ok, err := r.userState.WebGameSave(req.Context(), grant.userID, grant.relative, key)
 	if err != nil {
 		http.Error(w, "save storage unavailable", 503)
 		return
 	}
-	value, ok := saves[key]
 	if !ok {
 		http.NotFound(w, req)
 		return
