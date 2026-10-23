@@ -54,26 +54,27 @@ Item {
         spacing: 6
         visible: view.openIndex < 0 && view.mode === "browse"
 
+        // 一行：浏览 | 多联放映 ‖ 推荐 | 我的点赞 | 色系 | 回收站 ‖ 换一批 · 张数
         RowLayout {
             Layout.fillWidth: true
             spacing: 4
             Chip { text: "浏览"; selected: true }
             Chip { text: view.matrixWindowOpen ? "多联放映（窗口）" : "多联放映"; onClicked: if (view.matrixWindowOpen) view.matrixWindowRequested(); else view.mode = "matrix" }
-            Item { Layout.fillWidth: true }
+            Divider { Layout.leftMargin: 2; Layout.rightMargin: 2 }
+            ChannelBar {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 28
+                feed: feed
+                channel: view.channel
+                showHidden: true
+                onPicked: function (ch) { view.channel = ch }
+            }
+            Divider { Layout.leftMargin: 2; Layout.rightMargin: 2 }
             Chip { text: "换一批"; visible: view.channel === "recommend"; onClicked: feed.reshuffle() }
             Label {
-                text: paged.error || feed.error || (paged.total + " 张" + (view.channel === "hidden" ? "（回收站，可恢复）" : ""))
+                text: paged.error || feed.error || (paged.total + " 张" + (view.channel === "hidden" ? "（回收站）" : ""))
                 color: paged.error || feed.error ? "#f85149" : "#8b949e"; font.pixelSize: 12
             }
-        }
-        // 推荐 | 我的点赞 | 色系 | 回收站
-        ChannelBar {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 28
-            feed: feed
-            channel: view.channel
-            showHidden: true
-            onPicked: function (ch) { view.channel = ch }
         }
 
         // 瀑布流：每张照片放进当前最矮的一列，纵坐标随序号单调不减，可二分查找可视范围。

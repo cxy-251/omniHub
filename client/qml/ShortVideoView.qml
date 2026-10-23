@@ -83,53 +83,45 @@ Item {
         spacing: 6
         visible: view.openIndex < 0 && view.mode === "browse"
 
-        // 第一行：模式 | 平台 | 作品数
+        // 一行：浏览 | 多联放映 ‖ 平台 ▾ ‖ 推荐 | 我的点赞 | 📌 固定的博主 | 其余博主（只列所选平台的）‖ 换一批 · 固定 · 作品数
         RowLayout {
             Layout.fillWidth: true
             spacing: 4
             Chip { text: "浏览"; selected: true }
             Chip { text: view.matrixWindowOpen ? "多联放映（窗口）" : "多联放映"; onClicked: if (view.matrixWindowOpen) view.matrixWindowRequested(); else view.mode = "matrix" }
-            Item { Layout.fillWidth: true }
+            Divider { Layout.leftMargin: 2; Layout.rightMargin: 2 }
+            ComboBox {
+                visible: view.platforms.length > 1
+                implicitHeight: 28; Layout.preferredWidth: 110; font.pixelSize: 12
+                model: ["全部平台"].concat(view.platforms)
+                currentIndex: Math.max(0, view.platforms.indexOf(view.platform) + 1)
+                onActivated: function (i) { view.pickPlatform(i === 0 ? "" : view.platforms[i - 1]) }
+                ToolTip.visible: hovered; ToolTip.text: "平台"
+            }
+            ChannelBar {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 28
+                feed: feed
+                channel: view.channel
+                platform: view.platform
+                onPicked: function (ch) { view.channel = ch }
+            }
+            Divider { Layout.leftMargin: 2; Layout.rightMargin: 2 }
             Chip { text: "换一批"; visible: view.channel === "recommend"; onClicked: feed.reshuffle() }
             Chip {
                 readonly property string group: view.channel.indexOf("group:") === 0 ? view.channel.slice(6) : ""
                 readonly property bool isPinned: feed.pins.indexOf(group) >= 0
                 visible: group !== ""
-                text: isPinned ? "取消固定博主" : "📌 固定这个博主"
+                text: isPinned ? "取消固定" : "📌 固定"
                 selected: isPinned
                 onClicked: feed.setPinned(group, !isPinned)
+                ToolTip.visible: hovered; ToolTip.text: isPinned ? "取消固定这个博主" : "把这个博主固定在频道条前面"
             }
             Label {
-                text: view.error || paged.error || (paged.total > 0 ? paged.total + " 个作品" : (paged.loading ? "" : "没有作品，需先由管理员扫描建立索引"))
+                text: view.error || paged.error || (paged.total > 0 ? paged.total + " 个" : (paged.loading ? "" : "没有作品"))
                 color: view.error || paged.error ? "#f85149" : "#8b949e"
                 font.pixelSize: 12
             }
-        }
-        // 第二行：平台（只有一个平台时不显示）
-        ListView {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 28
-            visible: view.platforms.length > 1
-            WheelScroll { horizontal: true }
-            orientation: ListView.Horizontal
-            spacing: 4
-            clip: true
-            model: [""].concat(view.platforms)
-            delegate: Chip {
-                required property string modelData
-                text: modelData || "全部平台"
-                selected: view.platform === modelData
-                onClicked: view.pickPlatform(modelData)
-            }
-        }
-        // 第三行：推荐 | 我的点赞 | 📌 固定的博主 | 其余博主（只列所选平台的）
-        ChannelBar {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 28
-            feed: feed
-            channel: view.channel
-            platform: view.platform
-            onPicked: function (ch) { view.channel = ch }
         }
 
         GridView {

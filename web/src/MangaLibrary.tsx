@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, post, request, type Status } from './api';
 import VirtualGrid from './VirtualGrid';
-import { chip, explain, notify, select, store, stored } from './ui';
+import { chip, divider, explain, notify, select, store, stored } from './ui';
 import { MangaWindow } from './mangaWindow';
 
 type Book = { metadata_error?: string; title: string; logical_path: string; library_name: string; read_only: boolean; total_pages: number };
@@ -333,12 +333,14 @@ export default function MangaLibrary({ active }: { active: boolean }) {
       <button className={chip(filter === '')} onClick={() => setFilter('')}>全部 {all.length}</button>
       <button className={chip(filter === '__liked')} onClick={() => setFilter('__liked')}>♥ 我的点赞 {likes.size}</button>
       {incomplete ? <button className={chip(filter === '__incomplete')} onClick={() => setFilter('__incomplete')}>连载/未完 {incomplete}</button> : null}
-      <input className={`${select} ml-auto w-52`} placeholder="搜索书名、作者、标签" value={query} onChange={e => setQuery(e.target.value)} />
+      <span className={divider} />
+      {/* 标签条与上面同一行（窄屏时单独一行） */}
+      <div className="order-last min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-0"><div className="flex gap-1.5 overflow-x-auto pb-0.5">
+        {tagCounts.map(([t, n]) => <button key={t} className={chip(filter === t)} onClick={() => setFilter(filter === t ? '' : t)}>🏷 {t} <span className="text-xs">{n}</span></button>)}
+        {filter && !['__liked', '__incomplete'].includes(filter) && !tagCounts.some(([t]) => t === filter) ? <button className={chip(true)} onClick={() => setFilter('')}>🏷 {filter} ✕</button> : null}
+      </div></div>
+      <input className={`${select} w-44`} placeholder="搜索书名、作者、标签" value={query} onChange={e => setQuery(e.target.value)} />
       <button className={button} onClick={() => setRevision(value => value + 1)}>刷新</button>
-    </div>
-    <div className="flex gap-1.5 overflow-x-auto pb-1">
-      {tagCounts.map(([t, n]) => <button key={t} className={chip(filter === t)} onClick={() => setFilter(filter === t ? '' : t)}>🏷 {t} <span className="text-xs">{n}</span></button>)}
-      {filter && !['__liked', '__incomplete'].includes(filter) && !tagCounts.some(([t]) => t === filter) ? <button className={chip(true)} onClick={() => setFilter('')}>🏷 {filter} ✕</button> : null}
     </div>
     {error ? <p role="alert" className="text-danger">{error}</p> : null}
     {!books && !error ? <p role="status">正在读取书架…</p> : null}

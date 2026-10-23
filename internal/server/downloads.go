@@ -496,6 +496,9 @@ func (r *Router) handleDownloads(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	switch action {
+	case "analyze":
+		r.analyzeDownload(w, body)
+		return
 	case "run":
 		var in struct {
 			Kind   string   `json:"kind"`
@@ -653,7 +656,8 @@ func (r *Router) startDownload(kindID string, params dlParams) (dlJob, error) {
 	r.downloads.mu.Lock()
 	settings := r.downloads.settings
 	r.downloads.mu.Unlock()
-	env := []string{"UV_PROJECT_ENVIRONMENT=" + filepath.Join(dir, "venv"), "PYTHONUNBUFFERED=1", "OMNIHUB_COOKIES_DIR=" + r.cookieDir()}
+	platforms, _ := json.Marshal(cookiePlatforms)
+	env := []string{"UV_PROJECT_ENVIRONMENT=" + filepath.Join(dir, "venv"), "PYTHONUNBUFFERED=1", "OMNIHUB_COOKIES_DIR=" + r.cookieDir(), "OMNIHUB_PLATFORMS=" + string(platforms)}
 	if settings.YtdlpProxy != "" {
 		env = append(env, "OMNIHUB_YTDLP_PROXY="+settings.YtdlpProxy)
 	}
@@ -686,4 +690,73 @@ func (r *Router) startDownload(kindID string, params dlParams) (dlJob, error) {
 		}()
 	}
 	return r.jobCard(t), nil
+}
+
+// analyzeDownload 预览通用下载：每个链接会用什么工具、带不带登录、下到哪里，以及暂存批次放在哪个库。
+// 只看链接的域名，不联网；界面边输入边调用。
+func (r *Router) analyzeDownload(w http.ResponseWriter, body []byte) {
+	var in struct {
+		URLs    string `json:"urls"`
+		Mode    string `json:"mode"`
+		Library string `json:"library"`
+	}
+	if json.Unmarshal(body, &in) != nil || len(in.URLs) > 64<<10 {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	type item struct {
+		URL      string `json:"url"`
+		Valid    bool   `json:"valid"`
+		Platform string `json:"platform"`
+		Tool     string `json:"tool"`
+		Cookie   string `json:"cookie"` // logged_in | no_login | none | unknown_site
+		Target   string `json:"target"`
+	}
+	dir := r.cookieDir()
+	items := []item{}
+	for _, line := range strings.Split(in.URLs, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || len(items) >= 200 {
+			continue
+		}
+		it := item{URL: line}
+		u, err := url.Parse(line)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+			it.Target = "不是网址，会被拒绝"
+			items = append(items, it)
+			continue
+		}
+		it.Valid = true
+		p := platformOf(u.Hostname())
+		dirName := strings.TrimPrefix(u.Hostname(), "www.")
+		it.Platform, it.Tool, it.Cookie = dirName, "yt-dlp", "unknown_site"
+		if p != nil {
+			it.Platform, it.Tool, dirName, it.Cookie = p.Label, p.Tool, p.Dir, "none"
+			if data, err := os.ReadFile(filepath.Join(dir, p.ID+".json")); err == nil {
+				var info cookieInfo
+				if json.Unmarshal(data, &info) == nil {
+					it.Cookie = "no_login"
+					if info.LoggedIn && (info.Expires == 0 || info.Expires > float64(time.Now().Unix())) {
+						it.Cookie = "logged_in"
+					}
+				}
+			}
+		}
+		switch {
+		case it.Tool == "gallery-dl":
+			it.Target = "图片 → 暂存区 → 移入时并进相册"
+		case in.Mode == "audio":
+			it.Target = "音频 → 暂存区 → 音声/音乐/<播放列表或专辑>/"
+		default:
+			it.Target = "视频 → 暂存区 → 短视频/" + dirName + "/<作者>/"
+		}
+		items = append(items, it)
+	}
+	out := map[string]any{"items": items}
+	if lib, err := r.writableLibrary(in.Library); err == nil {
+		home, _ := os.UserHomeDir()
+		out["library"] = map[string]any{"id": lib.ID, "name": lib.Name, "staging": filepath.Join(lib.RootPath, staging.Dir),
+			"near_downloads": staging.SameDisk(lib.RootPath, filepath.Join(home, "Downloads"))}
+	}
+	writeJSON(w, http.StatusOK, out)
 }

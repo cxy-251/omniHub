@@ -4,7 +4,7 @@ import { usePaged } from './paged';
 import MasonryGrid from './MasonryGrid';
 import ChannelBar from './ChannelBar';
 import { feedPath, feedQuery, newSeed, restore, sendEvent, trash, useGroups, useLiked } from './feed';
-import { button, chip, iconButton, store, stored } from './ui';
+import { button, chip, divider, iconButton, store, stored } from './ui';
 
 const Matrix = lazy(() => import('./Matrix'));
 
@@ -38,14 +38,18 @@ export default function GalleryPage({ active, isAdmin }: { active: boolean; isAd
   if (!active) return null;
   if (mode === 'matrix') return <Suspense fallback={<p role="status">正在加载…</p>}><Matrix domain="gallery" onExit={() => setMode('browse')} /></Suspense>;
   return <section className="space-y-1.5">
+    {/* 一行：浏览 | 多联放映 ‖ 频道条（窄屏时单独一行）‖ 换一批 · 张数 */}
     <div className="flex flex-wrap items-center gap-1.5">
       <button className={chip(true)}>浏览</button>
       <button className={chip(false)} onClick={() => setMode('matrix')}>多联放映</button>
-      <span className="ml-auto" />
+      <span className={divider} />
+      <div className="order-last min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-0">
+        <ChannelBar groups={groups} pins={pins} channel={channel} onPick={setChannel} showHidden={isAdmin} />
+      </div>
+      <span className={`${divider} hidden sm:block`} />
       {channel === 'recommend' ? <button className={chip(false)} onClick={() => setSeed(newSeed())}>换一批</button> : null}
-      <span className={`text-xs ${paged.error ? 'text-danger' : 'text-muted'}`}>{paged.error || `${paged.total} 张${channel === 'hidden' ? '（回收站，可恢复）' : ''}`}</span>
+      <span className={`text-xs ${paged.error ? 'text-danger' : 'text-muted'}`}>{paged.error || `${paged.total} 张${channel === 'hidden' ? '（回收站）' : ''}`}</span>
     </div>
-    <ChannelBar groups={groups} pins={pins} channel={channel} onPick={setChannel} showHidden={isAdmin} />
     <MasonryGrid ratios={ratios} minColumnWidth={180} render={i => {
       const photo = paged.item(i);
       return <button className="relative block h-full w-full overflow-hidden rounded" style={{ background: photo?.color_hex || 'var(--surface)' }} onClick={() => photo && setOpen(i)}>

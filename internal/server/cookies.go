@@ -24,21 +24,41 @@ import (
 //   POST /api/cookies/clear {platform}    删除已存的
 //   POST /api/cookies/profile {path}      指定 Chrome 用户数据目录（空 = 自动找）
 
+// cookiePlatform 是一个下载平台：读 Cookie 的域名、链接认哪些域名、下载用什么工具、存到短视频的哪个平台目录。
+// 这是唯一的平台表：通用下载脚本经环境变量 OMNIHUB_PLATFORMS 拿到同一份。
 type cookiePlatform struct {
 	ID      string   `json:"id"`
 	Label   string   `json:"label"`
-	Domains []string `json:"domains"`
+	Domains []string `json:"domains"` // 读 Cookie 的域名
+	Hosts   []string `json:"hosts"`   // 链接的域名（含短链）
+	Dir     string   `json:"dir"`     // shortvideo/<Dir>/、gallery/<Dir>/
+	Tool    string   `json:"tool"`    // yt-dlp | gallery-dl
 	login   []string // 表示已登录的 Cookie 名（推测，各平台网页版常见的会话 Cookie）
 }
 
 var cookiePlatforms = []cookiePlatform{
-	{ID: "youtube", Label: "YouTube", Domains: []string{"youtube.com", "google.com"}, login: []string{"SAPISID", "LOGIN_INFO", "__Secure-3PSID"}},
-	{ID: "bilibili", Label: "B 站", Domains: []string{"bilibili.com"}, login: []string{"SESSDATA"}},
-	{ID: "x", Label: "X（推特）", Domains: []string{"x.com", "twitter.com"}, login: []string{"auth_token"}},
-	{ID: "douyin", Label: "抖音", Domains: []string{"douyin.com"}, login: []string{"sessionid", "sessionid_ss"}},
-	{ID: "kuaishou", Label: "快手", Domains: []string{"kuaishou.com"}, login: []string{"kuaishou.server.web_st", "kuaishou.server.webday7_st", "userId"}},
-	{ID: "tiktok", Label: "TikTok", Domains: []string{"tiktok.com"}, login: []string{"sessionid"}},
-	{ID: "xiaohongshu", Label: "小红书", Domains: []string{"xiaohongshu.com"}, login: []string{"web_session"}},
+	{ID: "youtube", Label: "YouTube", Domains: []string{"youtube.com", "google.com"}, Hosts: []string{"youtube.com", "youtu.be"}, Dir: "YouTube", Tool: "yt-dlp", login: []string{"SAPISID", "LOGIN_INFO", "__Secure-3PSID"}},
+	{ID: "bilibili", Label: "B 站", Domains: []string{"bilibili.com"}, Hosts: []string{"bilibili.com", "b23.tv"}, Dir: "B站", Tool: "yt-dlp", login: []string{"SESSDATA"}},
+	{ID: "x", Label: "X（推特）", Domains: []string{"x.com", "twitter.com"}, Hosts: []string{"x.com", "twitter.com"}, Dir: "X", Tool: "gallery-dl", login: []string{"auth_token"}},
+	{ID: "douyin", Label: "抖音", Domains: []string{"douyin.com"}, Hosts: []string{"douyin.com"}, Dir: "抖音", Tool: "yt-dlp", login: []string{"sessionid", "sessionid_ss"}},
+	{ID: "kuaishou", Label: "快手", Domains: []string{"kuaishou.com"}, Hosts: []string{"kuaishou.com"}, Dir: "快手", Tool: "yt-dlp", login: []string{"kuaishou.server.web_st", "kuaishou.server.webday7_st", "userId"}},
+	{ID: "tiktok", Label: "TikTok", Domains: []string{"tiktok.com"}, Hosts: []string{"tiktok.com"}, Dir: "TikTok", Tool: "yt-dlp", login: []string{"sessionid"}},
+	{ID: "xiaohongshu", Label: "小红书", Domains: []string{"xiaohongshu.com"}, Hosts: []string{"xiaohongshu.com", "xhslink.com"}, Dir: "小红书", Tool: "yt-dlp", login: []string{"web_session"}},
+	{ID: "pixiv", Label: "Pixiv", Domains: []string{"pixiv.net"}, Hosts: []string{"pixiv.net"}, Dir: "Pixiv", Tool: "gallery-dl", login: []string{"PHPSESSID"}},
+	{ID: "instagram", Label: "Instagram", Domains: []string{"instagram.com"}, Hosts: []string{"instagram.com"}, Dir: "Instagram", Tool: "gallery-dl", login: []string{"sessionid"}},
+}
+
+// platformOf 按链接的域名找平台；不认识的返回 nil。
+func platformOf(host string) *cookiePlatform {
+	host = strings.ToLower(host)
+	for i := range cookiePlatforms {
+		for _, h := range cookiePlatforms[i].Hosts {
+			if host == h || strings.HasSuffix(host, "."+h) {
+				return &cookiePlatforms[i]
+			}
+		}
+	}
+	return nil
 }
 
 // cookieInfo 是某个平台已存 Cookie 的概要（存在 cookies/<平台>.json）。

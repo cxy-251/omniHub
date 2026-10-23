@@ -115,7 +115,25 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 contentWidth: availableWidth
+                Column {
+                width: parent.width
+                GeneralDownloadForm {
+                    width: parent.width
+                    visible: !!view.currentKind && view.currentKind.id === "general"
+                    kind: view.currentKind || {fields: [], description: ""}
+                    presets: view.presets.filter(function (p) { return p.kind === "general" })
+                    onRun: function (params) { view.run("general", params) }
+                    onRunPreset: function (preset) { view.run(preset.kind, preset.params) }
+                    onOpenTab: function (tab) { prefs.tab = tab }
+                    onSavePreset: function (label, params) {
+                        api.send("POST", "/api/downloads/presets", {kind: "general", label: label, params: params}, function () { view.say("预设已保存", false); view.refresh() })
+                    }
+                    onDeletePreset: function (preset) {
+                        api.send("POST", "/api/downloads/presets/delete", {id: preset.id}, function () { view.refresh() })
+                    }
+                }
                 DownloadForm {
+                    visible: !!view.currentKind && view.currentKind.id !== "general"
                     width: parent.width
                     kind: view.currentKind || {fields: [], description: ""}
                     presets: view.presets.filter(function (p) { return view.currentKind && p.kind === view.currentKind.id })
@@ -127,6 +145,7 @@ Item {
                     onDeletePreset: function (preset) {
                         api.send("POST", "/api/downloads/presets/delete", {id: preset.id}, function () { view.refresh() })
                     }
+                }
                 }
             }
 

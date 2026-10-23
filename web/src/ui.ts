@@ -3,6 +3,8 @@ export const chip = (on: boolean) => `shrink-0 rounded-full border px-2.5 py-0.5
 export const button = 'rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary disabled:opacity-50';
 export const primaryButton = 'rounded-md bg-[#1f6feb] px-4 py-1.5 text-sm text-white hover:bg-[#2f81f7] disabled:bg-panel disabled:text-muted';
 export const select = 'rounded border border-line bg-background px-2 py-1 text-sm';
+// 工具条里分隔几组按钮的竖线
+export const divider = 'h-5 w-px shrink-0 bg-line';
 export const iconButton = 'flex h-9 w-9 items-center justify-center rounded-full text-lg hover:bg-white/15 disabled:opacity-40';
 
 // localStorage 只做本浏览器的便利设置（上次的频道、模式等）；读写失败（隐私模式等）时用默认值。

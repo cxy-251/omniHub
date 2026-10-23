@@ -111,7 +111,8 @@ ColumnLayout {
                 font.pixelSize: 13
                 textRole: "label"; valueRole: "value"
                 model: fieldBox.modelData.options || []
-                currentIndex: Math.max(0, indexOfValue(form.values[fieldBox.modelData.name]))
+                // 直接在选项里找（indexOfValue 在选项到来前求值后不会更新，默认值会显示成第一项）
+                currentIndex: Math.max(0, (fieldBox.modelData.options || []).findIndex(function (o) { return o.value === form.values[fieldBox.modelData.name] }))
                 onActivated: form.set(fieldBox.modelData.name, currentValue)
             }
             Label { visible: !!modelData.help; text: modelData.help || ""; color: "#6e7681"; font.pixelSize: 11 }

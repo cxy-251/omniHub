@@ -4,7 +4,7 @@ import VirtualGrid from './VirtualGrid';
 import ChannelBar from './ChannelBar';
 import { canPlayCodec, webCodecs } from './codecs';
 import { feedPath, feedQuery, newSeed, sendEvent, trash, useGroups, useLiked } from './feed';
-import { button, chip, iconButton, store, stored } from './ui';
+import { button, chip, divider, iconButton, select, store, stored } from './ui';
 
 const Matrix = lazy(() => import('./Matrix'));
 
@@ -42,18 +42,22 @@ export default function ShortVideoPage({ active }: { active: boolean }) {
   if (!active) return null;
   if (mode === 'matrix') return <Suspense fallback={<p role="status">正在加载…</p>}><Matrix domain="shortvideo" onExit={() => setMode('browse')} /></Suspense>;
   return <section className="space-y-1.5">
+    {/* 一行：浏览 | 多联放映 ‖ 平台 ▾ ‖ 频道条（窄屏时单独一行）‖ 换一批 · 固定 · 作品数 */}
     <div className="flex flex-wrap items-center gap-1.5">
       <button className={chip(true)}>浏览</button>
       <button className={chip(false)} onClick={() => setMode('matrix')}>多联放映</button>
-      <span className="ml-auto" />
+      <span className={divider} />
+      {platforms.length > 1 ? <select aria-label="平台" className={select} value={platform} onChange={e => pickPlatform(e.target.value)}>
+        {['', ...platforms].map(p => <option key={p || 'all'} value={p}>{p || '全部平台'}</option>)}
+      </select> : null}
+      <div className="order-last min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-0">
+        <ChannelBar groups={shownGroups} pins={pins.filter(id => shownGroups.some(g => g.id === id))} channel={channel} onPick={setChannel} />
+      </div>
+      <span className={`${divider} hidden sm:block`} />
       {channel === 'recommend' ? <button className={chip(false)} onClick={() => setSeed(newSeed())}>换一批</button> : null}
-      {group ? <button className={chip(pins.includes(group))} onClick={() => setPinned(group, !pins.includes(group))}>{pins.includes(group) ? '取消固定博主' : '📌 固定这个博主'}</button> : null}
-      <span className={`text-xs ${paged.error ? 'text-danger' : 'text-muted'}`}>{paged.error || `${paged.total} 个作品`}</span>
+      {group ? <button className={chip(pins.includes(group))} onClick={() => setPinned(group, !pins.includes(group))} title={pins.includes(group) ? '取消固定这个博主' : '把这个博主固定在频道条前面'}>{pins.includes(group) ? '取消固定' : '📌 固定'}</button> : null}
+      <span className={`text-xs ${paged.error ? 'text-danger' : 'text-muted'}`}>{paged.error || `${paged.total} 个`}</span>
     </div>
-    {platforms.length > 1 ? <div className="flex gap-1.5 overflow-x-auto pb-0.5" role="tablist" aria-label="平台">
-      {['', ...platforms].map(p => <button key={p || 'all'} role="tab" aria-selected={platform === p} className={chip(platform === p)} onClick={() => pickPlatform(p)}>{p || '全部平台'}</button>)}
-    </div> : null}
-    <ChannelBar groups={shownGroups} pins={pins.filter(id => shownGroups.some(g => g.id === id))} channel={channel} onPick={setChannel} />
     <VirtualGrid total={paged.total} minColumnWidth={170} aspect={16 / 9} extraHeight={44} render={index => {
       const post = paged.item(index);
       if (!post) return <div className="h-full rounded-lg border border-line bg-panel" />;

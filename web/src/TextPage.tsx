@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, request } from './api';
 import { usePaged } from './paged';
 import VirtualGrid from './VirtualGrid';
-import { button, chip, select, store, stored } from './ui';
+import { button, chip, divider, select, store, stored } from './ui';
 
 // 文本页：小说（书架 + EPUB/TXT 阅读器，进度与桌面端共用）与文档（media_library/docs 目录浏览，md/rst 整篇渲染）。
 type Novel = { id: string; title: string; category: string; format: string; library_id: string; chapter_index?: number };
@@ -12,12 +12,13 @@ export default function TextPage({ active }: { active: boolean }) {
   const [part, setPart] = useState<'novels' | 'docs'>(() => linkedDoc() ? 'docs' : linkedBook() ? 'novels' : stored('omnihub.text.part', 'novels'));
   useEffect(() => store('omnihub.text.part', part), [part]);
   if (!active) return null;
+  // 小说/文档的切换放进各自工具条的最前面，不单独占一行。
+  const switcher = <>
+    <button className={chip(part === 'novels')} onClick={() => { setPart('novels'); window.history.replaceState(null, '', '#text'); }}>小说</button>
+    <button className={chip(part === 'docs')} onClick={() => setPart('docs')}>文档</button>
+  </>;
   return <section className="space-y-2">
-    <div className="flex gap-1.5">
-      <button className={chip(part === 'novels')} onClick={() => { setPart('novels'); window.history.replaceState(null, '', '#text'); }}>小说</button>
-      <button className={chip(part === 'docs')} onClick={() => setPart('docs')}>文档</button>
-    </div>
-    {part === 'novels' ? <Novels /> : <Docs />}
+    {part === 'novels' ? <Novels switcher={switcher} /> : <Docs switcher={switcher} />}
   </section>;
 }
 
@@ -30,7 +31,7 @@ function linkedBook(): Novel | undefined {
   const name = id.slice(id.lastIndexOf('/') + 1), dot = name.lastIndexOf('.');
   return { id, title: dot > 0 ? name.slice(0, dot) : name, category: '', format: dot > 0 ? name.slice(dot + 1).toLowerCase() : '', library_id: id.slice(0, id.indexOf(':')) };
 }
-function Novels() {
+function Novels({ switcher }: { switcher: React.ReactNode }) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [recent, setRecent] = useState<Novel[]>([]);
   const [category, setCategory] = useState(() => stored('omnihub.text.category', '__recent'));
@@ -68,16 +69,19 @@ function Novels() {
   const item = (i: number) => showRecent ? shownRecent[i] : paged.item(i);
   const groupName = (g: string) => g === 'nsfw' ? 'NSFW' : g === 'standard' ? '标准' : g || '未分组';
   return <div className="space-y-2">
+    {/* 一行：小说 | 文档 ‖ 标准 | NSFW ‖ 最近阅读 | 分类…（窄屏时单独一行）‖ 搜索 */}
     <div className="flex flex-wrap items-center gap-1.5">
-      {groups.length > 1 ? groups.map(g => <button key={g} className={`rounded-md px-3 py-1 text-sm ${g === currentGroup ? 'bg-panel text-primary' : 'text-muted hover:text-foreground'}`}
-        onClick={() => { setGroup(g); setCategory('__recent'); }}>{groupName(g)}</button>) : null}
-      <input className={`${select} ml-auto w-48`} placeholder={`搜索${groupName(currentGroup)}书名`} value={query} onChange={e => setQuery(e.target.value)} />
+      {switcher}
+      {groups.length > 1 ? <><span className={divider} />{groups.map(g => <button key={g} className={`rounded-md px-2.5 py-0.5 text-sm ${g === currentGroup ? 'bg-panel text-primary' : 'text-muted hover:text-foreground'}`}
+        onClick={() => { setGroup(g); setCategory('__recent'); }}>{groupName(g)}</button>)}</> : null}
+      <span className={divider} />
+      {!search ? <div className="order-last min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-0"><div className="flex gap-1.5 overflow-x-auto pb-0.5">
+        <button className={chip(showRecent)} onClick={() => setCategory('__recent')}>最近阅读</button>
+        {inGroup.map(c => <button key={c.category} className={chip(c.category === category)} onClick={() => setCategory(c.category)}>{c.category.split('/').pop() || '未分类'} <span className="text-xs">{c.count}</span></button>)}
+      </div></div> : <span className="flex-1" />}
+      <input className={`${select} w-44`} placeholder={`搜索${groupName(currentGroup)}书名`} value={query} onChange={e => setQuery(e.target.value)} />
       {search ? <span className="text-xs text-muted">{paged.total} 本</span> : null}
     </div>
-    {!search ? <div className="flex gap-1.5 overflow-x-auto pb-1">
-      <button className={chip(showRecent)} onClick={() => setCategory('__recent')}>最近阅读</button>
-      {inGroup.map(c => <button key={c.category} className={chip(c.category === category)} onClick={() => setCategory(c.category)}>{c.category.split('/').pop() || '未分类'} <span className="text-xs">{c.count}</span></button>)}
-    </div> : null}
     {error || paged.error ? <p className="text-sm text-danger">{error || paged.error}</p> : null}
     {showRecent && !shownRecent.length ? <p className="text-sm text-muted">{categories.length ? '还没有阅读记录（登录后才会记录进度）。从上面选一个分类。' : '没有小说。'}</p> : null}
     <VirtualGrid total={total} minColumnWidth={130} aspect={3 / 4} extraHeight={40} render={i => {
@@ -279,7 +283,7 @@ function resolveDocLink(from: string, href: string) {
   return target.startsWith('media_library/docs/') ? `${lib}:${target}` : '';
 }
 
-function Docs() {
+function Docs({ switcher }: { switcher: React.ReactNode }) {
   const [doc, setDoc] = useState(() => linkedDoc() || stored('omnihub.docs.open', ''));
   const [dir, setDir] = useState(() => linkedDoc() ? parentDir(linkedDoc()) : stored('omnihub.docs.dir', ''));
   const [entries, setEntries] = useState<DocEntry[]>([]);
@@ -318,6 +322,7 @@ function Docs() {
   return <div className={`grid gap-3 ${doc ? 'md:grid-cols-[16rem_1fr]' : ''}`}>
     <aside className={`min-w-0 space-y-1 ${doc ? 'hidden md:block md:sticky md:top-14 md:max-h-[calc(100vh-5rem)] md:overflow-y-auto md:overflow-x-hidden' : ''}`}>
       <div className="flex flex-wrap items-center gap-1 break-all text-sm">
+        {switcher}<span className={`${divider} mx-1`} />
         <button className="text-primary hover:underline" onClick={() => setDir('')}>文档</button>
         {crumbs.map((c, i) => <span key={i} className="flex items-center gap-1"><span className="text-muted">/</span>
           <button className="text-primary hover:underline" onClick={() => setDir(dir.slice(0, dir.indexOf(':') + 1) + 'media_library/docs/' + crumbs.slice(0, i + 1).join('/'))}>{c}</button></span>)}

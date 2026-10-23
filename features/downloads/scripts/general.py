@@ -18,27 +18,18 @@ import subprocess
 import sys
 from urllib.parse import urlparse
 
-# 域名后缀 → (平台 ID，目录名)。平台 ID 与「账号与 Cookie」页一致。
-PLATFORMS = [
-    (("youtube.com", "youtu.be"), "youtube", "YouTube"),
-    (("bilibili.com", "b23.tv"), "bilibili", "B站"),
-    (("x.com", "twitter.com"), "x", "X"),
-    (("douyin.com",), "douyin", "抖音"),
-    (("kuaishou.com",), "kuaishou", "快手"),
-    (("tiktok.com",), "tiktok", "TikTok"),
-    (("xiaohongshu.com", "xhslink.com"), "xiaohongshu", "小红书"),
-    (("pixiv.net",), "pixiv", "Pixiv"),
-    (("instagram.com",), "instagram", "Instagram"),
-]
-GALLERY_DL = {"x", "pixiv", "instagram"}   # 这些站用 gallery-dl（图片为主）
+# 平台表由服务端经环境变量 OMNIHUB_PLATFORMS 给出（与「账号与 Cookie」页同一份）：
+# [{"id","hosts":[域名…],"dir":短视频/相册里的平台目录名,"tool":"yt-dlp"|"gallery-dl"}]
+PLATFORMS = json.loads(os.environ.get("OMNIHUB_PLATFORMS", "[]"))
 
 
 def platform_of(url):
+    """返回 (平台 ID, 目录名, 工具)；不认识的站点用域名当目录名、用 yt-dlp。"""
     host = (urlparse(url).hostname or "").lower()
-    for suffixes, pid, label in PLATFORMS:
-        if any(host == s or host.endswith("." + s) for s in suffixes):
-            return pid, label
-    return "", host.removeprefix("www.") or "其他"
+    for p in PLATFORMS:
+        if any(host == h or host.endswith("." + h) for h in p["hosts"]):
+            return p["id"], p["dir"], p["tool"]
+    return "", host.removeprefix("www.") or "其他", "yt-dlp"
 
 
 def progress(done, total, text):
@@ -116,8 +107,8 @@ def main():
 
     total, failed = 0, []
     for i, url in enumerate(a.urls):
-        pid, label = platform_of(url)
-        tool = gallerydl if pid in GALLERY_DL else ytdlp
+        pid, label, tool_name = platform_of(url)
+        tool = gallerydl if tool_name == "gallery-dl" else ytdlp
         has_cookie = bool(cookie_args(pid, "-"))
         progress(i, len(a.urls), f"{label} · {'gallery-dl' if tool is gallerydl else 'yt-dlp'}{'（带登录 Cookie）' if has_cookie else ''} · {url}")
         try:
