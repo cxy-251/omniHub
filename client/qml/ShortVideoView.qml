@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import QtCore
 import omniHub.Media 1.0
 
-// 短视频浏览：平台 → 博主 → 作品网格；视频用内嵌 mpv 直接播放磁盘文件，图集经本机服务读取（原目录或 albums.db）。
+// 短视频浏览：先选平台（全部 | 抖音 | … | YouTube），再选频道（推荐、点赞、博主）→ 作品网格；视频用内嵌 mpv 直接播放磁盘文件，图集经本机服务读取（原目录或 albums.db）。
 // 页面隐藏时由 Main.qml 的 Loader 销毁，解码器与图片缓存随之释放。
 Item {
     id: view
@@ -16,15 +16,29 @@ Item {
     property bool matrixWindowOpen: false
     property var audioEngine: null        // 全局音声引擎，交给多联放映做伴听
     signal matrixWindowRequested()
-    Settings { id: viewPrefs; category: "shortvideo"; property string mode: "browse"; property string channel: "recommend" }
+    Settings { id: viewPrefs; category: "shortvideo"; property string mode: "browse"; property string channel: "recommend"; property string platform: "" }
     property alias channel: viewPrefs.channel
+    property alias platform: viewPrefs.platform
 
     // 推荐、点赞、回收站、行为上报与频道（博主分组）——与相册共用 FeedApi。
     FeedApi { id: feed; domain: "shortvideo"; onErrorChanged: view.error = error }
-    readonly property var platformFilters: {
+    readonly property var platforms: {
         var seen = {}, out = []
-        feed.groups.forEach(function (g) { if (!seen[g.platform]) { seen[g.platform] = true; out.push({channel: "tag:platform:" + g.platform, label: g.platform}) } })
+        feed.groups.forEach(function (g) { if (g.platform && !seen[g.platform]) { seen[g.platform] = true; out.push(g.platform) } })
         return out
+    }
+    function pickPlatform(p) {
+        platform = p
+        // 当前博主不属于所选平台时回到推荐。
+        if (channel.indexOf("group:") === 0 && !feed.groups.some(function (g) { return "group:" + g.id === channel && (!p || g.platform === p) })) channel = "recommend"
+    }
+    // 旧版把平台当频道（tag:platform:抖音）存着：改成选中该平台；平台没有了（库离线等）回到「全部」。
+    Connections {
+        target: feed
+        function onGroupsChanged() {
+            if (view.channel.indexOf("tag:platform:") === 0) { view.platform = view.channel.slice(13); view.channel = "recommend" }
+            if (view.platform && feed.groups.length && view.platforms.indexOf(view.platform) < 0) view.platform = ""
+        }
     }
     // 点赞状态在本地先改，列表数据（按页缓存）不必重取。
     property var likedOverride: ({})
@@ -50,7 +64,7 @@ Item {
         running: typeof devScroll !== "undefined" && devScroll < 0 && paged.total > 0
         onTriggered: view.openIndex = (view.openIndex + 1) % paged.total
     }
-    PagedModel { id: paged; endpoint: view.mode === "browse" ? feed.itemsPath(view.channel) : "" }
+    PagedModel { id: paged; endpoint: view.mode === "browse" ? feed.itemsPath(view.channel, "", view.platform ? "tag:platform:" + view.platform : "") : "" }
 
     Component.onCompleted: {
         backendApi.refreshLibraries()
@@ -91,13 +105,30 @@ Item {
                 font.pixelSize: 12
             }
         }
-        // 第二行：推荐 | 我的点赞 | 平台 | 📌 固定的博主 | 其余博主
+        // 第二行：平台（只有一个平台时不显示）
+        ListView {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 28
+            visible: view.platforms.length > 1
+            WheelScroll { horizontal: true }
+            orientation: ListView.Horizontal
+            spacing: 4
+            clip: true
+            model: [""].concat(view.platforms)
+            delegate: Chip {
+                required property string modelData
+                text: modelData || "全部平台"
+                selected: view.platform === modelData
+                onClicked: view.pickPlatform(modelData)
+            }
+        }
+        // 第三行：推荐 | 我的点赞 | 📌 固定的博主 | 其余博主（只列所选平台的）
         ChannelBar {
             Layout.fillWidth: true
             Layout.preferredHeight: 28
             feed: feed
             channel: view.channel
-            filters: view.platformFilters
+            platform: view.platform
             onPicked: function (ch) { view.channel = ch }
         }
 

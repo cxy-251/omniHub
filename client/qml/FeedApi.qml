@@ -14,8 +14,10 @@ QtObject {
     property ApiClient api: ApiClient { onErrorChanged: feed.error = error }
 
     function path(action) { return "/api/feed/" + domain + "/" + action }
-    function itemsPath(channel, extra) {
-        return path("items") + "?channel=" + encodeURIComponent(channel || "") + "&seed=" + seed + (extra || "")
+    // scope 只看某个平台：tag:platform:<平台>，空表示全部。
+    function itemsPath(channel, extra, scope) {
+        return path("items") + "?channel=" + encodeURIComponent(channel || "") + "&seed=" + seed
+            + (scope ? "&scope=" + encodeURIComponent(scope) : "") + (extra || "")
     }
     function loadGroups() {
         api.getJSON(path("groups"), function (r) { feed.groups = r.groups; feed.pins = r.pins })

@@ -96,6 +96,7 @@ func (r *Router) feedSnapshot(req *http.Request, domain string, src feedSource) 
 
 type feedQuery struct {
 	channel  string
+	scope    string // 只看某个平台：tag:platform:<平台>；空表示全部。推荐、点赞、博主、回收站都按它过滤
 	seed     int64
 	portrait bool
 	kind     string
@@ -110,14 +111,18 @@ func parseFeedQuery(req *http.Request) feedQuery {
 	if len(codecs) > 200 {
 		codecs = codecs[:200]
 	}
-	return feedQuery{channel: q.Get("channel"), seed: seed, portrait: q.Get("portrait") == "1", kind: q.Get("kind"), shuffle: q.Get("order") == "shuffle", codecs: codecs}
+	scope := q.Get("scope")
+	if !strings.HasPrefix(scope, "tag:platform:") || len(scope) > 200 {
+		scope = ""
+	}
+	return feedQuery{channel: q.Get("channel"), scope: scope, seed: seed, portrait: q.Get("portrait") == "1", kind: q.Get("kind"), shuffle: q.Get("order") == "shuffle", codecs: codecs}
 }
 
 // feedOrderFor 返回频道里的条目顺序（snapshot.items 的下标）。推荐结果按种子缓存，翻页时顺序不变。
 func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapshot, q feedQuery) ([]int32, error) {
 	ctx := req.Context()
 	user := auth.UserFromContext(ctx)
-	cacheKey := fmt.Sprintf("%d|%s|%s|%s|%d|%t|%s|%t|%s", user.ID, domain, snap.key, q.channel, q.seed, q.portrait, q.kind, q.shuffle, q.codecs)
+	cacheKey := fmt.Sprintf("%d|%s|%s|%s|%s|%d|%t|%s|%t|%s", user.ID, domain, snap.key, q.channel, q.scope, q.seed, q.portrait, q.kind, q.shuffle, q.codecs)
 	r.feed.mu.Lock()
 	for _, o := range r.feed.orders {
 		if o.key == cacheKey {
@@ -140,7 +145,12 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 		}
 	}
 	videoTag := cat.Lookup("kind:video")
+	scopeTag := cat.Lookup(strings.TrimPrefix(q.scope, "tag:"))
+	inScope := func(it *feed.Item) bool { return q.scope == "" || cat.HasTag(it, scopeTag) }
 	keep := func(it *feed.Item) bool {
+		if !inScope(it) {
+			return false
+		}
 		// 编码过滤只针对视频（图集没有编码）；未探测编码的视频也排除。
 		if len(codecTags) > 0 && cat.HasTag(it, videoTag) && !hasAnyTag(cat, it, codecTags) {
 			return false
@@ -157,7 +167,7 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 	switch {
 	case q.channel == "hidden":
 		for i := range cat.Items {
-			if _, ok := hidden[cat.Items[i].ID]; ok {
+			if _, ok := hidden[cat.Items[i].ID]; ok && inScope(&cat.Items[i]) {
 				order = append(order, i)
 			}
 		}

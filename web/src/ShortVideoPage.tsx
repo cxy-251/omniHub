@@ -11,21 +11,29 @@ const Matrix = lazy(() => import('./Matrix'));
 type Post = { id: string; creator_id: string; kind: 'video' | 'album'; title: string; published: string; image_count?: number; music?: string; library_id: string; has_thumbnail: boolean; codec?: string; liked?: boolean };
 const query = (post: Post, extra: Record<string, string> = {}) => new URLSearchParams({ library_id: post.library_id, id: post.id, ...extra }).toString();
 
-// 短视频：频道（推荐 | 我的点赞 | 平台 | 📌 固定的博主 | 其余博主）+ 作品网格 + 查看器；也可切到多联放映。
+// 短视频：先选平台（全部 | 抖音 | 快手 | … | YouTube），再选频道（推荐 | 我的点赞 | 📌 固定的博主 | 其余博主）+ 作品网格 + 查看器；也可切到多联放映。
 // 推荐、点赞、回收站、行为上报与桌面端共用 /api/feed/shortvideo。网页端不展示 HEVC 视频（codecs 过滤，图集不受影响）。
 export default function ShortVideoPage({ active }: { active: boolean }) {
   const [mode, setMode] = useState<'browse' | 'matrix'>(() => window.location.hash.endsWith('/matrix') ? 'matrix' : stored('omnihub.sv.mode', 'browse'));
-  const [channel, setChannel] = useState(() => stored('omnihub.sv.channel', 'recommend'));
+  // 旧版把平台当频道（tag:platform:抖音）存着：改成选中该平台、频道回到推荐。
+  const legacy = stored('omnihub.sv.channel', 'recommend');
+  const [channel, setChannel] = useState(() => legacy.startsWith('tag:platform:') ? 'recommend' : legacy);
+  const [platform, setPlatform] = useState(() => legacy.startsWith('tag:platform:') ? legacy.slice(13) : stored('omnihub.sv.platform', ''));
   const [seed, setSeed] = useState(newSeed);
   const [open, setOpen] = useState<number>();
   const [reload, setReload] = useState(0);
   useEffect(() => store('omnihub.sv.mode', mode), [mode]);
   useEffect(() => store('omnihub.sv.channel', channel), [channel]);
+  useEffect(() => store('omnihub.sv.platform', platform), [platform]);
   const { groups, pins, setPinned } = useGroups('shortvideo', active);
   const liked = useLiked('shortvideo');
-  const platforms = [...new Set(groups.map(g => g.platform).filter(Boolean))].map(p => ({ channel: `tag:platform:${p}`, label: p! }));
+  const platforms = [...new Set(groups.map(g => g.platform).filter(Boolean))] as string[];
+  const shownGroups = platform ? groups.filter(g => g.platform === platform) : groups;
+  // 平台没有了（库离线等）就回到「全部」；当前博主不属于所选平台时回到推荐。
+  useEffect(() => { if (platform && groups.length && !platforms.includes(platform)) setPlatform(''); }, [platform, groups]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pickPlatform = (p: string) => { setPlatform(p); if (channel.startsWith('group:') && !groups.some(g => `group:${g.id}` === channel && (!p || g.platform === p))) setChannel('recommend'); };
   const browsing = active && mode === 'browse';
-  const endpoint = browsing ? `${feedPath('shortvideo', 'items')}?${feedQuery({ channel, seed, r: reload || undefined, codecs: webCodecs() })}` : '';
+  const endpoint = browsing ? `${feedPath('shortvideo', 'items')}?${feedQuery({ channel, scope: platform ? `tag:platform:${platform}` : undefined, seed, r: reload || undefined, codecs: webCodecs() })}` : '';
   const paged = usePaged<Post>(endpoint);
   const group = channel.startsWith('group:') ? channel.slice(6) : '';
   // 列表变短（移到回收站后）时，查看器停在原位置看下一个；原来就是最后一个则退到前一个。
@@ -42,7 +50,10 @@ export default function ShortVideoPage({ active }: { active: boolean }) {
       {group ? <button className={chip(pins.includes(group))} onClick={() => setPinned(group, !pins.includes(group))}>{pins.includes(group) ? '取消固定博主' : '📌 固定这个博主'}</button> : null}
       <span className={`text-xs ${paged.error ? 'text-danger' : 'text-muted'}`}>{paged.error || `${paged.total} 个作品`}</span>
     </div>
-    <ChannelBar groups={groups} pins={pins} channel={channel} onPick={setChannel} filters={platforms} />
+    {platforms.length > 1 ? <div className="flex gap-1.5 overflow-x-auto pb-0.5" role="tablist" aria-label="平台">
+      {['', ...platforms].map(p => <button key={p || 'all'} role="tab" aria-selected={platform === p} className={chip(platform === p)} onClick={() => pickPlatform(p)}>{p || '全部平台'}</button>)}
+    </div> : null}
+    <ChannelBar groups={shownGroups} pins={pins.filter(id => shownGroups.some(g => g.id === id))} channel={channel} onPick={setChannel} />
     <VirtualGrid total={paged.total} minColumnWidth={170} aspect={16 / 9} extraHeight={44} render={index => {
       const post = paged.item(index);
       if (!post) return <div className="h-full rounded-lg border border-line bg-panel" />;

@@ -6,7 +6,8 @@ ListView {
     id: bar
     required property var feed           // FeedApi
     property string channel: "recommend"
-    property var filters: []             // 额外筛选 [{channel, label}]，如短视频的平台
+    property var filters: []             // 额外筛选 [{channel, label}]
+    property string platform: ""         // 非空时只列这个平台的分组（短视频先选平台）
     property bool showHidden: false
     signal picked(string channel)
 
@@ -17,7 +18,7 @@ ListView {
     clip: true
     model: {
         var list = [{channel: "recommend", label: "推荐"}, {channel: "liked", label: "♥ 我的点赞"}].concat(filters)
-        var groups = feed.groups
+        var groups = platform ? feed.groups.filter(function (g) { return g.platform === platform }) : feed.groups
         feed.pins.forEach(function (id) {
             var g = groups.find(function (x) { return x.id === id })
             if (g) list.push({channel: "group:" + g.id, label: "📌 " + g.label + " · " + g.count})
