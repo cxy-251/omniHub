@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import QtCore
 import omniHub.Media 1.0
 
@@ -155,6 +156,17 @@ Item {
         }
     }
 
+    // 下载原图：默认存到「下载」目录、用原文件名。
+    FileDialog {
+        id: saveDialog
+        property var photo: null
+        title: "保存原图"
+        fileMode: FileDialog.SaveFile
+        currentFolder: StandardPaths.writableLocation(StandardPaths.DownloadLocation)
+        onAccepted: if (photo) backendApi.download("/api/media/gallery/original?library_id=" + encodeURIComponent(photo.library_id)
+                                                   + "&id=" + encodeURIComponent(photo.id), selectedFile)
+    }
+
     Loader {
         anchors.fill: parent
         active: view.openIndex >= 0
@@ -175,6 +187,7 @@ Item {
                     shown = null
                 }
                 onPhotoChanged: {
+                    stage.scale = 1; detail = 1
                     originalSource = ""; originalTimer.restart()
                     finish()
                     if (photo) { shown = photo; shownAt = Date.now(); viewTimer.restart() }
@@ -188,6 +201,12 @@ Item {
                 property string notice: ""
                 Timer { id: noticeTimer; interval: 2500; onTriggered: viewer.notice = "" }
                 function say(text) { notice = text; noticeTimer.restart() }
+                Connections {
+                    target: backendApi
+                    function onDownloadFinished(file, error) {
+                        viewer.say(error ? "保存失败：" + error : "已保存到 " + file)
+                    }
+                }
                 function trash() {
                     var restoring = view.channel === "hidden"
                     if (!trashArmed) { trashArmed = true; trashDisarm.restart(); say(restoring ? "再点一次从回收站恢复" : "再点一次移到回收站"); return }
@@ -202,11 +221,16 @@ Item {
                 }
                 Timer { id: originalTimer; interval: 250; onTriggered: viewer.originalSource = viewer.photo ? view.apiQuery("/api/media/gallery/original", viewer.photo) : "" }
                 color: "black"
+                clip: true
                 focus: true
                 Component.onCompleted: forceActiveFocus()
                 function step(delta) { view.openIndex = Math.max(0, Math.min(paged.total - 1, view.openIndex + delta)) }
                 Keys.onPressed: function (event) {
-                    if (event.key === Qt.Key_Escape || event.key === Qt.Key_Back) view.openIndex = -1
+                    if ((event.key === Qt.Key_Escape || event.key === Qt.Key_Back) && stage.scale > 1) zoomTo(1, width / 2, height / 2)
+                    else if (event.key === Qt.Key_Escape || event.key === Qt.Key_Back) view.openIndex = -1
+                    else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) zoomTo(stage.scale * 1.5, width / 2, height / 2)
+                    else if (event.key === Qt.Key_Minus) zoomTo(stage.scale / 1.5, width / 2, height / 2)
+                    else if (event.key === Qt.Key_0) zoomTo(1, width / 2, height / 2)
                     else if (event.key === Qt.Key_Right || event.key === Qt.Key_Down) step(1)
                     else if (event.key === Qt.Key_Left || event.key === Qt.Key_Up) step(-1)
                     else if (event.key === Qt.Key_Z && photo) view.toggleLike(photo)
@@ -215,23 +239,58 @@ Item {
                     event.accepted = true
                 }
                 // 先显示缩略图，原图到达后覆盖，翻页不会出现空白。
-                Image {
-                    anchors.fill: parent
-                    fillMode: Image.PreserveAspectFit
-                    source: viewer.photo ? view.apiQuery("/api/media/gallery/thumbnail", viewer.photo) : ""
-                    visible: original.status !== Image.Ready
+                // 缩放：滚轮或双指 1～5 倍（以光标/手指为中心），双击在 1 倍与 2.5 倍间切换，放大后拖动平移；
+                // 放大时单击不翻页。第一次放大后原图改按 2.5 倍窗口尺寸解码，免得放大后发糊。
+                property real detail: 1
+                function zoomTo(scale, px, py) {
+                    var s = Math.max(1, Math.min(5, scale))
+                    // stage 以中心为变换原点：保持 (px, py) 下的像素不动。
+                    var cx = px - width / 2, cy = py - height / 2
+                    var k = s / stage.scale
+                    stage.x = s === 1 ? 0 : cx - (cx - stage.x) * k
+                    stage.y = s === 1 ? 0 : cy - (cy - stage.y) * k
+                    stage.scale = s
                 }
-                Image {
-                    id: original
-                    anchors.fill: parent
-                    fillMode: Image.PreserveAspectFit
-                    asynchronous: true
-                    cache: false
-                    sourceSize.width: viewer.width
-                    sourceSize.height: viewer.height
-                    source: viewer.originalSource
+                Item {
+                    id: stage
+                    width: viewer.width; height: viewer.height
+                    transformOrigin: Item.Center
+                    onScaleChanged: {
+                        if (scale > 5) { scale = 5; return }
+                        if (scale < 1) { scale = 1; return }
+                        if (scale > 1.2) viewer.detail = 2.5
+                        if (scale <= 1.001) { x = 0; y = 0 }
+                    }
+                    Image {
+                        anchors.fill: parent
+                        fillMode: Image.PreserveAspectFit
+                        source: viewer.photo ? view.apiQuery("/api/media/gallery/thumbnail", viewer.photo) : ""
+                        visible: original.status !== Image.Ready
+                    }
+                    Image {
+                        id: original
+                        anchors.fill: parent
+                        fillMode: Image.PreserveAspectFit
+                        asynchronous: true
+                        cache: false
+                        sourceSize.width: viewer.width * viewer.detail
+                        sourceSize.height: viewer.height * viewer.detail
+                        source: viewer.originalSource
+                    }
                 }
-                TapHandler { onTapped: function (point) { viewer.step(point.position.x < viewer.width / 3 ? -1 : 1) } }
+                WheelHandler {
+                    target: stage
+                    property: "scale"
+                    targetScaleMultiplier: 1.2
+                    targetTransformAroundCursor: true
+                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                }
+                PinchHandler { target: stage; minimumScale: 1; maximumScale: 5; minimumRotation: 0; maximumRotation: 0 }
+                DragHandler { target: stage; enabled: stage.scale > 1 }
+                TapHandler {
+                    onSingleTapped: function (point) { if (stage.scale <= 1) viewer.step(point.position.x < viewer.width / 3 ? -1 : 1) }
+                    onDoubleTapped: function (point) { viewer.zoomTo(stage.scale > 1 ? 1 : 2.5, point.position.x, point.position.y) }
+                }
                 // 底部渐变控件条（与短视频图集查看器一致）
                 Item {
                     anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
@@ -260,6 +319,16 @@ Item {
                             enabled: !!viewer.photo
                             onClicked: view.toggleLike(viewer.photo)
                             ToolTip.text: view.isLiked(viewer.photo) ? "取消点赞（Z）" : "点赞（Z）"
+                        }
+                        IconButton {
+                            glyph: "download"
+                            enabled: !!viewer.photo
+                            onClicked: {
+                                saveDialog.photo = viewer.photo
+                                saveDialog.selectedFile = saveDialog.currentFolder + "/" + encodeURIComponent(viewer.photo.filename || viewer.photo.id)
+                                saveDialog.open()
+                            }
+                            ToolTip.text: "下载原图"
                         }
                         Label {
                             visible: viewer.notice !== ""

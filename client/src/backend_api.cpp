@@ -5,6 +5,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QNetworkReply>
+#include <QSaveFile>
+#include <QUrl>
 
 BackendApi::BackendApi(QObject *parent) : QObject(parent) {}
 
@@ -149,5 +151,33 @@ void BackendApi::setupAdmin(const QString &username, const QString &password) {
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
         if (reply->error() == QNetworkReply::NoError) { reply->deleteLater(); refresh(); }
         else { m_error = reply->errorString(); reply->deleteLater(); emit statusChanged(); }
+    });
+}
+
+void BackendApi::download(const QString &path, const QUrl &target) {
+    const QString file = target.isLocalFile() ? target.toLocalFile() : target.toString();
+    QNetworkRequest request = localRequest(path);
+    if (file.isEmpty() || !request.url().isValid()) { emit downloadFinished(file, QStringLiteral("服务未连接")); return; }
+    // 边收边写，原图不整块留在内存里；写完才替换目标文件，中途失败不留下半个文件。
+    auto *out = new QSaveFile(file, this);
+    if (!out->open(QIODevice::WriteOnly)) {
+        const QString error = out->errorString();
+        delete out;
+        emit downloadFinished(file, error);
+        return;
+    }
+    auto *reply = m_network.get(request);
+    connect(reply, &QNetworkReply::readyRead, out, [reply, out] { out->write(reply->readAll()); });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, out, file] {
+        QString error;
+        if (reply->error() != QNetworkReply::NoError) error = reply->errorString();
+        else {
+            out->write(reply->readAll());
+            if (!out->commit()) error = out->errorString();
+        }
+        if (!error.isEmpty()) out->cancelWriting();
+        out->deleteLater();
+        reply->deleteLater();
+        emit downloadFinished(file, error);
     });
 }

@@ -48,6 +48,8 @@ public:
     Q_INVOKABLE void cancelMigration();
     // 保存启用分类，服务端会校验路径并保留停用分类的原文件。
     Q_INVOKABLE void saveCategories(const QStringList &directories);
+    // download 把本机服务上的 /api/ 资源保存到本地文件（file:// 地址或路径），完成后发 downloadFinished（error 为空表示成功）。
+    Q_INVOKABLE void download(const QString &path, const QUrl &target);
     static QNetworkRequest localRequest(const QString &path);
     // Shared platform/configured directory for protected native client state.
     static QString configurationDirectory();
@@ -55,6 +57,7 @@ signals:
     void statusChanged();
     void librariesChanged();
     void categoryDirectoriesChanged();
+    void downloadFinished(const QString &file, const QString &error);
 private:
     void consumeStatus(class QNetworkReply *reply);
     void libraryRequest(const QString &path, const QVariantMap &body, bool get = false, bool preview = false);

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"os"
 
@@ -586,6 +587,13 @@ func (r *Router) handleGalleryOriginal(w http.ResponseWriter, req *http.Request)
 	w.Header().Set("Content-Type", http.DetectContentType(data))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "private, max-age=2592000, immutable")
+	if req.URL.Query().Get("download") == "1" {
+		name := filepath.Base(photo.Filename)
+		if name == "." || name == "/" || name == "" {
+			name = photoID
+		}
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
