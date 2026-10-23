@@ -11,7 +11,7 @@ import QtCore
 Item {
     id: view
     Settings { id: prefs; category: "settings"; property string tab: "libraries" }
-    readonly property var tabs: [["libraries", "资源库"], ["shortvideo", "短视频"], ["accounts", "账号与权限"], ["network", "网络"]]
+    readonly property var tabs: [["libraries", "资源库"], ["shortvideo", "短视频"], ["gallery", "相册"], ["accounts", "账号与权限"], ["network", "网络"]]
 
     RowLayout {
         anchors.fill: parent
@@ -40,7 +40,7 @@ Item {
         Loader {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            sourceComponent: ({libraries: libraries, shortvideo: shortvideo, accounts: accounts, network: network})[prefs.tab] || libraries
+            sourceComponent: ({libraries: libraries, shortvideo: shortvideo, gallery: galleryAdmin, accounts: accounts, network: network})[prefs.tab] || libraries
         }
     }
 
@@ -50,6 +50,13 @@ Item {
         ScrollView {
             contentWidth: availableWidth
             ShortVideoAdmin { width: parent.width - 32; x: 16; y: 16 }
+        }
+    }
+    Component {
+        id: galleryAdmin
+        ScrollView {
+            contentWidth: availableWidth
+            GalleryAdmin { width: parent.width - 32; x: 16; y: 16 }
         }
     }
     Component {

@@ -56,6 +56,7 @@ type Router struct {
 	megaClient     *mega.Client
 	downloads      dlState
 	galleryRatios  ratioCache
+	galleryImport  galleryImporter
 	feed           feedState
 	textCatalog    *catalog.Catalog
 	novelCatalog   *catalog.Catalog
@@ -265,6 +266,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/gallery/thumbnail", r.handleGalleryThumbnail)
 	r.mux.HandleFunc("/api/media/gallery/original", r.handleGalleryOriginal)
 	r.mux.HandleFunc("/api/media/gallery/trash", r.handleGalleryTrash)
+	r.mux.HandleFunc("/api/media/gallery/admin/import", r.handleGalleryImport)
 
 	// 短视频与图集接口
 	r.mux.HandleFunc("/api/media/shortvideo/stream", r.handleShortVideoStream)

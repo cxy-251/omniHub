@@ -195,9 +195,9 @@ func (m *MetaDB) GetPhoto(photoID string) (*Photo, error) {
 	}
 
 	p.IsFavorite = favInt == 1
-	p.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+	p.CreatedAt = parseStamp(createdStr)
 	if deletedStr.Valid {
-		t, _ := time.Parse(time.RFC3339, deletedStr.String)
+		t := parseStamp(deletedStr.String)
 		p.DeletedAt = &t
 	}
 
@@ -243,7 +243,7 @@ func (m *MetaDB) ListPhotos(f PhotoFilter, limit, offset int) ([]*Photo, error) 
 			return nil, err
 		}
 		p.IsFavorite = favInt == 1
-		p.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+		p.CreatedAt = parseStamp(createdStr)
 		photos = append(photos, &p)
 	}
 	return photos, rows.Err()
