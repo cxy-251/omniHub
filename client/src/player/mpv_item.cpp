@@ -134,7 +134,11 @@ private:
         if (qEnvironmentVariableIsSet("OMNIHUB_DEV_STARTUP")) fprintf(stderr, "mpv render context %lld ms\n", clock.elapsed());
         if (status < 0) { reportError(status); return; }
         m_core->renderAvailable.store(true);
+#if QT_CONFIG(egl)
         const bool egl = QOpenGLContext::currentContext()->nativeInterface<QNativeInterface::QEGLContext>() != nullptr;
+#else
+        const bool egl = false;
+#endif
         mpv_render_context_set_update_callback(m_context, [](void *data) {
             static_cast<MpvCore *>(data)->post(true);
         }, m_core.get());

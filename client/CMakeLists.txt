@@ -12,8 +12,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Qt6 6.6 REQUIRED COMPONENTS DBus)
 endif()
 
+# Windows（MSYS2）的 pkg-config 给出 /ucrt64/include 这类 MSYS 路径，原生 CMake 认不得；那里直接找头文件和库。
 find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
+if(PkgConfig_FOUND AND NOT WIN32)
     pkg_check_modules(MPV QUIET IMPORTED_TARGET mpv)
 endif()
 if(TARGET PkgConfig::MPV)

@@ -53,12 +53,14 @@ protected:
                 QObject::connect(window, &QQuickWindow::beforeRendering, window, [interval, applied] {
                     const int want = interval->load();
                     if (*applied == want) return;
+#if QT_CONFIG(egl)   // 只有带 EGL 的 Qt（Linux）有 QEGLContext；其他平台不调垂直同步
                     auto *context = QOpenGLContext::currentContext();
                     auto *egl = context ? context->nativeInterface<QNativeInterface::QEGLContext>() : nullptr;
                     using SwapInterval = unsigned (*)(void *, int);
                     if (egl) {
                         if (auto swap = reinterpret_cast<SwapInterval>(context->getProcAddress("eglSwapInterval"))) swap(egl->display(), want);
                     }
+#endif
                     *applied = want;
                 }, Qt::DirectConnection);
                 QTimer::singleShot(2000, window, [window, interval] { interval->store(1); window->update(); });
