@@ -51,13 +51,16 @@ Item {
 
         RowLayout {
             spacing: 4
+            // 暂存区 · 账号与 Cookie ‖ 各下载方案 ‖ MEGA
             Chip { text: "暂存区"; selected: prefs.tab === "staging"; onClicked: prefs.tab = "staging" }
             Chip { text: "账号与 Cookie"; selected: prefs.tab === "cookies"; onClicked: prefs.tab = "cookies" }
-            Chip { text: "MEGA"; selected: prefs.tab === "mega"; onClicked: prefs.tab = "mega" }
+            Divider { Layout.leftMargin: 2; Layout.rightMargin: 2 }
             Repeater {
                 model: view.kinds
                 delegate: Chip { required property var modelData; text: modelData.title; selected: prefs.tab === modelData.id; onClicked: prefs.tab = modelData.id }
             }
+            Divider { Layout.leftMargin: 2; Layout.rightMargin: 2 }
+            Chip { text: "MEGA"; selected: prefs.tab === "mega"; onClicked: prefs.tab = "mega" }
             Item { Layout.fillWidth: true }
             Chip { text: "网络设置"; visible: prefs.tab === "audiobook"; selected: netBox.visible; onClicked: netBox.visible = !netBox.visible }
         }
@@ -117,23 +120,15 @@ Item {
                 contentWidth: availableWidth
                 Column {
                 width: parent.width
-                GeneralDownloadForm {
+                SchemePanel {
                     width: parent.width
-                    visible: !!view.currentKind && view.currentKind.id === "general"
-                    kind: view.currentKind || {fields: [], description: ""}
-                    presets: view.presets.filter(function (p) { return p.kind === "general" })
-                    onRun: function (params) { view.run("general", params) }
-                    onRunPreset: function (preset) { view.run(preset.kind, preset.params) }
+                    visible: !!(view.currentKind && view.currentKind.scheme)
+                    kind: view.currentKind && view.currentKind.scheme ? view.currentKind : {id: "", fields: [], description: "", scheme: {steps: [], destination: ""}}
+                    onRun: function (params) { view.run(view.currentKind.id, params) }
                     onOpenTab: function (tab) { prefs.tab = tab }
-                    onSavePreset: function (label, params) {
-                        api.send("POST", "/api/downloads/presets", {kind: "general", label: label, params: params}, function () { view.say("预设已保存", false); view.refresh() })
-                    }
-                    onDeletePreset: function (preset) {
-                        api.send("POST", "/api/downloads/presets/delete", {id: preset.id}, function () { view.refresh() })
-                    }
                 }
                 DownloadForm {
-                    visible: !!view.currentKind && view.currentKind.id !== "general"
+                    visible: !!(view.currentKind && !view.currentKind.scheme)
                     width: parent.width
                     kind: view.currentKind || {fields: [], description: ""}
                     presets: view.presets.filter(function (p) { return view.currentKind && p.kind === view.currentKind.id })
@@ -225,7 +220,7 @@ Item {
                                     Layout.fillWidth: true
                                     spacing: 6
                                     Chip { text: "去收听"; visible: !!(card.job.open && card.job.open.type === "audio"); onClicked: view.openAudioAlbum(card.job.open.album) }
-                                    Chip { text: "去暂存区"; visible: card.job.kind === "general" && !card.job.running; onClicked: prefs.tab = "staging" }
+                                    Chip { text: "去暂存区"; visible: ["music", "youtube", "bilibili", "x", "other"].indexOf(card.job.kind) >= 0 && !card.job.running; onClicked: prefs.tab = "staging" }
                                     Chip { text: "打开文件夹"; visible: !!(card.job.result && card.job.result.path); onClicked: Qt.openUrlExternally("file://" + card.job.result.path) }
                                     Chip { text: "停止"; visible: card.job.running; onClicked: api.send("POST", "/api/downloads/stop", {id: card.job.id}, function () { view.refreshJobs() }) }
                                     Chip { text: card.showLog ? "收起日志" : "日志"; selected: card.showLog; onClicked: { card.showLog = !card.showLog; if (card.showLog) card.loadLog() } }
