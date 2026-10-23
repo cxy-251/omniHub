@@ -97,6 +97,59 @@ func (d *DB) GameStats(ctx context.Context, userID int64, ids []string) (map[str
 	return result, errors.Join(rows.Err(), rows.Close())
 }
 
+// GameProfile 是一款游戏的硬件画像（全局，不分账号）：内存与磁盘取历次最高，CPU 取最近一次够长的运行。
+type GameProfile struct {
+	PeakMemMB     int64   `json:"peak_mem_mb"`
+	LastPeakMemMB int64   `json:"last_peak_mem_mb"`
+	PeakIOMBps    float64 `json:"peak_io_mbps"`
+	AvgCPUPct     float64 `json:"avg_cpu_pct"`
+}
+
+// RecordGameProfile 合并一次运行的画像。seconds 不到 2 分钟的运行不更新平均 CPU（多是只开了启动器）。
+func (d *DB) RecordGameProfile(ctx context.Context, id string, peakMemMB int64, peakIOMBps, avgCPUPct float64, seconds int64) error {
+	if !validGameID(id) || peakMemMB < 0 || peakIOMBps < 0 || avgCPUPct < 0 {
+		return ErrInvalidGamePlay
+	}
+	keepCPU := seconds < 120
+	_, err := d.db.ExecContext(ctx, `INSERT INTO game_profiles(game_id,peak_mem_mb,peak_io_mbps,avg_cpu_pct,last_peak_mem_mb,updated_at) VALUES(?,?,?,?,?,?)
+		ON CONFLICT(game_id) DO UPDATE SET peak_mem_mb=MAX(game_profiles.peak_mem_mb,excluded.peak_mem_mb),
+		peak_io_mbps=MAX(game_profiles.peak_io_mbps,excluded.peak_io_mbps),
+		avg_cpu_pct=CASE WHEN ? THEN game_profiles.avg_cpu_pct ELSE excluded.avg_cpu_pct END,
+		last_peak_mem_mb=excluded.last_peak_mem_mb, updated_at=excluded.updated_at`,
+		id, peakMemMB, peakIOMBps, avgCPUPct, peakMemMB, time.Now().UTC().Format(time.RFC3339), keepCPU)
+	return err
+}
+
+// GameProfiles 读取一批游戏的画像（最多 100 个）。
+func (d *DB) GameProfiles(ctx context.Context, ids []string) (map[string]GameProfile, error) {
+	if len(ids) > 100 {
+		return nil, ErrInvalidGamePlay
+	}
+	result := make(map[string]GameProfile, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i], args[i] = "?", id
+	}
+	rows, err := d.db.QueryContext(ctx, "SELECT game_id,peak_mem_mb,last_peak_mem_mb,peak_io_mbps,avg_cpu_pct FROM game_profiles WHERE game_id IN ("+strings.Join(placeholders, ",")+")", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var p GameProfile
+		if err := rows.Scan(&id, &p.PeakMemMB, &p.LastPeakMemMB, &p.PeakIOMBps, &p.AvgCPUPct); err != nil {
+			return nil, err
+		}
+		result[id] = p
+	}
+	return result, rows.Err()
+}
+
 // 网页游戏存档：游戏在沙箱里用不了浏览器存储，运行时把 localStorage 的读写转到这里，按账号、按游戏保存。
 const (
 	MaxWebSaveValue = 8 << 20  // 单个键

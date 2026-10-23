@@ -74,6 +74,7 @@ Item {
     }
     function displayName(g) { var n = g.name.replace(/^\d+\s*-\s*/, ""); return systemOf(g) ? n.replace(/\s*\([^()]+\)\s*$/, "") : n }
     function kindLabel(g) { return g.category === "retro" ? "模拟器 · " + (systemOf(g) || "未知机种") : categoryNames[g.category] }
+    function megabytes(mb) { return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : mb + " MB" }
     function playTime(sec) {
         if (!sec) return "未玩过"
         var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60)
@@ -266,6 +267,15 @@ Item {
                     Label { color: "#8b949e"; text: view.selected ? view.kindLabel(view.selected) : "" }
                     Label { color: "#c9d1d9"; text: view.selected ? "游玩时长：" + view.playTime(view.selected.play_time_sec) : "" }
                     Label { color: "#c9d1d9"; visible: !!(view.selected && view.selected.last_played_at); text: view.selected && view.selected.last_played_at ? "上次游玩：" + new Date(view.selected.last_played_at).toLocaleString(Qt.locale(), "yyyy-MM-dd hh:mm") : "" }
+                    // 硬件画像：游戏在独立 scope 里实测（内存、磁盘取历次最高）
+                    Label {
+                        Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#c9d1d9"
+                        readonly property var p: view.selected ? view.selected.profile : null
+                        visible: !!p
+                        text: !p ? "" : "内存峰值：" + view.megabytes(p.peak_mem_mb) + (p.last_peak_mem_mb !== p.peak_mem_mb ? "（上次 " + view.megabytes(p.last_peak_mem_mb) + "）" : "")
+                              + "\n磁盘峰值：" + p.peak_io_mbps.toFixed(0) + " MB/s"
+                              + (p.avg_cpu_pct > 0 ? "\n平均 CPU：" + (p.avg_cpu_pct / 100).toFixed(1) + " 核" : "")
+                    }
                     Label { Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; color: "#6e7681"; font.pixelSize: 11; text: view.selected ? view.selected.folder : "" }
                     Chip {
                         text: view.selected && view.selected.favorite ? "♥ 已收藏" : "♡ 收藏"

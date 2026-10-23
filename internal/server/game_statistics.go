@@ -22,6 +22,11 @@ func gamePlayRecorder(db *userstate.DB) func(games.RunStatus) error {
 		if err := db.RecordGamePlay(ctx, run.UserID, id, run.StartedAt, run.EndedAt); err != nil {
 			return errors.New("游玩时长保存失败：" + err.Error())
 		}
+		if p := run.Profile; p != nil {
+			if err := db.RecordGameProfile(ctx, id, p.PeakMemMB, p.PeakIOMBps, p.AvgCPUPct, p.Seconds); err != nil {
+				return errors.New("硬件画像保存失败：" + err.Error())
+			}
+		}
 		return nil
 	}
 }

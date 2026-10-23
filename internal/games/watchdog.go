@@ -34,6 +34,7 @@ type WatchdogCallbacks struct {
 	OnWarning func(availBytes int64)
 	OnKilled  func(availBytes int64)
 	OnError   func(error)
+	OnTick    func() // 每次采样后调用（硬件画像）
 }
 
 // StartWatchdog watches the retained game identity, stopping on completion or
@@ -68,6 +69,9 @@ func watchMemory(ctx context.Context, game *LaunchedGame, interval time.Duration
 		case <-game.done:
 			return
 		case <-ticker.C:
+			if cb.OnTick != nil {
+				cb.OnTick()
+			}
 			available, err := read()
 			if err == nil && available < 0 {
 				err = errors.New("invalid available memory")

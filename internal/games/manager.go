@@ -31,6 +31,7 @@ type RunStatus struct {
 	ExitError        string    `json:"exit_error,omitempty"`
 	Warning          string    `json:"warning,omitempty"`
 	PersistenceError string    `json:"persistence_error,omitempty"`
+	Profile          *Profile  `json:"profile,omitempty"` // 退出后才有
 }
 
 type runSession struct {
@@ -38,6 +39,7 @@ type runSession struct {
 	game     *LaunchedGame
 	done     chan struct{}
 	cancel   context.CancelFunc
+	sampler  *profileSampler
 	stopOnce sync.Once
 	stopErr  error
 }
@@ -96,13 +98,15 @@ func (m *Manager) Start(ctx context.Context, key string, opt LaunchOptions) (Run
 		delete(m.sessions, oldest.status.ID)
 	}
 	watchCtx, cancel := context.WithCancel(context.Background())
-	session := &runSession{status: RunStatus{ID: rand.Text(), Key: key, UserID: opt.UserID, PID: game.PID, State: "running", StartedAt: game.StartTime, LogPath: game.LogPath}, game: game, done: make(chan struct{}), cancel: cancel}
+	session := &runSession{status: RunStatus{ID: rand.Text(), Key: key, UserID: opt.UserID, PID: game.PID, State: "running", StartedAt: game.StartTime, LogPath: game.LogPath}, game: game, done: make(chan struct{}), cancel: cancel,
+		sampler: newProfileSampler(game.PID, game.scope)}
 	m.sessions[session.status.ID] = session
 	m.active = session
 	if err := StartWatchdog(watchCtx, game, time.Second, WatchdogCallbacks{
 		OnWarning: func(int64) { m.warning(session, "系统可用内存不足，请保存游戏进度") },
 		OnKilled:  func(int64) { m.warning(session, "系统内存临界，已请求强制停止游戏") },
 		OnError:   func(err error) { m.warning(session, "内存看门狗不可用："+err.Error()) },
+		OnTick:    session.sampler.sample,
 	}); err != nil {
 		session.status.Warning = err.Error()
 	}
@@ -126,6 +130,7 @@ func (m *Manager) complete(session *runSession) {
 	m.mu.Unlock()
 	completed.State = "exited"
 	completed.EndedAt = time.Now()
+	completed.Profile = session.sampler.result()
 	if err != nil {
 		completed.ExitError = err.Error()
 	}

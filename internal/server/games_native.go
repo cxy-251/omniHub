@@ -16,6 +16,7 @@ import (
 
 	"omnihub/internal/auth"
 	"omnihub/internal/games"
+	"omnihub/internal/userstate"
 	"omnihub/internal/library"
 )
 
@@ -47,6 +48,8 @@ type gameEntry struct {
 	Favorite     bool      `json:"favorite,omitempty"`
 	PlayTimeSec  int64     `json:"play_time_sec,omitempty"`
 	LastPlayedAt time.Time `json:"last_played_at,omitzero"`
+	// Profile 是硬件画像（游戏在自己的 scope 里跑过才有）
+	Profile *userstate.GameProfile `json:"profile,omitempty"`
 }
 
 // handleGameList 列出当前端可见的全部游戏（各库合并，同一分类同名目录只取第一个库）。
@@ -107,6 +110,13 @@ func (r *Router) handleGameList(w http.ResponseWriter, req *http.Request) {
 			for i := range batch {
 				if s, ok := stats[batch[i].ID]; ok {
 					batch[i].PlayTimeSec, batch[i].LastPlayedAt = s.PlayTimeSec, s.LastPlayedAt
+				}
+			}
+			if profiles, err := r.userState.GameProfiles(req.Context(), ids); err == nil {
+				for i := range batch {
+					if p, ok := profiles[batch[i].ID]; ok {
+						batch[i].Profile = &p
+					}
 				}
 			}
 		}
