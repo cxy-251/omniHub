@@ -3,7 +3,7 @@ omnihub-server
 .test-tmp/
 node_modules/
 build/
-features/sc2/.venv/
+.venv/
 __pycache__/
 web/dist/
 web/vendor/

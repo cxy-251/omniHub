@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 )
 
-//go:embed pyproject.toml uv.lock scripts/audiobook.py scripts/manga.py scripts/cookies.py
+//go:embed pyproject.toml uv.lock scripts/audiobook.py scripts/manga.py scripts/cookies.py scripts/general.py scripts/general.py
 var files embed.FS
 
-var names = []string{"pyproject.toml", "uv.lock", "scripts/audiobook.py", "scripts/manga.py", "scripts/cookies.py"}
+var names = []string{"pyproject.toml", "uv.lock", "scripts/audiobook.py", "scripts/manga.py", "scripts/cookies.py", "scripts/general.py"}
 
 // Prepare 把文件写到 dir（内容不变时不重写），返回 dir。
 func Prepare(dir string) (string, error) {

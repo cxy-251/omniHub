@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"omnihub/internal/config"
 	"omnihub/internal/library"
 	"omnihub/internal/scanner"
+	"omnihub/internal/staging"
 	"omnihub/internal/tasks"
 )
 
@@ -145,6 +147,26 @@ func (r *Router) writableLibraryChoice(category string) ([]dlOption, string) {
 	return opts, def
 }
 
+// stagingLibraryChoice 列出可写的在线库作为暂存位置；默认选和 Chrome 下载目录同一块盘的（多为内置存储）。
+func (r *Router) stagingLibraryChoice() ([]dlOption, string) {
+	home, _ := os.UserHomeDir()
+	var opts []dlOption
+	def := ""
+	for _, lib := range r.libMgr.ListLibraries() {
+		if !lib.IsOnline || lib.ReadOnly {
+			continue
+		}
+		opts = append(opts, dlOption{lib.ID, lib.Name})
+		if def == "" && staging.SameDisk(lib.RootPath, filepath.Join(home, "Downloads")) {
+			def = lib.ID
+		}
+	}
+	if def == "" && len(opts) > 0 {
+		def = opts[0].Value
+	}
+	return opts, def
+}
+
 func (r *Router) writableLibrary(id string) (*library.Library, error) {
 	for _, lib := range r.libMgr.ListLibraries() {
 		if lib.ID == id && lib.IsOnline && !lib.ReadOnly {
@@ -157,7 +179,61 @@ func (r *Router) writableLibrary(id string) (*library.Library, error) {
 func (r *Router) downloadKinds() []*dlKind {
 	audioLibs, audioDef := r.writableLibraryChoice("media_library/audio")
 	mangaLibs, mangaDef := r.writableLibraryChoice("media_library/manga")
+	stageLibs, stageDef := r.stagingLibraryChoice()
 	kinds := []*dlKind{
+		{
+			ID: "general", Title: "通用下载", Description: "粘贴链接，下载到暂存区（不直接进资源库），在「暂存区」里预览、筛选后再移入。" +
+				"YouTube、B 站等用 yt-dlp（视频进短视频的对应平台，或只要音频进音声/音乐），X、Pixiv 等图站用 gallery-dl（移入时并进相册）。" +
+				"自动带上「账号与 Cookie」里该平台的登录状态；每个文件的元数据（播放量、点赞、标签等）一起保存。",
+			needs: []string{"uv", "ffmpeg", "ffprobe"},
+			Fields: []dlField{
+				{Name: "urls", Label: "链接", Type: "lines", Required: true, Placeholder: "视频、播放列表、频道、合集或用户页链接，一行一个"},
+				{Name: "mode", Label: "要什么", Type: "choice", Default: "video", Options: []dlOption{{"video", "视频"}, {"audio", "只要音频（音乐）"}}, Help: "图站链接不受影响，总是下载图片"},
+				{Name: "max_height", Label: "视频最高分辨率", Type: "choice", Default: "1080", Options: []dlOption{{"2160", "4K"}, {"1440", "1440p"}, {"1080", "1080p"}, {"720", "720p"}, {"480", "480p"}, {"0", "不限"}}},
+				{Name: "items", Label: "只下这些序号", Type: "text", Advanced: true, Placeholder: "如 1-20,25（播放列表、合集、用户页时有效）"},
+				{Name: "library", Label: "暂存到", Type: "choice", Options: stageLibs, Default: stageDef, Advanced: true, Help: "暂存区在资源库里；移入时同一块盘上只是改名"},
+			},
+			build: func(r *Router, p dlParams) (dlPlan, error) {
+				urls := p.lines("urls")
+				if len(urls) == 0 || len(urls) > 200 {
+					return dlPlan{}, errors.New("请粘贴 1–200 个链接")
+				}
+				for _, u := range urls {
+					if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+						return dlPlan{}, fmt.Errorf("不是网址：%s", u)
+					}
+				}
+				lib, err := r.writableLibrary(p.text("library"))
+				if err != nil {
+					return dlPlan{}, err
+				}
+				label := "下载"
+				if u, err := url.Parse(urls[0]); err == nil && u.Hostname() != "" {
+					label = strings.TrimPrefix(u.Hostname(), "www.")
+				}
+				if p.text("mode") == "audio" {
+					label += " 音频"
+				}
+				batch, err := staging.NewBatch(lib.RootPath, label, "general")
+				if err != nil {
+					return dlPlan{}, err
+				}
+				dir, _ := staging.BatchDir(lib.RootPath, batch)
+				args := append([]string{"scripts/general.py"}, urls...)
+				args = append(args, "--batch", dir, "--mode", p.text("mode"), "--max-height", p.text("max_height"))
+				if it := p.text("items"); it != "" {
+					args = append(args, "--items", it)
+				}
+				// 什么也没下到（链接全失败）时删掉空批次，免得暂存区里留一堆空的。
+				cleanup := func(context.Context) error {
+					if _, n, err := staging.Files(lib.RootPath, batch, "", 0, 1); err == nil && n == 0 {
+						return os.RemoveAll(dir)
+					}
+					return nil
+				}
+				return dlPlan{title: "通用下载 · " + label, args: args, resource: dir, lib: lib, after: cleanup}, nil
+			},
+		},
 		{
 			ID: "audiobook", Title: "有声书", Description: "从 YouTube、B 站等视频站下载音频，存进音声专辑。粘贴链接即可，专辑名默认用标题。",
 			needs: []string{"uv", "ffmpeg", "ffprobe"},
@@ -577,7 +653,7 @@ func (r *Router) startDownload(kindID string, params dlParams) (dlJob, error) {
 	r.downloads.mu.Lock()
 	settings := r.downloads.settings
 	r.downloads.mu.Unlock()
-	env := []string{"UV_PROJECT_ENVIRONMENT=" + filepath.Join(dir, "venv"), "PYTHONUNBUFFERED=1"}
+	env := []string{"UV_PROJECT_ENVIRONMENT=" + filepath.Join(dir, "venv"), "PYTHONUNBUFFERED=1", "OMNIHUB_COOKIES_DIR=" + r.cookieDir()}
 	if settings.YtdlpProxy != "" {
 		env = append(env, "OMNIHUB_YTDLP_PROXY="+settings.YtdlpProxy)
 	}

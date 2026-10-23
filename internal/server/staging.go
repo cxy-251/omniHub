@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"omnihub/internal/auth"
+	"omnihub/internal/gallery"
 	"omnihub/internal/library"
 	"omnihub/internal/platform"
 	"omnihub/internal/staging"
@@ -202,7 +203,9 @@ func (r *Router) stagingCollect(ctx context.Context, lib *library.Library, progr
 
 // stagingImport 把批次移入资源库；移入了短视频就排一次扫描。
 func (r *Router) stagingImport(ctx context.Context, lib *library.Library, batch string, progress func(int, int)) (string, error) {
-	res, err := staging.Import(ctx, lib.RootPath, batch, progress)
+	res, err := staging.Import(ctx, lib.RootPath, batch, func(ctx context.Context, dir string) (string, error) {
+		return r.stagingGallery(ctx, lib, dir)
+	}, progress)
 	for _, area := range res.Areas {
 		if area == shortVideoCategory {
 			select {
@@ -253,4 +256,34 @@ func (s *stagingWorker) status() map[string]any {
 	defer s.mu.Unlock()
 	return map[string]any{"job": s.job, "library": s.library, "done": s.done, "total": s.total,
 		"last_job": s.last, "last_note": s.lastNote, "last_error": s.lastErr, "finished": s.finished}
+}
+
+// stagingGallery 把批次 gallery/ 里的图片并进资源库的相册（gallery.db，按内容去重），
+// 没有出错时删掉已入库（或相册里本来就有）的图片；其余（视频等不支持的）留在批次里。
+func (r *Router) stagingGallery(ctx context.Context, lib *library.Library, dir string) (string, error) {
+	galleryDir, err := r.moduleDirectory(lib.RootPath, "media_library/gallery", "gallery.db")
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(galleryDir, 0o755); err != nil {
+		return "", err
+	}
+	res, err := gallery.ImportDirectory(ctx, galleryDir, dir, nil)
+	if err != nil {
+		return "", err
+	}
+	note := fmt.Sprintf("新增 %d 张，相册里已有 %d 张", res.Added, res.Duplicates)
+	if res.Unsupported > 0 {
+		note += fmt.Sprintf("，%d 个不是图片（留在暂存区）", res.Unsupported)
+	}
+	if len(res.Errors) > 0 {
+		return note + fmt.Sprintf("，%d 张出错（图片都留在暂存区）：%s", len(res.Errors), res.Errors[0]), nil
+	}
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() && staging.Kind(p) == "image" && !strings.EqualFold(filepath.Ext(p), ".heic") && !strings.EqualFold(filepath.Ext(p), ".avif") {
+			_ = os.Remove(p)
+		}
+		return nil
+	})
+	return note, nil
 }

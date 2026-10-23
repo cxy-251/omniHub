@@ -193,29 +193,54 @@ func Files(root, batch, kind string, offset, limit int) ([]File, int, error) {
 // ImportResult 是移入资源库的结果。
 type ImportResult struct {
 	Moved    int      `json:"moved"`
+	Meta     int      `json:"meta"`    // 下载元数据（.json），收进 .omni_data/download-meta
+	Gallery  string   `json:"gallery"` // 批次里 gallery/ 部分并进相册的结果说明
 	Existing int      `json:"existing"` // 资源库里已有同名文件，留在批次里
 	Refused  int      `json:"refused"`  // 不在 media_library/ 下，不移动
 	Areas    []string `json:"areas"`    // 涉及的分类目录（如 media_library/shortvideo），用来触发扫描
 	Errors   []string `json:"errors,omitempty"`
 }
 
-// Import 把批次并进资源库根目录。只移动 media_library/ 下的文件；同名文件已存在时不覆盖、留在批次里。
-// 批次移空后删除批次目录。progress(已处理, 总数) 每个文件调用一次。
-func Import(ctx context.Context, root, batch string, progress func(done, total int)) (ImportResult, error) {
+// MetaDir 是下载元数据在资源库里的位置（按原来的库内路径摆放）。
+const MetaDir = ".omni_data/download-meta"
+
+// GalleryImporter 把批次里 gallery/ 目录的图片并进资源库的相册，返回结果说明；由调用方提供（相册是数据库）。
+type GalleryImporter func(ctx context.Context, dir string) (string, error)
+
+// Import 把批次并进资源库根目录：media_library/ 下的文件移到同一路径（同名已存在时不覆盖、留在批次里）；
+// .json 元数据收进 MetaDir；gallery/ 交给 importGallery（为 nil 时留在批次里）。批次移空后删除批次目录。
+// progress(已处理, 总数) 每个文件调用一次。
+func Import(ctx context.Context, root, batch string, importGallery GalleryImporter, progress func(done, total int)) (ImportResult, error) {
 	var res ImportResult
 	dir, err := BatchDir(root, batch)
 	if err != nil {
 		return res, err
 	}
+	if g := filepath.Join(dir, "gallery"); importGallery != nil {
+		if info, err := os.Stat(g); err == nil && info.IsDir() {
+			if res.Gallery, err = importGallery(ctx, g); err != nil {
+				return res, err
+			}
+		}
+	}
 	var files []string
-	_ = walkFiles(dir, func(rel string, _ fs.FileInfo) { files = append(files, rel) })
+	_ = walkFiles(dir, func(rel string, _ fs.FileInfo) {
+		if !strings.HasPrefix(rel, "gallery/") || strings.HasSuffix(rel, ".json") {
+			files = append(files, rel)
+		}
+	})
 	areas := map[string]bool{}
 	for i, rel := range files {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
 		parts := strings.SplitN(rel, "/", 3)
-		if len(parts) < 3 || parts[0] != "media_library" {
+		if strings.HasSuffix(rel, ".json") {
+			dst := filepath.Join(root, filepath.FromSlash(MetaDir), filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err == nil && moveFile(filepath.Join(dir, filepath.FromSlash(rel)), dst) == nil {
+				res.Meta++
+			}
+		} else if len(parts) < 3 || parts[0] != "media_library" {
 			res.Refused++
 		} else {
 			dst := filepath.Join(root, filepath.FromSlash(rel))
@@ -321,6 +346,9 @@ var ErrNothing = errors.New("没有可收的内容")
 // Describe 生成一行中文结果说明。
 func (r ImportResult) Describe() string {
 	s := fmt.Sprintf("移入 %d 个文件", r.Moved)
+	if r.Gallery != "" {
+		s += "；相册：" + r.Gallery
+	}
 	if r.Existing > 0 {
 		s += fmt.Sprintf("，%d 个资源库里已有同名文件、留在暂存区", r.Existing)
 	}

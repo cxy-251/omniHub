@@ -57,7 +57,11 @@
      改成像 omni-deck 那样先选平台、再看该平台的内容。
    - Cookie 由代码从用户的 Chrome 读取（--password-store=basic），按平台分开保存，用户点了才读，只读该平台域名。
    - 已搭好（2026-10-23）：短视频先选平台再看频道；暂存区（库内 staging/、桌面端「下载 → 暂存区」、从 Chrome 下载目录收件、移入资源库）；
-     「下载 → 账号与 Cookie」按平台从 Chrome 读 Cookie（cookies/<平台>.txt）。下一步是各下载方案（yt-dlp 配方、gallery-dl、订阅）。
+     「下载 → 账号与 Cookie」按平台从 Chrome 读 Cookie（cookies/<平台>.txt）。「下载 → 通用下载」：粘贴链接，按域名选 yt-dlp / gallery-dl 并带上该平台 Cookie，下到暂存区新批次；
+     视频进 shortvideo/<平台>/<作者>/，「只要音频」进 audio/music/<专辑>/（最好的音轨、不转码、嵌封面标签），图站进 gallery/（移入时并进相册）；
+     元数据（.info.json 等）移入时收进 .omni_data/download-meta，留给以后打分。实测：本机 HTTP 的视频、音频下载与移入；真实站点、gallery-dl 没实测。
+   - 音乐好不好听不看播放量：考虑人均重复收听（Last.fm 听众数与播放数，需要用户自己申请 API key）、点赞/收藏与播放的比率、
+     用户自己在暂存区留下还是删掉。音质（码率、频谱截止、响度）可用 ffmpeg 客观测。
    - 短视频继续由浏览器插件（ExtensionForge/005）在真实浏览器里下载：用户登录态下的正常浏览行为不容易触发风控、不会封号；
      服务端或无头浏览器去下容易被风控。omniHub 只负责把 Chrome 下载目录里的「<平台>/<作者>/」收进暂存区，筛选后导入。
 
