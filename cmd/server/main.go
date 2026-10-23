@@ -41,6 +41,14 @@ func main() {
 		fmt.Println(buildinfo.Description())
 		return
 	}
+	if options.setupAdmin != "" {
+		if err := setupAdmin(options.setupAdmin); err != nil {
+			fmt.Fprintln(os.Stderr, "创建管理员失败：", err)
+			os.Exit(1)
+		}
+		fmt.Println("已创建管理员", options.setupAdmin, "，现在可以在浏览器里登录。")
+		return
+	}
 	if err := run(options); err != nil {
 		log.Printf("omniHub server stopped: %v", err)
 		os.Exit(1)

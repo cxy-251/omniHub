@@ -63,6 +63,13 @@ qt_add_executable(omnihub_client
     ${QML_RESOURCES}
 )
 target_include_directories(omnihub_client PRIVATE src)
+# Windows 不弹控制台窗口；macOS 生成 .app（发版时再把服务端放进 Contents/MacOS，由启动脚本先起服务）。
+set_target_properties(omnihub_client PROPERTIES
+    WIN32_EXECUTABLE ON
+    MACOSX_BUNDLE ON
+    MACOSX_BUNDLE_BUNDLE_NAME omniHub
+    MACOSX_BUNDLE_GUI_IDENTIFIER io.github.cxy-251.omnihub
+)
 
 target_link_libraries(omnihub_client PRIVATE
     Qt6::Core
@@ -77,4 +84,4 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(omnihub_client PRIVATE Qt6::DBus)
 endif()
 
-install(TARGETS omnihub_client DESTINATION bin)
+install(TARGETS omnihub_client BUNDLE DESTINATION . RUNTIME DESTINATION bin)

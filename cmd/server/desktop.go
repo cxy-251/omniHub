@@ -14,6 +14,7 @@ import (
 type launchOptions struct {
 	desktop, version bool
 	clientPath       string
+	setupAdmin       string
 }
 
 func parseLaunchOptions(args []string) (launchOptions, error) {
@@ -23,11 +24,12 @@ func parseLaunchOptions(args []string) (launchOptions, error) {
 	flags.BoolVar(&options.desktop, "desktop", false, "open native Qt client after the service is ready")
 	flags.BoolVar(&options.version, "version", false, "print build identity")
 	flags.StringVar(&options.clientPath, "client-path", "", "native executable override (requires --desktop)")
+	flags.StringVar(&options.setupAdmin, "setup-admin", "", "create the first administrator on the running service (no desktop client, e.g. Android)")
 	if err := flags.Parse(args); err != nil {
 		return options, err
 	}
 	if flags.NArg() != 0 || (!options.desktop && options.clientPath != "") {
-		return options, errors.New("usage: omnihub-server [--desktop [--client-path executable]] [--version]")
+		return options, errors.New("usage: omnihub-server [--desktop [--client-path executable]] [--version] [--setup-admin name]")
 	}
 	return options, nil
 }

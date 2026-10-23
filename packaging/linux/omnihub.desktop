@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=omniHub
+Comment=本地游戏与媒体中心
+Exec=omnihub-server
+Icon=omnihub
+Categories=AudioVideo;Game;
+Terminal=false

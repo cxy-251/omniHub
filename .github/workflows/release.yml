@@ -1,0 +1,337 @@
+# omniHub 构建与发版。平时推送代码不触发任何构建。
+#   - 推送 v* 标签：版本号第三位为 0（x.Y.0）时构建全部平台并创建 GitHub Release；第三位不为 0（如 v0.1.1）只构建、上传构件，不发布。
+#   - 在 Actions 页面手动运行：不填标签时只构建；填已有标签（如 v0.1.0）时用所选分支的代码构建并发布到该标签（标签构建失败修好后补发）。
+# 版本号来自仓库根目录的 VERSION 文件，标签必须与它一致。
+#
+# 产物：Linux（AppImage、便携 tar.gz）、Windows（安装包、便携 zip）、macOS Apple 芯片（dmg、zip）——服务端 + Qt 桌面客户端；
+# 安卓 arm64（Termux 用，只有服务端与网页端）。网页前端只在 Linux 上构建一次，嵌入各平台的服务端。
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "发布到已有的标签（如 v0.1.0）；留空则只构建"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  QT_VERSION: "6.9.1"
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: version
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::VERSION 格式不对：$version"; exit 1; }
+          tag="${{ inputs.tag }}"
+          [[ "$GITHUB_REF_TYPE" == tag ]] && tag="$GITHUB_REF_NAME"
+          release=false
+          if [[ -n "$tag" ]]; then
+            [[ "$tag" == "v$version" ]] || { echo "::error::标签 $tag 与 VERSION 中的 $version 不一致"; exit 1; }
+            if [[ "${version##*.}" == 0 ]]; then release=true; else echo "::notice::$version 是修订版本，只构建不发布"; fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
+  web:
+    needs: check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build web front end
+        run: |
+          pnpm --dir web install --frozen-lockfile
+          scripts/fetch-web-vendor.sh
+          pnpm --dir web build
+      - name: Render icons
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q librsvg2-bin icoutils
+          mkdir -p icons
+          for size in 16 32 48 64 128 256 512 1024; do rsvg-convert -w $size -h $size packaging/omnihub.svg -o icons/omnihub-$size.png; done
+          icotool -c -o icons/omnihub.ico icons/omnihub-{16,32,48,256}.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: |
+            web/dist
+            web/vendor
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: icons
+          path: icons
+          if-no-files-found: error
+
+  server:
+    needs: [check, web]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: web
+          path: web
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test ./...
+      - name: Build servers
+        run: |
+          ldflags="-s -w -X omnihub/internal/buildinfo.Revision=v$VERSION-${GITHUB_SHA::7} -X omnihub/internal/buildinfo.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          build() { echo "== $1/$2"; CGO_ENABLED=0 GOOS=$1 GOARCH=$2 go build -trimpath -ldflags "$ldflags $4" -o "out/$1-$2/$3" ./cmd/server; }
+          build linux amd64 omnihub-server
+          build windows amd64 omnihub-server.exe "-H=windowsgui"
+          build darwin arm64 omnihub-server
+          build android arm64 omnihub-server
+      - name: Package Android
+        run: |
+          mkdir -p dist/omniHub
+          cp out/android-arm64/omnihub-server packaging/android/start.sh packaging/android/README.txt dist/omniHub/
+          tar -C dist -czf "omniHub-$VERSION-android-arm64.tar.gz" omniHub
+      - uses: actions/upload-artifact@v4
+        with:
+          name: servers
+          path: out
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-android
+          path: omniHub-*-android-arm64.tar.gz
+          if-no-files-found: error
+
+  linux:
+    needs: [check, server]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: servers
+          path: out
+      - uses: actions/download-artifact@v4
+        with:
+          name: icons
+          path: icons
+      - name: Install build dependencies
+        run: sudo apt-get update -q && sudo apt-get install -y -q ninja-build libmpv-dev libgl-dev libxkbcommon-dev libxcb-cursor0 libxkbcommon-x11-0 file
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+      - name: Build client
+        run: |
+          cmake -S client -B build/client -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/client
+      - name: Package AppImage and portable tar.gz
+        run: |
+          curl -fsSLO https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -fsSLO https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+          mkdir -p AppDir/usr/bin
+          install -m755 out/linux-amd64/omnihub-server AppDir/usr/bin/
+          export QMAKE="$QT_ROOT_DIR/bin/qmake" QML_SOURCES_PATHS="$PWD/client/qml" EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
+          export LDAI_OUTPUT="omniHub-$VERSION-linux-x86_64.AppImage" OUTPUT="omniHub-$VERSION-linux-x86_64.AppImage"
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir \
+            --executable build/client/omnihub_client \
+            --desktop-file packaging/linux/omnihub.desktop \
+            --icon-file icons/omnihub-256.png --icon-filename omnihub \
+            --custom-apprun packaging/linux/AppRun \
+            --plugin qt --output appimage
+          ls -la *.AppImage
+          cp -a AppDir omniHub && tar -czf "omniHub-$VERSION-linux-x86_64.tar.gz" omniHub
+      - name: Smoke test
+        run: |
+          ./omniHub-$VERSION-linux-x86_64.AppImage --version
+          QT_QPA_PLATFORM=offscreen timeout 5 omniHub/usr/bin/omnihub_client --help >/dev/null 2>&1 || true
+          ldd omniHub/usr/bin/omnihub_client | grep 'not found' && exit 1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-linux
+          path: |
+            omniHub-*-linux-x86_64.AppImage
+            omniHub-*-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    needs: [check, server]
+    runs-on: windows-2022
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: servers
+          path: out
+      - uses: actions/download-artifact@v4
+        with:
+          name: icons
+          path: icons
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-qt6-declarative mingw-w64-ucrt-x86_64-qt6-tools
+            mingw-w64-ucrt-x86_64-mpv zip
+      - name: Build client
+        run: |
+          cmake -S client -B build/client -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/client
+      - name: Deploy
+        run: |
+          D=dist/omniHub
+          mkdir -p $D
+          cp build/client/omnihub_client.exe out/windows-amd64/omnihub-server.exe packaging/windows/omniHub.cmd icons/omnihub.ico $D/
+          deploy=$(command -v windeployqt6 || command -v windeployqt-qt6 || command -v windeployqt)
+          "$deploy" --release --qmldir client/qml --no-translations $D/omnihub_client.exe
+          # 补上 Qt 之外的 MinGW 依赖（libmpv、ffmpeg、运行时库），反复几轮直到没有新增。
+          for round in 1 2 3 4 5; do
+            added=0
+            for f in $(find $D -name '*.exe' -o -name '*.dll'); do
+              for lib in $(ldd "$f" | awk '$3 ~ /^\/ucrt64\// {print $3}'); do
+                [ -e "$D/$(basename "$lib")" ] || { cp "$lib" $D/; added=1; }
+              done
+            done
+            [ $added = 0 ] && break
+          done
+          ls $D | head -100
+      - name: Smoke test
+        run: |
+          D=dist/omniHub
+          ldd $D/omnihub_client.exe | grep -i 'not found' && exit 1 || true
+      - name: Portable zip
+        run: (cd dist && zip -qr "../omniHub-$VERSION-windows-x64-portable.zip" omniHub)
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\iscc.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          & $iscc "/DAppVersion=$env:VERSION" "/DSourceDir=$PWD\dist\omniHub" "/DOutputDir=$PWD" packaging\windows\omnihub.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-windows
+          path: |
+            omniHub-*-windows-x64-portable.zip
+            omniHub-*-windows-x64-setup.exe
+          if-no-files-found: error
+
+  macos:
+    needs: [check, server]
+    runs-on: macos-14
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: servers
+          path: out
+      - uses: actions/download-artifact@v4
+        with:
+          name: icons
+          path: icons
+      - name: Install build dependencies
+        run: brew install qt mpv ninja pkgconf
+      - name: Build client
+        run: |
+          cmake -S client -B build/client -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
+          cmake --build build/client
+      - name: Bundle
+        run: |
+          APP=build/client/omnihub_client.app
+          "$(brew --prefix qt)/bin/macdeployqt" "$APP" -qmldir=client/qml -always-overwrite
+          install -m755 out/darwin-arm64/omnihub-server "$APP/Contents/MacOS/"
+          install -m755 packaging/macos/omniHub "$APP/Contents/MacOS/omniHub"
+          mkdir -p omnihub.iconset
+          for s in 16 32 128 256 512; do cp icons/omnihub-$s.png omnihub.iconset/icon_${s}x${s}.png; cp icons/omnihub-$((s*2)).png omnihub.iconset/icon_${s}x${s}@2x.png; done
+          iconutil -c icns omnihub.iconset -o "$APP/Contents/Resources/omnihub.icns"
+          plist="$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable omniHub" "$plist"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string omnihub" "$plist" || /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile omnihub" "$plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$plist" || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$plist"
+          mkdir -p dist && mv "$APP" dist/omniHub.app
+          codesign --force --deep --sign - dist/omniHub.app
+      - name: Smoke test
+        run: |
+          dist/omniHub.app/Contents/MacOS/omnihub-server --version
+          otool -L dist/omniHub.app/Contents/MacOS/omnihub_client | grep -E '/opt/homebrew|/usr/local/' && { echo "::error::客户端仍链接到 Homebrew 路径"; exit 1; } || true
+      - name: Package
+        run: |
+          ditto -c -k --keepParent dist/omniHub.app "omniHub-$VERSION-macos-arm64.zip"
+          hdiutil create -volname omniHub -srcfolder dist -ov -format UDZO "omniHub-$VERSION-macos-arm64.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-macos
+          path: |
+            omniHub-*-macos-arm64.zip
+            omniHub-*-macos-arm64.dmg
+          if-no-files-found: error
+
+  release:
+    needs: [check, server, linux, windows, macos]
+    if: needs.check.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+      VERSION: ${{ needs.check.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        run: |
+          cd dist
+          sha256sum omniHub-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cat > notes.md <<EOF
+          omniHub $VERSION
+
+          | 平台 | 文件 |
+          | --- | --- |
+          | Linux / Steam Deck | \`.AppImage\`（直接运行）或 \`-linux-x86_64.tar.gz\`（解压后运行 \`omniHub/AppRun\`） |
+          | Windows | \`-setup.exe\`（安装到当前用户，不需要管理员权限）或 \`-portable.zip\`（解压后运行 \`omniHub.cmd\`） |
+          | macOS（Apple 芯片） | \`.dmg\` 或 \`.zip\`；未经 Apple 公证，首次打开需在「系统设置 → 隐私与安全性」中允许 |
+          | 安卓（Termux） | \`-android-arm64.tar.gz\`，只含服务端与网页端，用法见包内 README.txt |
+          EOF
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "omniHub $VERSION" --notes-file notes.md omniHub-* SHA256SUMS.txt \
+            || gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber omniHub-* SHA256SUMS.txt

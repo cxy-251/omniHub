@@ -1,0 +1,4 @@
+#!/bin/sh
+# omniHub.app 的入口：启动同目录的服务，服务就绪后打开桌面客户端 omnihub_client。
+HERE=$(cd "$(dirname "$0")" && pwd)
+exec "$HERE/omnihub-server" --desktop
