@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -16,12 +17,17 @@ import (
 // Metadata contains optional labels and one embedded picture. Missing tags are
 // empty; malformed or over-budget metadata returns an error, never partial data.
 type Metadata struct {
-	Title        string `json:"title"`
-	Artist       string `json:"artist"`
-	Album        string `json:"album"`
-	HasCover     bool   `json:"has_cover"`
-	Picture      []byte `json:"-"`
-	pictureFront bool
+	Title    string `json:"title"`
+	Artist   string `json:"artist"`
+	Album    string `json:"album"`
+	HasCover bool   `json:"has_cover"`
+	// 风格与 Last.fm 数据：下载音乐时写进文件（GENRE / LASTFM_*），播放时显示
+	Genre           string  `json:"genre,omitempty"`
+	LastfmListeners int64   `json:"lastfm_listeners,omitempty"`
+	LastfmPlaycount int64   `json:"lastfm_playcount,omitempty"`
+	LastfmReplay    float64 `json:"lastfm_replay,omitempty"`
+	Picture         []byte  `json:"-"`
+	pictureFront    bool
 }
 
 const metadataBudget = 8 << 20
@@ -265,7 +271,9 @@ func (r *tagInput) id3(header []byte, result *Metadata) error {
 			flags = data[9]
 		}
 		data = data[width+length:]
-		if id != "TIT2" && id != "TT2" && id != "TPE1" && id != "TP1" && id != "TALB" && id != "TAL" && id != "APIC" && id != "PIC" {
+		switch id {
+		case "TIT2", "TT2", "TPE1", "TP1", "TALB", "TAL", "APIC", "PIC", "TCON", "TCO", "TXXX", "TXX":
+		default:
 			continue
 		}
 		if version == 3 && flags&0xc0 != 0 || version == 4 && flags&0x0c != 0 {
@@ -299,6 +307,16 @@ func (r *tagInput) id3(header []byte, result *Metadata) error {
 			}
 			continue
 		}
+		if id == "TXXX" || id == "TXX" { // 描述\0值：textTag 只取第一个 \0 之前，所以先自己分开
+			if desc, v, ok := splitTXXX(frame[1:], frame[0]); ok {
+				d, e1 := textTag(desc, frame[0])
+				val, e2 := textTag(v, frame[0])
+				if e1 == nil && e2 == nil {
+					extraTag(d, val, result)
+				}
+			}
+			continue
+		}
 		value, err := textTag(frame[1:], frame[0])
 		if err != nil {
 			return err
@@ -310,6 +328,8 @@ func (r *tagInput) id3(header []byte, result *Metadata) error {
 			result.Artist = value
 		case "TALB", "TAL":
 			result.Album = value
+		case "TCON", "TCO":
+			extraTag("GENRE", value, result)
 		}
 	}
 	return nil
@@ -407,8 +427,10 @@ func (r *tagInput) mp4(start, end int64, depth int, item string, result *Metadat
 				return io.ErrUnexpectedEOF
 			}
 			err = r.mp4(body+4, next, depth+1, "", result)
-		case "\xa9nam", "\xa9ART", "aART", "\xa9alb", "covr":
+		case "\xa9nam", "\xa9ART", "aART", "\xa9alb", "\xa9gen", "covr":
 			err = r.mp4(body, next, depth+1, kind, result)
+		case "----": // 自由格式：mean / name / data 三个子盒
+			err = r.mp4Freeform(body, next, result)
 		case "data":
 			if item != "" {
 				data, e := r.read(body, next-body)
@@ -448,6 +470,8 @@ func (r *tagInput) mp4(start, end int64, depth int, item string, result *Metadat
 						}
 					case "\xa9alb":
 						result.Album = value
+					case "\xa9gen":
+						extraTag("GENRE", value, result)
 					}
 				}
 			}
@@ -458,4 +482,72 @@ func (r *tagInput) mp4(start, end int64, depth int, item string, result *Metadat
 		start = next
 	}
 	return nil
+}
+
+// extraTag 认风格与 omniHub 下载时写的 Last.fm 字段（键不分大小写），其余忽略。
+func extraTag(key, value string, result *Metadata) {
+	value = strings.TrimSpace(value)
+	if len(value) > 512 || value == "" {
+		return
+	}
+	switch strings.ToUpper(key) {
+	case "GENRE":
+		if result.Genre == "" {
+			result.Genre = value
+		}
+	case "LASTFM_LISTENERS":
+		result.LastfmListeners, _ = strconv.ParseInt(value, 10, 64)
+	case "LASTFM_PLAYCOUNT":
+		result.LastfmPlaycount, _ = strconv.ParseInt(value, 10, 64)
+	case "LASTFM_REPLAY":
+		result.LastfmReplay, _ = strconv.ParseFloat(value, 64)
+	}
+}
+
+// mp4Freeform 读 iTunes 自由格式标签（----）：name 子盒是键，data 子盒是 UTF-8 值。
+func (r *tagInput) mp4Freeform(start, end int64, result *Metadata) error {
+	if end-start > 4096 {
+		return nil
+	}
+	data, err := r.read(start, end-start)
+	if err != nil {
+		return err
+	}
+	var name, value string
+	for len(data) >= 8 {
+		size := int(binary.BigEndian.Uint32(data[:4]))
+		if size < 8 || size > len(data) {
+			return errors.New("invalid MP4 freeform box")
+		}
+		kind, body := string(data[4:8]), data[8:size]
+		switch {
+		case kind == "name" && len(body) >= 4:
+			name = string(body[4:])
+		case kind == "data" && len(body) >= 8:
+			value = string(body[8:])
+		}
+		data = data[size:]
+	}
+	if utf8.ValidString(name) && utf8.ValidString(value) {
+		extraTag(name, value, result)
+	}
+	return nil
+}
+
+// splitTXXX 按编码找描述与值之间的结束符：单字节编码是一个 0，UTF-16 是对齐的两个 0。
+// UTF-16 的值部分自带 BOM，textTag 照常处理。
+func splitTXXX(data []byte, encoding byte) ([]byte, []byte, bool) {
+	if encoding == 0 || encoding == 3 {
+		i := bytes.IndexByte(data, 0)
+		if i < 0 {
+			return nil, nil, false
+		}
+		return data[:i], data[i+1:], true
+	}
+	for i := 0; i+1 < len(data); i += 2 {
+		if data[i] == 0 && data[i+1] == 0 {
+			return data[:i], data[i+2:], true
+		}
+	}
+	return nil, nil, false
 }

@@ -134,7 +134,7 @@ func (c *MetadataCache) Get(ctx context.Context, path string, picture bool) (Met
 	if !sameMetadataFile(opened, after) || !sameMetadataFile(after, current) {
 		return Metadata{}, errors.New("audio changed during metadata read")
 	}
-	size := 256 + len(path) + len(value.Title) + len(value.Artist) + len(value.Album) + len(value.Picture)
+	size := 256 + len(path) + len(value.Title) + len(value.Artist) + len(value.Album) + len(value.Genre) + len(value.Picture)
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()

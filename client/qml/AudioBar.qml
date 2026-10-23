@@ -20,7 +20,7 @@ Rectangle {
 
         // 标题区：点击打开音声页
         Item {
-            Layout.preferredWidth: 240
+            Layout.preferredWidth: 300
             Layout.fillHeight: true
             Column {
                 anchors.verticalCenter: parent.verticalCenter
@@ -32,10 +32,19 @@ Rectangle {
                 }
                 Label {
                     width: parent.width; elide: Text.ElideRight
-                    text: bar.engine.error || (bar.engine.albumTitle + "（" + (bar.engine.position + 1) + "/" + bar.engine.total + "）")
+                    text: bar.engine.error || bar.engine.tagLine || (bar.engine.albumTitle + "（" + (bar.engine.position + 1) + "/" + bar.engine.total + "）")
                     color: bar.engine.error ? "#f85149" : "#8b949e"; font.pixelSize: 11
                 }
             }
+            // 悬停：专辑与 Last.fm 数据
+            ToolTip.visible: tagHover.hovered && (!!bar.engine.tags.album || !!bar.engine.tags.lastfm_listeners)
+            ToolTip.delay: 500
+            ToolTip.text: (bar.engine.tags.album ? "专辑《" + bar.engine.tags.album + "》\n" : "")
+                          + (bar.engine.tags.genre ? "风格：" + bar.engine.tags.genre + "\n" : "")
+                          + (bar.engine.tags.lastfm_listeners ? "Last.fm：听众 " + bar.engine.tags.lastfm_listeners + "，播放 " + bar.engine.tags.lastfm_playcount
+                             + (bar.engine.tags.lastfm_replay ? "，听过的人平均听 " + bar.engine.tags.lastfm_replay.toFixed(1) + " 遍" : "") : "")
+                          + "\n" + bar.engine.albumTitle + "（" + (bar.engine.position + 1) + "/" + bar.engine.total + "）"
+            HoverHandler { id: tagHover }
             TapHandler { onTapped: bar.openRequested() }
             HoverHandler { cursorShape: Qt.PointingHandCursor }
         }

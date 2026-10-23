@@ -170,8 +170,79 @@ def gallerydl(urls, a):
     return files, skipped, errors
 
 
+def write_tags(path, info):
+    """把 Last.fm 信息写进音频文件：风格（标准 GENRE 字段，多个标签用 ; 分隔）与 LASTFM_LISTENERS / PLAYCOUNT / REPLAY。"""
+    import mutagen
+    from mutagen.id3 import ID3, TCON, TXXX
+    from mutagen.mp4 import MP4, MP4FreeForm
+    fields = {"LASTFM_LISTENERS": str(info["listeners"]), "LASTFM_PLAYCOUNT": str(info["playcount"])}
+    if info.get("listeners", 0) >= 50:
+        fields["LASTFM_REPLAY"] = f"{info['playcount'] / info['listeners']:.2f}"
+    genre = "; ".join(info.get("tags") or [])
+    f = mutagen.File(path)
+    if f is None:
+        return False
+    if isinstance(f, MP4):
+        if genre:
+            f["\xa9gen"] = [genre]
+        for k, v in fields.items():
+            f["----:com.apple.iTunes:" + k] = [MP4FreeForm(v.encode())]
+    elif isinstance(f.tags, ID3):
+        if genre:
+            f.tags.add(TCON(encoding=3, text=[genre]))
+        for k, v in fields.items():
+            f.tags.add(TXXX(encoding=3, desc=k, text=[v]))
+    else:   # Opus、Vorbis、FLAC：Vorbis 注释
+        if f.tags is None:
+            f.add_tags()
+        if genre:
+            f.tags["GENRE"] = genre
+        for k, v in fields.items():
+            f.tags[k] = v
+    f.save()
+    return True
+
+
+def enrich_music(files, known):
+    """音乐下完后：每首按 .info.json 里的标题、艺人、频道查 Last.fm（排名时查过的直接用），
+    写进音频标签与 .info.json（键 lastfm），播放时显示。没有 key 时跳过。"""
+    import rank
+    key = os.environ.get("OMNIHUB_LASTFM_KEY", "")
+    audio = [f for f in files if not f.endswith(".json") and os.path.isfile(f)]
+    if not key or not audio:
+        return
+    metas, pairs = [], []
+    for f in audio:
+        meta_path = os.path.splitext(f)[0] + ".info.json"
+        meta = {}
+        if os.path.isfile(meta_path):
+            with open(meta_path, encoding="utf-8") as fh:
+                meta = json.load(fh)
+        metas.append((meta_path, meta))
+        pairs.append(rank.guess_artist_track({"title": meta.get("title") or os.path.basename(f), "artist": meta.get("artist"),
+                                              "track": meta.get("track"), "uploader": meta.get("channel") or meta.get("uploader") or ""}))
+    todo = [i for i, (_, m) in enumerate(metas) if m.get("id") not in known]
+    looked = dict(zip(todo, rank.lastfm_many([pairs[i] for i in todo], key))) if todo else {}
+    tagged = 0
+    for i, f in enumerate(audio):
+        meta_path, meta = metas[i]
+        info = known.get(meta.get("id")) or looked.get(i)
+        if not info:
+            continue
+        try:
+            if write_tags(f, info):
+                tagged += 1
+        except Exception as e:
+            log(f"写入标签失败 {os.path.basename(f)}：{e}")
+        if os.path.isfile(meta_path):
+            meta["lastfm"] = {k: info.get(k) for k in ("listeners", "playcount", "lastfm_album", "tags", "lastfm_name")}
+            with open(meta_path, "w", encoding="utf-8") as fh:
+                json.dump(meta, fh, ensure_ascii=False)
+    log(f"Last.fm 信息已写进 {tagged}/{len(audio)} 首（风格、听众、播放、重播率）")
+
+
 def ranked(a):
-    """按质量挑：每个链接依次 提取列表 → 补充数据 →（音乐）查重播率 → 排名取前 N → 下载这些单个视频。
+    """按质量挑：每个链接依次 读列表页 →（音乐）查 Last.fm 重播率 → 排名取前 N → 下载这些单个视频。
     排名表写进日志，也存进批次的 ranking-<时间>.json（移入资源库时收进下载元数据）。"""
     import rank
     done = set()
@@ -185,12 +256,15 @@ def ranked(a):
         cookies = cookie_file(platform["id"])
         log(f"[{n + 1}/{len(a.urls)}] {url}")
         try:
-            title, chosen, rule = rank.pick(url, cookies, a.rank, a.top, a.pool, done, progress, log)
+            title, chosen, rule = rank.pick(url, cookies, a.rank, a.top, done, progress, log)
         except Exception as e:
             log(f"   提取或排名失败：{e}")
             errors += 1
             continue
         report.append({"url": url, "title": title, "rule": rule, "chosen": chosen})
+        for c in chosen:
+            if c.get("listeners") is not None:
+                a.lastfm_known[c["id"]] = {k: c.get(k) for k in ("listeners", "playcount", "lastfm_album", "tags", "lastfm_name")}
         if not chosen:
             continue
         sub = argparse.Namespace(**vars(a))
@@ -215,14 +289,14 @@ def main():
     p.add_argument("--album", default="", help="音乐：专辑名（不给时用播放列表名）")
     p.add_argument("--items", default="", help="只下播放列表里的这些序号，如 1-10,15")
     p.add_argument("--per-list", type=int, default=0, help="每个列表/频道只取前 N 个，0 表示全部")
-    p.add_argument("--rank", choices=["none", "replay", "ratio", "views"], default="none",
-                   help="按质量挑：replay 重播率（Last.fm）、ratio 点赞率、views 播放量；none 不挑，全下")
+    p.add_argument("--rank", choices=["none", "replay", "views"], default="none",
+                   help="按质量挑：replay 重播率（Last.fm）、views 播放量；none 不挑，全下")
     p.add_argument("--top", type=int, default=30, help="按质量挑时每个链接取前多少个")
-    p.add_argument("--pool", type=int, default=200, help="按质量挑时只在每个链接的前多少个里排名（逐个读数据较慢），0 表示全部")
     p.add_argument("--archive", default="", help="已下载名单文件（下过的不再下）")
     p.add_argument("--x-media", choices=["all", "image", "video"], default="all")
     p.add_argument("--x-limit", type=int, default=0, help="X：每个用户最多下最近这么多个文件，0 表示不限")
     a = p.parse_args()
+    a.lastfm_known = {}   # 排名时查到的 Last.fm 信息（按视频 ID），下载后写进标签时复用
 
     if a.scheme == "x":
         files, skipped, errors = gallerydl(a.urls, a)
@@ -241,6 +315,8 @@ def main():
         platform = platform_of(a.urls[0]) if a.scheme == "music" else next(
             (p for p in PLATFORMS if p["id"] == SCHEME_PLATFORM[a.scheme]), platform_of(a.urls[0]))
         files, skipped, errors = ytdlp(a.urls, a, platform)
+    if a.scheme == "music":
+        enrich_music(files, a.lastfm_known)
     progress(len(a.urls), len(a.urls), f"完成：新下载 {len(files)} 个文件，跳过已下载 {skipped} 个，出错 {errors} 个")
     for h in sorted(hints):
         log("提示：" + h)

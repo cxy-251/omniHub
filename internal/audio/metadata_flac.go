@@ -76,6 +76,8 @@ func vorbisComments(data []byte, result *Metadata, format string) error {
 					result.Album = value
 				}
 			}
+		case "GENRE", "LASTFM_LISTENERS", "LASTFM_PLAYCOUNT", "LASTFM_REPLAY":
+			extraTag(key, value, result)
 		case "METADATA_BLOCK_PICTURE":
 			picture, err := base64.StdEncoding.DecodeString(value)
 			if err != nil {

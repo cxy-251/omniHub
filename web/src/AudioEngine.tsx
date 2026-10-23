@@ -184,14 +184,34 @@ export function AudioProvider({ children }: { children: ReactNode }) {
 
 const modeLabel: Record<Mode, string> = { list: '🔁 列表', single: '🔂 单集', random: '🔀 随机' };
 
-// AudioBar：底部播放条，音声播放时在所有页面显示。
+// 曲目标签：艺人、专辑、风格，以及下载音乐时写进文件的 Last.fm 听众、播放、重播率。
+type Tags = { artist?: string; album?: string; genre?: string; lastfm_listeners?: number; lastfm_playcount?: number; lastfm_replay?: number };
+function useTrackTags(id?: string) {
+  const [tags, setTags] = useState<Tags>({});
+  useEffect(() => {
+    setTags({});
+    if (!id) return;
+    const controller = new AbortController();
+    api<Tags>(`/api/media/audio/metadata?path=${encodeURIComponent(id)}`, { signal: controller.signal }).then(setTags).catch(() => undefined);
+    return () => controller.abort();
+  }, [id]);
+  return tags;
+}
+
+// AudioBar：底部播放条，音声播放时在所有页面显示。第二行有标签时显示 艺人 · 风格 · 重播率，悬停看专辑与 Last.fm 数据。
 export function AudioBar({ onOpen }: { onOpen(): void }) {
   const e = useAudio();
+  const tags = useTrackTags(e?.track?.id);
   if (!e?.track) return null;
+  const tagLine = [tags.artist, tags.genre?.split(';').slice(0, 3).map(t => t.trim()).join(' · '), tags.lastfm_replay ? `重播 ${tags.lastfm_replay.toFixed(1)}` : '']
+    .filter(Boolean).join('  ·  ');
+  const tip = [tags.album ? `专辑《${tags.album}》` : '', tags.genre ? `风格：${tags.genre}` : '',
+    tags.lastfm_listeners ? `Last.fm：听众 ${tags.lastfm_listeners}，播放 ${tags.lastfm_playcount}${tags.lastfm_replay ? `，听过的人平均听 ${tags.lastfm_replay.toFixed(1)} 遍` : ''}` : '',
+    `${e.albumTitle}（${e.position + 1}/${e.total}）`].filter(Boolean).join('\n');
   return <div className="fixed inset-x-0 bottom-0 z-40 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-line bg-panel px-3 py-1.5">
-    <button className="min-w-0 max-w-64 flex-1 text-left" onClick={onOpen}>
+    <button className="min-w-0 max-w-80 flex-1 text-left" onClick={onOpen} title={tip}>
       <p className="truncate text-sm">{e.track.title}</p>
-      <p className={`truncate text-xs ${e.error ? 'text-danger' : 'text-muted'}`}>{e.error || `${e.albumTitle}（${e.position + 1}/${e.total}）`}</p>
+      <p className={`truncate text-xs ${e.error ? 'text-danger' : 'text-muted'}`}>{e.error || tagLine || `${e.albumTitle}（${e.position + 1}/${e.total}）`}</p>
     </button>
     <div className="flex items-center">
       <button className={iconButton} onClick={e.previous} title="上一集">⏮</button>

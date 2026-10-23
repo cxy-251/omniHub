@@ -19,6 +19,16 @@ Item {
     property string albumId: ""
     property string albumTitle: ""
     property var track: null          // {index, title, id, ext, offset, duration}
+    // 当前曲目的标签：艺人、专辑、风格，以及下载音乐时写进去的 Last.fm 听众、播放、重播率
+    property var tags: ({})
+    ApiClient { id: tagApi }
+    onTrackChanged: {
+        tags = {}
+        if (track) tagApi.getJSON("/api/media/audio/metadata?path=" + encodeURIComponent(track.id), function (r) { engine.tags = r || {} })
+    }
+    // 播放条第二行：艺人 · 风格 · 重播率（没有这些信息时为空）
+    readonly property string tagLine: [tags.artist || "", tags.genre ? tags.genre.split(";").slice(0, 3).join(" · ").trim() : "",
+                                       tags.lastfm_replay ? "重播 " + tags.lastfm_replay.toFixed(1) : ""].filter(function (x) { return x }).join("  ·  ")
     property int position: -1         // 当前分集在专辑里的序号（0 起）
     property int total: 0
     property string error: ""

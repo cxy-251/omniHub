@@ -1,10 +1,10 @@
-"""按质量挑选：提取列表 → 逐个补充数据 → （音乐）查 Last.fm 重播率 → 排名 → 每个链接取前 N 个。由 general.py 调用。
+"""按质量挑选：读一次列表页 → （音乐）并发查 Last.fm 重播率 → 排名 → 每个链接取前 N 个。由 general.py 调用。
+不逐个打开视频页（每个要几秒，几百首要十几分钟）。
 音乐里的完整专辑（YouTube Music 专辑）整张下载、按原曲序，不排名；只有单曲（歌单、频道里的）才看重播率。
 
 分数：
   replay  重播率 = Last.fm 总播放数 ÷ 听众数：听过的人平均听了几遍，反映「耐不耐听」，不受推广影响（只用于音乐，需要 API key）
-  ratio   点赞率 = 点赞 ÷ 播放：听过/看过的人里有多少认可
-  views   播放量
+  views   播放量（列表页自带）
 没有分数的条目（数据缺失、Last.fm 查不到）不参与排名，日志里列出来。
 """
 import json
@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from yt_dlp import YoutubeDL
 
@@ -67,27 +68,10 @@ def extract_list(url, cookies, pool):
         if u and not u.startswith("http") and e.get("ie_key") == "Youtube":
             u = "https://www.youtube.com/watch?v=" + u
         if u:
-            out.append({"id": str(e.get("id") or ""), "url": u, "title": e.get("title") or ""})
+            out.append({"id": str(e.get("id") or ""), "url": u, "title": e.get("title") or "",
+                        "uploader": e.get("channel") or e.get("uploader") or "", "views": e.get("view_count")})
     title = re.sub(r"^Album - ", "", info.get("title") or info.get("channel") or "")
     return title, out, is_album(url, info)
-
-
-def details(url, cookies):
-    """读取单个视频的完整信息（不下载）：播放量、点赞、艺人、曲名、专辑、日期。
-    只要页面信息，不解析播放地址（跳过播放器脚本与格式列表）：每个从十几秒降到几秒。
-    music.youtube.com 的链接换成 www.youtube.com（同一个视频，前者常读超时）。"""
-    url = url.replace("://music.youtube.com/", "://www.youtube.com/")
-    extra = {"ignore_no_formats_error": True, "socket_timeout": 15,
-             "extractor_args": {"youtube": {"player_skip": ["js", "configs"], "skip": ["dash", "hls"]}}}
-    with YoutubeDL(ydl_opts(cookies, extra)) as ydl:
-        info = ydl.extract_info(url, download=False) or {}
-    return {
-        "views": info.get("view_count"), "likes": info.get("like_count"), "comments": info.get("comment_count"),
-        "artist": info.get("artist") or (info.get("artists") or [None])[0] or info.get("creator"),
-        "track": info.get("track"), "title": info.get("title") or "", "uploader": info.get("channel") or info.get("uploader") or "",
-        "album": info.get("album"), "year": info.get("release_year") or (str(info.get("upload_date") or "")[:4] or None),
-        "date": info.get("upload_date"), "duration": info.get("duration"),
-    }
 
 
 def guess_artist_track(d):
@@ -123,7 +107,7 @@ _lastfm_last = [0.0]
 
 def lastfm_info(artist, track, key):
     """Last.fm track.getInfo：听众数、总播放数、所在专辑、风格标签。查不到返回 None。
-    Last.fm 限制每秒请求数：多线程时排队，两次请求至少隔 0.3 秒；失败重试两次。"""
+    Last.fm 限制每秒请求数：多线程时排队，两次请求的开始至少隔 0.2 秒（每秒最多 5 次）；失败重试两次。"""
     q = urllib.parse.urlencode({"method": "track.getInfo", "api_key": key, "artist": artist, "track": track,
                                 "autocorrect": 1, "format": "json"})
     handlers = []
@@ -134,7 +118,7 @@ def lastfm_info(artist, track, key):
     data = None
     for attempt in range(3):
         with _lastfm_lock:
-            wait = _lastfm_last[0] + 0.3 - time.time()
+            wait = _lastfm_last[0] + 0.2 - time.time()
             if wait > 0:
                 time.sleep(wait)
             _lastfm_last[0] = time.time()
@@ -170,8 +154,6 @@ def score(d, rule):
         if d.get("listeners") and d["listeners"] >= 50:   # 听众太少的比值不可靠
             return d["playcount"] / d["listeners"]
         return None
-    if rule == "ratio":
-        return d["likes"] / d["views"] if d.get("views") and d.get("likes") is not None else None
     if rule == "views":
         return d.get("views")
     return None
@@ -183,46 +165,64 @@ def fmt_count(n):
     return f"{n / 1e8:.1f}亿" if n >= 1e8 else f"{n / 1e4:.1f}万" if n >= 1e4 else str(n)
 
 
-def pick(url, cookies, rule, top, pool, done_ids, progress, log, delay=1.0):
-    """对一个链接做完整的挑选流程，返回 (列表名, 选中的条目)，条目里带分数，供写进排名表。"""
-    title, entries, album = extract_list(url, cookies, pool)
+def lastfm_many(pairs, key, workers=8):
+    """并发查一批（艺人, 曲名）。Last.fm 单次要 2 秒左右，主要是等网络；总速率由 lastfm_info 限在每秒 5 次以内。"""
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(lambda p: lastfm_info(p[0], p[1], key) if p[0] and p[1] else None, pairs))
+
+
+def pick(url, cookies, rule, top, done_ids, progress, log):
+    """对一个链接做挑选：读一次列表页（标题、频道、播放量）→ 按规则排名取前 N 个。不逐个打开视频页。
+    replay：用标题和频道名拆出艺人与曲名，并发查 Last.fm 的听众数与总播放数；views：用列表页自带的播放量。
+    返回 (列表名, 选中的条目, 实际用的规则)。完整专辑整张返回、不排名。"""
+    title, entries, album = extract_list(url, cookies, 0)
     log(f"== {title or url}：{'完整专辑，' if album else '列表里 '}{len(entries)} 首" if album else f"== {title or url}：列表里 {len(entries)} 个")
     fresh = [e for e in entries if e["id"] not in done_ids]
     if len(fresh) < len(entries):
         log(f"   其中 {len(entries) - len(fresh)} 个已下载过，跳过")
-    if album and rule == "replay":
-        # 完整专辑整张下（按原曲序），不按单曲重播率挑
+    if album:
         log("   完整专辑：整张下载，不排名")
         return title, fresh, "album"
     key = os.environ.get("OMNIHUB_LASTFM_KEY", "")
     if rule == "replay" and not key:
-        log("   没有 Last.fm API key，改按点赞率排名（在「下载 → 账号与 Cookie」里填 key）")
-        rule = "ratio"
+        log("   没有 Last.fm API key，改按播放量排名（在「下载 → 账号与 Cookie」里填 key）")
+        rule = "views"
+    if rule == "replay":
+        progress(0, len(fresh), f"查 Last.fm 重播率（{len(fresh)} 首）")
+        pairs = [guess_artist_track(e) for e in fresh]
+        for e, (a, t), info in zip(fresh, pairs, lastfm_many(pairs, key)):
+            e["lastfm_query"] = f"{a} - {t}"
+            if info:
+                e.update(info)
     scored, unscored = [], []
-    for i, e in enumerate(fresh):
-        progress(i, len(fresh), f"补充数据 {i + 1}/{len(fresh)}：{e['title'][:40]}")
-        d = details(e["url"], cookies)
-        e.update(d)
-        if rule == "replay":
-            artist, track = guess_artist_track(d)
-            e["lastfm_query"] = f"{artist} - {track}"
-            r = lastfm(artist, track, key) if artist and track else None
-            if r:
-                e["listeners"], e["playcount"] = r
-        s = score(e, rule)
-        e["score"] = s
-        (scored if s is not None else unscored).append(e)
-        time.sleep(delay)   # 放慢一点，少触发网站限流
+    for e in fresh:
+        e["score"] = score(e, rule)
+        (scored if e["score"] is not None else unscored).append(e)
     scored.sort(key=lambda e: e["score"], reverse=True)
+    # 同一首歌的不同版本（音频、MV、歌词视频）在 Last.fm 上是同一曲目：只留排名最前的那个
+    seen, unique = set(), []
+    for e in scored:
+        key_name = (e.get("lastfm_name") or "").lower()
+        if key_name and key_name in seen:
+            continue
+        seen.add(key_name)
+        unique.append(e)
+    if len(unique) < len(scored):
+        log(f"   {len(scored) - len(unique)} 个是同一首歌的其他版本（MV、歌词视频等），只留一个")
+    scored = unique
     chosen = scored[:top] if top > 0 else scored
-    names = {"replay": "重播率", "ratio": "点赞率", "views": "播放量"}
+    names = {"replay": "重播率", "views": "播放量"}
     log(f"   按{names[rule]}排名，取前 {len(chosen)} 个：")
     for n, e in enumerate(scored[:max(len(chosen), 20)], 1):
         mark = "✓" if e in chosen else " "
-        extra = f"（听众 {fmt_count(e.get('listeners'))}，播放 {fmt_count(e.get('playcount'))}）" if rule == "replay" else ""
-        val = f"{e['score']:.2f}" if rule == "replay" else f"{e['score'] * 100:.2f}%" if rule == "ratio" else fmt_count(e["score"])
-        log(f"   {mark} {n:>3}. {names[rule]} {val}{extra}  点赞 {fmt_count(e.get('likes'))} / 播放 {fmt_count(e.get('views'))}  {e['title'][:60]}")
+        if rule == "replay":
+            extra = f"重播率 {e['score']:.1f}（听众 {fmt_count(e.get('listeners'))}，播放 {fmt_count(e.get('playcount'))}）"
+            album_name = f"  专辑《{e['lastfm_album']}》" if e.get("lastfm_album") else ""
+            tags = f"  [{', '.join(e.get('tags') or [])}]" if e.get("tags") else ""
+        else:
+            extra, album_name, tags = f"播放 {fmt_count(e['score'])}", "", ""
+        log(f"   {mark} {n:>3}. {extra}  {e['title'][:60]}{album_name}{tags}")
     if unscored:
-        log(f"   {len(unscored)} 个没有分数（数据缺失{'或 Last.fm 查不到' if rule == 'replay' else ''}），不参与排名：" +
+        log(f"   {len(unscored)} 个没有分数（{'Last.fm 查不到或听众太少' if rule == 'replay' else '列表里没有播放量'}），不参与排名：" +
             "；".join(e["title"][:30] for e in unscored[:10]) + ("…" if len(unscored) > 10 else ""))
     return title, chosen, rule
