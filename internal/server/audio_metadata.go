@@ -39,3 +39,21 @@ func (r *Router) handleAudioMetadata(w http.ResponseWriter, req *http.Request) {
 	}
 	writeJSON(w, 200, metadata)
 }
+
+// handleAudioLyrics 返回一首的歌词：带时间轴的按行给出秒数，纯文本的 time 为 -1。没有歌词时 lines 为空。
+func (r *Router) handleAudioLyrics(w http.ResponseWriter, req *http.Request) {
+	if !r.allowPath(w, req, req.URL.Query().Get("path")) {
+		return
+	}
+	metadata, err := r.readAudioMetadata(req, false)
+	if err != nil {
+		status := 422
+		if errors.Is(err, os.ErrNotExist) {
+			status = 404
+		}
+		http.Error(w, "audio metadata unavailable or invalid", status)
+		return
+	}
+	lyrics := audio.ParseLyrics(metadata.Lyrics)
+	writeJSON(w, 200, map[string]any{"status": metadata.LyricsStatus, "synced": lyrics.Synced, "lines": lyrics.Lines})
+}

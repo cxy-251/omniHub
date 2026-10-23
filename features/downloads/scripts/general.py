@@ -8,6 +8,7 @@
   x         gallery-dl → 图片 gallery/X/<用户>/（移入资源库时并进相册），视频 media_library/shortvideo/X/<用户>/
   other     按链接域名认平台（平台表见 OMNIHUB_PLATFORMS），视频 → media_library/shortvideo/<平台>/<作者>/
 每个文件旁边保存元数据（.info.json / .json），移入资源库时收进 .omni_data/download-meta，留给以后打分。
+音乐例外：封面、歌词、各项数据都写进音频文件，元数据合成批次里的一个 download-meta-<时间>.json。
 --archive 是这个资源库的「已下载」名单：下过的（包括在暂存区删掉的）不再下。
 Cookie 从 OMNIHUB_COOKIES_DIR/<平台>.txt 读，代理从 OMNIHUB_YTDLP_PROXY 读。
 进度与结果以 OMNIHUB_PROGRESS <完成> <总数> <说明>、OMNIHUB_RESULT <json> 行输出。
@@ -196,11 +197,12 @@ def lastfm_fields(info):
     return fields
 
 
-def write_tags(path, fields, genre=""):
-    """把自定义字段写进音频文件：风格写标准 GENRE 字段（多个用 ; 分隔），其余按格式写
+def write_tags(path, fields, genre="", lyrics=""):
+    """把自定义字段写进音频文件：风格写标准 GENRE 字段（多个用 ; 分隔），歌词写标准歌词字段
+    （Vorbis LYRICS、MP4 ©lyr、ID3 USLT；带时间轴的就是 LRC 文本），其余按格式写
     MP4 自由格式（----:com.apple.iTunes:键）、ID3 TXXX、Vorbis 注释（Opus、FLAC）。"""
     import mutagen
-    from mutagen.id3 import ID3, TCON, TXXX
+    from mutagen.id3 import ID3, TCON, TXXX, USLT
     from mutagen.mp4 import MP4, MP4FreeForm
     f = mutagen.File(path)
     if f is None:
@@ -211,6 +213,8 @@ def write_tags(path, fields, genre=""):
             f["\xa9gen"] = [genre]
         else:
             f.pop("\xa9gen", None)
+        if lyrics:
+            f["\xa9lyr"] = [lyrics]
         for k, v in fields.items():
             f["----:com.apple.iTunes:" + k] = [MP4FreeForm(v.encode())]
     elif isinstance(f.tags, ID3):
@@ -218,6 +222,9 @@ def write_tags(path, fields, genre=""):
             f.tags.add(TCON(encoding=3, text=[genre]))
         else:
             f.tags.delall("TCON")
+        if lyrics:
+            f.tags.delall("USLT")
+            f.tags.add(USLT(encoding=3, lang="XXX", desc="", text=lyrics))
         for k, v in fields.items():
             f.tags.add(TXXX(encoding=3, desc=k, text=[v]))
     else:   # Opus、Vorbis、FLAC：Vorbis 注释
@@ -227,16 +234,26 @@ def write_tags(path, fields, genre=""):
             f.tags["GENRE"] = genre
         elif "GENRE" in f.tags:
             del f.tags["GENRE"]
+        if lyrics:
+            f.tags["LYRICS"] = lyrics
         for k, v in fields.items():
             f.tags[k] = v
     f.save()
     return True
 
 
-def enrich_music(files, known):
-    """音乐下完后给每首写标签，不做筛选：来源网站的播放数、点赞数、发布日期、下载日期、原链接，
-    加上 Last.fm 的风格、听众、总播放、重播率（按 .info.json 里的标题、艺人、频道查；排名时查过的直接用；没有 key 时只写来源数据）。
-    Last.fm 信息也存进 .info.json（键 lastfm）。播放时显示。"""
+# .info.json 里体积大、以后用不上的部分（格式列表、缩略图列表、字幕链接等）
+META_DROP = ("formats", "requested_formats", "requested_downloads", "thumbnails", "automatic_captions", "subtitles",
+             "heatmap", "http_headers", "_format_sort_fields", "fragments", "_version")
+
+
+def enrich_music(files, known, batch):
+    """音乐下完后给每首写标签，不做筛选：
+      来源网站的播放数、点赞数、发布日期、下载日期、原链接；
+      Last.fm 的风格、听众、总播放、重播率、专辑（按 .info.json 里的标题、艺人、频道查；排名时查过的直接用；没有 key 跳过）；
+      歌词（LRCLIB，优先带时间轴）和歌词状态 LYRICS_STATUS。
+    封面 yt-dlp 已嵌进文件。每首的 .info.json 精简后合成批次里的一个 download-meta-<时间>.json，单个的删掉，不留一堆小文件。"""
+    import lyrics
     import rank
     key = os.environ.get("OMNIHUB_LASTFM_KEY", "")
     audio = [f for f in files if not f.endswith(".json") and os.path.isfile(f)]
@@ -254,27 +271,50 @@ def enrich_music(files, known):
                                               "track": meta.get("track"), "uploader": meta.get("channel") or meta.get("uploader") or ""}))
     todo = [i for i, (_, m) in enumerate(metas) if m.get("id") not in known] if key else []
     if todo:
-        progress(0, len(todo), f"查 Last.fm（{len(todo)} 首）")
+        progress(0, len(audio), f"查 Last.fm（{len(todo)} 首）")
     looked = dict(zip(todo, rank.lastfm_many([pairs[i] for i in todo], key))) if todo else {}
-    tagged, with_lastfm = 0, 0
-    for i, f in enumerate(audio):
-        meta_path, meta = metas[i]
-        info = known.get(meta.get("id")) or looked.get(i)
+    infos = [known.get(m.get("id")) or looked.get(i) for i, (_, m) in enumerate(metas)]
+
+    # 歌词：先用 Last.fm 纠正过的艺人与曲名，再用从标题拆的
+    progress(0, len(audio), f"查歌词（{len(audio)} 首）")
+    queries = []
+    for (_, meta), pair, info in zip(metas, pairs, infos):
+        names = [(info.get("lastfm_artist"), info.get("lastfm_track"))] if info else []
+        queries.append((names + [pair], meta.get("duration")))
+    found = lyrics.find_many(queries)
+
+    tagged, with_lastfm, records = 0, 0, []
+    counts = dict.fromkeys(("synced", "plain", "instrumental", "none", "error"), 0)
+    for f, (meta_path, meta), info, lyr in zip(audio, metas, infos, found):
         fields = source_fields(meta)
         if info:
             fields.update(lastfm_fields(info))
             with_lastfm += 1
+        fields["LYRICS_STATUS"] = lyr["status"]
+        if lyr["match"]:
+            fields["LYRICS_MATCH"] = lyr["match"]
+        counts[lyr["status"]] += 1
         try:
-            if write_tags(f, fields, "; ".join((info or {}).get("tags") or [])):
+            if write_tags(f, fields, "; ".join((info or {}).get("tags") or []), lyr["text"]):
                 tagged += 1
         except Exception as e:
             log(f"写入标签失败 {os.path.basename(f)}：{e}")
-        if info and os.path.isfile(meta_path):
-            meta["lastfm"] = {k: info.get(k) for k in ("listeners", "playcount", "lastfm_album", "tags", "lastfm_name")}
-            with open(meta_path, "w", encoding="utf-8") as fh:
-                json.dump(meta, fh, ensure_ascii=False)
+        if meta:
+            rec = {k: v for k, v in meta.items() if k not in META_DROP}
+            rec["omnihub_file"] = os.path.relpath(f, batch)
+            if info:
+                rec["lastfm"] = {k: info.get(k) for k in ("listeners", "playcount", "lastfm_album", "tags", "lastfm_name")}
+            rec["lyrics_status"], rec["lyrics_match"] = lyr["status"], lyr["match"]
+            records.append(rec)
+        if os.path.isfile(meta_path):
+            os.remove(meta_path)
+    if records:
+        with open(os.path.join(batch, time.strftime("download-meta-%Y%m%d-%H%M%S.json")), "w", encoding="utf-8") as fh:
+            json.dump(records, fh, ensure_ascii=False)
     log(f"标签已写进 {tagged}/{len(audio)} 首（播放、点赞、发布日期、下载日期）；其中 {with_lastfm} 首有 Last.fm 信息"
         + ("" if key else "（没有 Last.fm API key，跳过）"))
+    log(f"歌词：带时间轴 {counts['synced']}，只有纯文本 {counts['plain']}，纯音乐 {counts['instrumental']}，"
+        f"查不到 {counts['none']}，查询失败 {counts['error']}（状态写在标签 LYRICS_STATUS 里，可在音声里筛出来）")
 
 
 def ranked(a):
@@ -352,7 +392,7 @@ def main():
             (p for p in PLATFORMS if p["id"] == SCHEME_PLATFORM[a.scheme]), platform_of(a.urls[0]))
         files, skipped, errors = ytdlp(a.urls, a, platform)
     if a.scheme == "music":
-        enrich_music(files, a.lastfm_known)
+        enrich_music(files, a.lastfm_known, a.batch)
     progress(len(a.urls), len(a.urls), f"完成：新下载 {len(files)} 个文件，跳过已下载 {skipped} 个，出错 {errors} 个")
     for h in sorted(hints):
         log("提示：" + h)

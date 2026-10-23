@@ -33,6 +33,11 @@ type Metadata struct {
 	SourceURL    string `json:"source_url,omitempty"`
 	ReleaseDate  string `json:"release_date,omitempty"`
 	DownloadDate string `json:"download_date,omitempty"`
+	// 歌词状态（LYRICS_STATUS）：synced 带时间轴、plain 纯文本、instrumental 纯音乐、none 查不到、error 查询失败；
+	// 空表示没查过。歌词正文（LRC 或纯文本）不随元数据返回，由 /api/media/audio/lyrics 单独取
+	LyricsStatus string `json:"lyrics_status,omitempty"`
+	LyricsMatch  string `json:"lyrics_match,omitempty"` // exact 精确对上 / search 搜索来的（待核对）
+	Lyrics       string `json:"-"`
 	Picture      []byte `json:"-"`
 	pictureFront bool
 }
@@ -137,7 +142,14 @@ func latinText(data []byte) string {
 	return strings.TrimSpace(string(runes))
 }
 
+// lyricsLimit 是歌词正文的上限（其他文本标签 4096 字节）。
+const lyricsLimit = 64 << 10
+
 func textTag(data []byte, encoding byte) (string, error) {
+	return textTagLimit(data, encoding, 4096)
+}
+
+func textTagLimit(data []byte, encoding byte, limit int) (string, error) {
 	var value string
 	switch encoding {
 	case 0:
@@ -172,7 +184,7 @@ func textTag(data []byte, encoding byte) (string, error) {
 		return "", errors.New("unsupported audio text encoding")
 	}
 	value = strings.TrimSpace(strings.SplitN(value, "\x00", 2)[0])
-	if len(value) > 4096 {
+	if len(value) > limit {
 		return "", ErrMetadataCapacity
 	}
 	return value, nil
@@ -279,7 +291,7 @@ func (r *tagInput) id3(header []byte, result *Metadata) error {
 		}
 		data = data[width+length:]
 		switch id {
-		case "TIT2", "TT2", "TPE1", "TP1", "TALB", "TAL", "APIC", "PIC", "TCON", "TCO", "TXXX", "TXX":
+		case "TIT2", "TT2", "TPE1", "TP1", "TALB", "TAL", "APIC", "PIC", "TCON", "TCO", "TXXX", "TXX", "USLT", "ULT":
 		default:
 			continue
 		}
@@ -311,6 +323,16 @@ func (r *tagInput) id3(header []byte, result *Metadata) error {
 			}
 			if len(result.Picture) == 0 {
 				result.Picture = picture
+			}
+			continue
+		}
+		if id == "USLT" || id == "ULT" { // 编码、3 字节语言、描述\0歌词
+			if len(frame) > 4 {
+				if _, v, ok := splitTXXX(frame[4:], frame[0]); ok {
+					if text, err := textTagLimit(v, frame[0], lyricsLimit); err == nil && result.Lyrics == "" {
+						result.Lyrics = text
+					}
+				}
 			}
 			continue
 		}
@@ -434,7 +456,7 @@ func (r *tagInput) mp4(start, end int64, depth int, item string, result *Metadat
 				return io.ErrUnexpectedEOF
 			}
 			err = r.mp4(body+4, next, depth+1, "", result)
-		case "\xa9nam", "\xa9ART", "aART", "\xa9alb", "\xa9gen", "covr":
+		case "\xa9nam", "\xa9ART", "aART", "\xa9alb", "\xa9gen", "\xa9lyr", "covr":
 			err = r.mp4(body, next, depth+1, kind, result)
 		case "----": // 自由格式：mean / name / data 三个子盒
 			err = r.mp4Freeform(body, next, result)
@@ -464,7 +486,11 @@ func (r *tagInput) mp4(start, end int64, depth int, item string, result *Metadat
 					if dataType == 2 {
 						encoding = 2
 					}
-					value, e := textTag(data[8:], encoding)
+					limit := 4096
+					if item == "\xa9lyr" {
+						limit = lyricsLimit
+					}
+					value, e := textTagLimit(data[8:], encoding, limit)
 					if e != nil {
 						return e
 					}
@@ -479,6 +505,8 @@ func (r *tagInput) mp4(start, end int64, depth int, item string, result *Metadat
 						result.Album = value
 					case "\xa9gen":
 						extraTag("GENRE", value, result)
+					case "\xa9lyr":
+						result.Lyrics = value
 					}
 				}
 			}
@@ -520,6 +548,10 @@ func extraTag(key, value string, result *Metadata) {
 		result.ReleaseDate = value
 	case "DOWNLOAD_DATE":
 		result.DownloadDate = value
+	case "LYRICS_STATUS":
+		result.LyricsStatus = value
+	case "LYRICS_MATCH":
+		result.LyricsMatch = value
 	}
 }
 

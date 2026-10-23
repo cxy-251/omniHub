@@ -27,6 +27,7 @@ var SupportedExtensions = map[string]bool{
 	".flac": true,
 	".wav":  true,
 	".ogg":  true,
+	".opus": true, // 下载的音乐（YouTube 最好的音轨）多是 Opus
 }
 
 // ErrInvalidProgress 表示账号、音轨标识或断点数值不符合存储边界。

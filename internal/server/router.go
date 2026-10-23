@@ -314,6 +314,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/audio/stream", r.handleAudioStream)
 	r.mux.HandleFunc("/api/media/audio/cover", r.handleAudioCover)
 	r.mux.HandleFunc("/api/media/audio/metadata", r.handleAudioMetadata)
+	r.mux.HandleFunc("/api/media/audio/lyrics", r.handleAudioLyrics)
 	r.mux.HandleFunc("/api/media/audio/progress", r.handleAudioProgress)
 	r.mux.HandleFunc("/api/media/audio/tracks", r.handleAudioTracks)
 	r.mux.HandleFunc("/api/media/audio/recent", r.handleAudioRecent)
@@ -752,7 +753,9 @@ func (r *Router) handleAudioStream(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "audio file unavailable", 404)
 		return
 	}
-
+	if strings.EqualFold(filepath.Ext(fullPath), ".opus") { // 系统 MIME 表常没有 .opus
+		w.Header().Set("Content-Type", "audio/ogg; codecs=opus")
+	}
 	http.ServeFile(w, req, fullPath)
 }
 

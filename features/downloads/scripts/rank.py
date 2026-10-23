@@ -146,7 +146,8 @@ def lastfm_info(artist, track, key):
         return None
     tags = [x.get("name") for x in (t.get("toptags") or {}).get("tag") or [] if x.get("name")][:4]
     return {"listeners": listeners, "playcount": playcount, "lastfm_album": (t.get("album") or {}).get("title"),
-            "tags": tags, "lastfm_name": f"{(t.get('artist') or {}).get('name', '')} - {t.get('name', '')}"}
+            "tags": tags, "lastfm_name": f"{(t.get('artist') or {}).get('name', '')} - {t.get('name', '')}",
+            "lastfm_artist": (t.get("artist") or {}).get("name", ""), "lastfm_track": t.get("name", "")}
 
 
 def score(d, rule):

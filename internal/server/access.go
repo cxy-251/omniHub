@@ -99,7 +99,7 @@ func bufferedMediaRead(path string) bool {
 		return true
 	}
 	switch path {
-	case "/api/media/audio/metadata", "/api/media/audio/cover":
+	case "/api/media/audio/metadata", "/api/media/audio/cover", "/api/media/audio/lyrics":
 		return true
 	case "/api/media/gallery/original", "/api/media/gallery/thumbnail",
 		"/api/media/shortvideo/album/image", "/api/media/shortvideo/thumbnail",

@@ -77,8 +77,12 @@ func vorbisComments(data []byte, result *Metadata, format string) error {
 				}
 			}
 		case "GENRE", "LASTFM_LISTENERS", "LASTFM_PLAYCOUNT", "LASTFM_REPLAY", "LASTFM_ALBUM",
-			"SOURCE_VIEWS", "SOURCE_LIKES", "SOURCE_URL", "RELEASE_DATE", "DOWNLOAD_DATE":
+			"SOURCE_VIEWS", "SOURCE_LIKES", "SOURCE_URL", "RELEASE_DATE", "DOWNLOAD_DATE", "LYRICS_STATUS", "LYRICS_MATCH":
 			extraTag(key, value, result)
+		case "LYRICS", "UNSYNCEDLYRICS":
+			if len(value) <= lyricsLimit && result.Lyrics == "" {
+				result.Lyrics = strings.TrimSpace(value)
+			}
 		case "METADATA_BLOCK_PICTURE":
 			picture, err := base64.StdEncoding.DecodeString(value)
 			if err != nil {

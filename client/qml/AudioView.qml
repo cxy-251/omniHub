@@ -17,6 +17,8 @@ Item {
     readonly property var selected: albums.find(function (a) { return a.id === prefs.album }) || null
 
     Settings { id: prefs; category: "audioView"; property string album: ""; property string query: "" }
+    property bool unsyncedOnly: false   // 只看没有带时间轴歌词的（以后单独补）
+    readonly property var lyricStatusText: ({plain: "只有纯文本歌词", search: "歌词是搜索来的，待核对", none: "查不到歌词", error: "歌词查询失败", unknown: "没查过歌词"})
     ApiClient { id: api; onErrorChanged: view.error = error }
 
     function refresh() {
@@ -73,7 +75,7 @@ Item {
     PagedModel {
         id: paged
         pageSize: 100
-        endpoint: view.selected ? "/api/media/audio/tracks?path=" + encodeURIComponent(view.selected.id) + (prefs.query ? "&q=" + encodeURIComponent(prefs.query) : "") : ""
+        endpoint: view.selected ? "/api/media/audio/tracks?path=" + encodeURIComponent(view.selected.id) + (prefs.query ? "&q=" + encodeURIComponent(prefs.query) : "") + (view.unsyncedOnly ? "&lyrics=unsynced" : "") : ""
     }
 
     RowLayout {
@@ -175,6 +177,7 @@ Item {
                     }
                 }
                 Item { Layout.fillWidth: true }
+                Chip { text: "歌词待处理"; selected: view.unsyncedOnly; visible: !!view.selected; onClicked: view.unsyncedOnly = !view.unsyncedOnly }
                 TextField {
                     Layout.preferredWidth: 220
                     implicitHeight: 30
@@ -216,6 +219,11 @@ Item {
                             Rectangle { height: parent.height; radius: parent.radius; color: row.done ? "#3fb950" : "#58a6ff"; width: row.t && row.t.duration > 0 ? parent.width * Math.min(1, row.t.offset / row.t.duration) : 0 }
                         }
                         Label {
+                            visible: !!(row.t && row.t.lyrics_status)
+                            text: row.t && row.t.lyrics_status ? view.lyricStatusText[row.t.lyrics_status] || row.t.lyrics_status : ""
+                            color: "#e3b341"; font.pixelSize: 11
+                        }
+                        Label {
                             Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight
                             color: "#8b949e"; font.pixelSize: 11
                             text: !row.t ? "" : row.done ? "已听完" : row.t.offset > 0 ? "听到 " + view.engine.formatTime(row.t.offset) : ""
@@ -225,6 +233,45 @@ Item {
                 }
             }
             Label { visible: paged.error !== ""; text: paged.error; color: "#f85149" }
+        }
+
+        // 歌词：正在播放的那首；带时间轴的跟着进度高亮、滚动，纯文本的整段显示
+        Rectangle {
+            Layout.preferredWidth: 320
+            Layout.fillHeight: true
+            visible: view.engine.lyrics.lines.length > 0
+            color: "#0d1117"
+            Rectangle { anchors.left: parent.left; width: 1; height: parent.height; color: "#30363d" }
+            Label {
+                id: lyricHead
+                anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10
+                elide: Text.ElideRight; color: "#8b949e"; font.pixelSize: 12
+                text: (view.engine.track ? view.engine.track.title : "") + (view.engine.lyrics.synced ? "" : "（纯文本歌词）")
+            }
+            ListView {
+                id: lyricList
+                anchors.fill: parent; anchors.topMargin: lyricHead.height + 18; anchors.leftMargin: 12; anchors.rightMargin: 8; anchors.bottomMargin: 8
+                clip: true
+                spacing: 6
+                model: view.engine.lyrics.lines
+                WheelScroll { }
+                ScrollBar.vertical: ScrollBar {}
+                // 手动滚动后 4 秒内不自动跟随
+                property double userScrolled: 0
+                onMovementStarted: userScrolled = Date.now()
+                readonly property int current: view.engine.lyricIndex
+                onCurrentChanged: if (current >= 0 && Date.now() - userScrolled > 4000) positionViewAtIndex(current, ListView.Center)
+                delegate: Label {
+                    required property var modelData
+                    required property int index
+                    width: lyricList.width - 10
+                    wrapMode: Text.Wrap
+                    text: modelData.text || " "
+                    font.pixelSize: index === view.engine.lyricIndex ? 15 : 13
+                    color: !view.engine.lyrics.synced ? "#c9d1d9" : index === view.engine.lyricIndex ? "#58a6ff" : "#8b949e"
+                    TapHandler { enabled: view.engine.lyrics.synced; onTapped: view.engine.player.position = modelData.time }
+                }
+            }
         }
     }
 }

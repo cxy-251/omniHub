@@ -5,7 +5,7 @@ import { chip, iconButton, store, stored } from './ui';
 // 音声播放引擎（全局一份，切换页面不中断；与桌面端同一套断点接口）。
 // 断点按账号存服务端：听了不到 3 秒不记，离结尾不到 5 秒算听完。分集按专辑内序号向服务端逐条取。
 // 模式：list 列表循环 / single 单集循环 / random 随机。浏览器的 Media Session 接入锁屏与耳机按键（手机上有用）。
-export type Track = { index: number; title: string; id: string; ext: string; offset: number; duration: number };
+export type Track = { index: number; title: string; id: string; ext: string; offset: number; duration: number; lyrics_status?: string };
 type Mode = 'list' | 'single' | 'random';
 const speeds = [1, 1.25, 1.5, 1.75, 2, 0.75];
 const sleepChoices = [0, 15, 30, 45, 60];

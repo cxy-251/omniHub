@@ -22,9 +22,20 @@ Item {
     // 当前曲目的标签：艺人、专辑、风格，以及下载音乐时写进去的 Last.fm 听众、播放、重播率
     property var tags: ({})
     ApiClient { id: tagApi }
+    // 当前曲目的歌词：{synced, lines: [{time, text}]}，纯文本的 time 为 -1；lyricIndex 是正在唱的那一行（带时间轴时）
+    property var lyrics: ({synced: false, lines: []})
+    readonly property int lyricIndex: {
+        if (!lyrics.synced) return -1
+        var t = mpv.position, i = -1
+        for (var k = 0; k < lyrics.lines.length && lyrics.lines[k].time <= t + 0.2; k++) i = k
+        return i
+    }
     onTrackChanged: {
         tags = {}
-        if (track) tagApi.getJSON("/api/media/audio/metadata?path=" + encodeURIComponent(track.id), function (r) { engine.tags = r || {} })
+        lyrics = {synced: false, lines: []}
+        if (!track) return
+        tagApi.getJSON("/api/media/audio/metadata?path=" + encodeURIComponent(track.id), function (r) { engine.tags = r || {} })
+        tagApi.getJSON("/api/media/audio/lyrics?path=" + encodeURIComponent(track.id), function (r) { engine.lyrics = r && r.lines ? r : {synced: false, lines: []} })
     }
     // 播放条第二行：艺人 · 风格 · 重播率（没有这些信息时为空）
     readonly property string tagLine: [tags.artist || "", tags.genre ? tags.genre.split(";").slice(0, 3).join(" · ").trim() : "",

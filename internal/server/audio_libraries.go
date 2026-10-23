@@ -136,6 +136,8 @@ type audioTrackOut struct {
 	Ext      string  `json:"ext"`
 	Offset   float64 `json:"offset"`
 	Duration float64 `json:"duration"`
+	// 只在按歌词筛选（lyrics=unsynced）时给出
+	LyricsStatus string `json:"lyrics_status,omitempty"`
 }
 
 // handleAudioTracks 分页列出专辑分集（自然序），q 按标题筛选；带当前账号的断点。X-Total-Count 为筛选后的总数。
@@ -169,6 +171,29 @@ func (r *Router) handleAudioTracks(w http.ResponseWriter, req *http.Request) {
 		}
 		tracks = filtered
 	}
+	// lyrics=unsynced：只留要单独处理的（纯文本、查不到、查询失败、没查过、搜索来的待核对；纯音乐不算），要读每首的标签（有缓存）
+	statuses := map[*audio.Track]string{}
+	if req.URL.Query().Get("lyrics") == "unsynced" {
+		filtered := tracks[:0]
+		for _, t := range tracks {
+			meta, err := r.audioMetadata.Get(req.Context(), filepath.Join(fullPath, filepath.FromSlash(t.Filename)), false)
+			status := meta.LyricsStatus
+			if err == nil && status == "" && meta.Lyrics != "" {
+				status = map[bool]string{true: "synced", false: "plain"}[audio.ParseLyrics(meta.Lyrics).Synced]
+			}
+			if status == "synced" && meta.LyricsMatch == "search" {
+				status = "search" // 搜索来的带时间轴歌词，待核对
+			}
+			if status != "synced" && status != "instrumental" {
+				if status == "" {
+					status = "unknown"
+				}
+				statuses[t] = status
+				filtered = append(filtered, t)
+			}
+		}
+		tracks = filtered
+	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(len(tracks)))
 	page := tracks[min(offset, len(tracks)):min(offset+limit, len(tracks))]
 	base := strings.TrimSuffix(relPath, "/")
@@ -177,7 +202,7 @@ func (r *Router) handleAudioTracks(w http.ResponseWriter, req *http.Request) {
 	for _, t := range page {
 		id := base + "/" + t.Filename
 		ids = append(ids, id)
-		out = append(out, audioTrackOut{Index: t.Index, Title: t.Title, ID: id, Ext: t.Ext})
+		out = append(out, audioTrackOut{Index: t.Index, Title: t.Title, ID: id, Ext: t.Ext, LyricsStatus: statuses[t]})
 	}
 	if r.progressDB != nil {
 		if progress, err := r.progressDB.ProgressFor(auth.UserFromContext(req.Context()).ID, ids); err == nil {
@@ -241,4 +266,3 @@ func (r *Router) handleAudioRecent(w http.ResponseWriter, req *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, out)
 }
-
