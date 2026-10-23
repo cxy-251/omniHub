@@ -23,6 +23,13 @@ ColumnLayout {
     property var picked: ({})           // "组号:条目号" → true
     property string sortBy: "order"     // order | date | views | likes | ratio
     property var analysis: ({items: []})
+    // 补充数据（读完列表后逐个读：播放、点赞、日期、艺人、专辑；音乐再加 Last.fm 重播率与标签），按链接存
+    property var info: ({})
+    property var detailQueue: []
+    property bool detailing: false
+    property int detailDone: 0
+    property int detailTotal: 0
+    property string detailError: ""
 
     function field(name) { return kind.fields.find(function (f) { return f.name === name }) || null }
     function set(name, value) { var v = Object.assign({}, values); v[name] = value; values = v }
@@ -30,6 +37,7 @@ ColumnLayout {
         var v = {}
         kind.fields.forEach(function (f) { if (f.default !== undefined) v[f.name] = f.default })
         values = v; input = ""; groups = []; picked = ({}); probingIndex = -1; analysis = {items: []}
+        info = ({}); detailQueue = []; detailing = false; detailError = ""
     }
     onKindChanged: reset()
     Component.onCompleted: reset()
@@ -41,7 +49,7 @@ ColumnLayout {
         readNext(0)
     }
     function readNext(i) {
-        if (i >= lines.length) { probingIndex = -1; return }
+        if (i >= lines.length) { probingIndex = -1; startDetails(); return }
         probingIndex = i
         var url = lines[i]
         api.error = ""   // 连续两个链接报同样的错时，第二次也要触发 onErrorChanged
@@ -62,6 +70,7 @@ ColumnLayout {
     Connections {
         target: api
         function onErrorChanged() {
+            if (api.error && panel.detailing) { panel.detailing = false; panel.detailError = api.error; return }
             if (!api.error || panel.probingIndex < 0) return
             var g = panel.groups.slice()
             g.push({url: panel.lines[panel.probingIndex], title: "", uploader: "", entries: [], error: api.error})
@@ -70,16 +79,46 @@ ColumnLayout {
         }
     }
 
+    // 补充数据：每次 8 个，一批读完再发下一批；可以中途停止
+    function startDetails() {
+        var q = []
+        groups.forEach(function (grp) { grp.entries.forEach(function (e) { if (!panel.info[e.url]) q.push(e.url) }) })
+        detailQueue = q; detailDone = 0; detailTotal = q.length; detailError = ""
+        detailing = q.length > 0
+        if (detailing) nextDetails()
+    }
+    function nextDetails() {
+        if (!detailing || detailQueue.length === 0) { detailing = false; return }
+        var batch = detailQueue.slice(0, 8)
+        detailQueue = detailQueue.slice(8)
+        api.error = ""
+        api.send("POST", "/api/downloads/details", {urls: batch, scheme: kind.id}, function (r) {
+            var m = Object.assign({}, panel.info)
+            r.forEach(function (d) { m[d.url] = d })
+            panel.info = m
+            panel.detailDone += batch.length
+            panel.nextDetails()
+        })
+    }
+    // 条目 + 补充的数据
+    function full(e) { var d = info[e.url]; return d ? Object.assign({}, e, d, {title: e.title || d.title}) : e }
+
     // 显示用的行：每组一个标题行 + 该组条目（组内排序）
     readonly property var rows: {
         var out = []
-        var ratio = function (e) { return e.views ? (e.likes || 0) / e.views : 0 }
-        var keys = {views: function (x) { return x.e.views || 0 }, likes: function (x) { return x.e.likes || 0 },
-                    ratio: function (x) { return ratio(x.e) }, date: function (x) { return x.e.date || "" }}
+        var ratio = function (e) { return e.views ? (e.likes || 0) / e.views : -1 }
+        var keys = {views: function (x) { return x.e.views || -1 }, likes: function (x) { return x.e.likes || -1 },
+                    ratio: function (x) { return ratio(x.e) }, date: function (x) { return x.e.date || "" },
+                    replay: function (x) { return x.e.replay || -1 }}
         groups.forEach(function (grp, g) {
             out.push({header: true, g: g, grp: grp})
-            var list = grp.entries.map(function (e, i) { return {e: e, i: i, g: g} })
+            var list = grp.entries.map(function (e, i) { return {e: panel.full(e), i: i, g: g} })
             if (keys[sortBy]) list.sort(function (a, b) { var ka = keys[sortBy](a), kb = keys[sortBy](b); return ka < kb ? 1 : ka > kb ? -1 : a.i - b.i })
+            // 按专辑：同一张专辑的排在一起（专辑名先取 YouTube 的，没有再用 Last.fm 的），没有专辑的放最后
+            if (sortBy === "album") {
+                var alb = function (x) { return x.e.album || x.e.lastfm_album || "\uffff" }
+                list.sort(function (a, b) { var ka = alb(a), kb = alb(b); return ka < kb ? -1 : ka > kb ? 1 : a.i - b.i })
+            }
             out = out.concat(list)
         })
         return out
@@ -274,9 +313,24 @@ ColumnLayout {
         Divider {}
         Label { text: "排序"; color: "#8b949e"; font.pixelSize: 12 }
         Repeater {
-            model: [["order", "原顺序"], ["date", "最新"], ["views", "播放量"], ["likes", "点赞"], ["ratio", "点赞率"]]
+            model: (panel.kind.id === "music" ? [["replay", "重播率"]] : []).concat([["ratio", "点赞率"], ["views", "播放量"], ["date", "最新"], ["album", "按专辑"], ["order", "原顺序"]])
             delegate: Chip { required property var modelData; text: modelData[1]; selected: panel.sortBy === modelData[0]; onClicked: panel.sortBy = modelData[0] }
         }
+    }
+    // 补充数据的进度
+    RowLayout {
+        visible: panel.groups.length > 0 && (panel.detailing || panel.detailError !== "" || panel.detailDone < panel.detailTotal)
+        Layout.fillWidth: true
+        spacing: 6
+        BusyIndicator { running: panel.detailing; visible: running; implicitWidth: 22; implicitHeight: 22 }
+        ProgressBar { Layout.preferredWidth: 200; from: 0; to: Math.max(1, panel.detailTotal); value: panel.detailDone }
+        Label {
+            Layout.fillWidth: true; elide: Text.ElideRight; font.pixelSize: 12
+            color: panel.detailError ? "#f85149" : "#8b949e"
+            text: panel.detailError ? "补充数据停了：" + panel.detailError
+                : "正在补充数据 " + panel.detailDone + "/" + panel.detailTotal + "（播放、点赞、专辑" + (panel.kind.id === "music" ? "、Last.fm 重播率与风格" : "") + "；每首约 3 秒，可以边看边勾）"
+        }
+        Chip { text: panel.detailing ? "停止" : "继续"; onClicked: { if (panel.detailing) panel.detailing = false; else { panel.detailing = true; panel.detailError = ""; panel.nextDetails() } } }
     }
     ListView {
         visible: panel.groups.length > 0
@@ -289,7 +343,7 @@ ColumnLayout {
         delegate: Item {
             required property var modelData
             width: ListView.view.width
-            height: modelData.header ? 30 : 28
+            height: modelData.header ? 30 : 44
             Label {
                 visible: !!modelData.header
                 anchors.fill: parent; verticalAlignment: Text.AlignVCenter
@@ -308,12 +362,34 @@ ColumnLayout {
                     onToggled: panel.toggle(modelData.g + ":" + modelData.i, checked)
                 }
                 Label { text: modelData.header ? "" : modelData.i + 1; color: "#6e7681"; font.pixelSize: 11; Layout.preferredWidth: 30 }
-                Label { text: modelData.header ? "" : modelData.e.title; color: !modelData.header && modelData.e.downloaded ? "#6e7681" : "#e6edf3"; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
-                Label { visible: !modelData.header && modelData.e.downloaded; text: "已下载"; color: "#3fb950"; font.pixelSize: 11 }
+                // 两行：歌名（+ 风格标签）／艺人 · 专辑 · 年份
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 0
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Label { text: modelData.header ? "" : modelData.e.title; color: !modelData.header && modelData.e.downloaded ? "#6e7681" : "#e6edf3"; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Label { visible: !modelData.header && !!modelData.e.tags && modelData.e.tags.length > 0; text: !modelData.header && modelData.e.tags ? modelData.e.tags.slice(0, 3).join(" · ") : ""; color: "#a371f7"; font.pixelSize: 10 }
+                        Label { visible: !modelData.header && modelData.e.downloaded; text: "已下载"; color: "#3fb950"; font.pixelSize: 11 }
+                    }
+                    Label {
+                        Layout.fillWidth: true; elide: Text.ElideRight; font.pixelSize: 11; color: "#8b949e"
+                        text: modelData.header ? "" : [modelData.e.artist || modelData.e.uploader || "", (modelData.e.album || modelData.e.lastfm_album) ? "专辑《" + (modelData.e.album || modelData.e.lastfm_album) + "》" : "", modelData.e.year || ""].filter(function (x) { return x }).join(" · ")
+                    }
+                }
                 Label { text: modelData.header ? "" : panel.duration(modelData.e.duration); color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 50; horizontalAlignment: Text.AlignRight }
-                Label { text: !modelData.header && modelData.e.date ? modelData.e.date.slice(0, 4) + "-" + modelData.e.date.slice(4, 6) + "-" + modelData.e.date.slice(6) : ""; color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 72 }
+
                 Label { text: !modelData.header && modelData.e.views ? "▶ " + panel.count(modelData.e.views) : ""; color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 64 }
-                Label { text: !modelData.header && modelData.e.likes ? "♥ " + panel.count(modelData.e.likes) + (modelData.e.views ? " · " + (modelData.e.likes / modelData.e.views * 100).toFixed(1) + "%" : "") : ""; color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 110 }
+                Label { text: !modelData.header && modelData.e.likes && modelData.e.views ? "♥ " + (modelData.e.likes / modelData.e.views * 100).toFixed(1) + "%" : ""; color: "#8b949e"; font.pixelSize: 11; Layout.preferredWidth: 56 }
+                Label {
+                    visible: panel.kind.id === "music"
+                    text: !modelData.header && modelData.e.replay ? "重播 " + modelData.e.replay.toFixed(1) : (!modelData.header && panel.info[modelData.e.url] ? "—" : "")
+                    color: !modelData.header && modelData.e.replay >= 10 ? "#3fb950" : "#c9d1d9"; font.pixelSize: 11; Layout.preferredWidth: 64
+                    ToolTip.visible: replayHover.hovered && !modelData.header && !!modelData.e.listeners
+                    ToolTip.text: !modelData.header && modelData.e.listeners ? "Last.fm：" + (modelData.e.lastfm_name || "") + "\n听众 " + panel.count(modelData.e.listeners) + "，播放 " + panel.count(modelData.e.playcount) + "\n听过的人平均听 " + modelData.e.replay.toFixed(1) + " 遍" : ""
+                    HoverHandler { id: replayHover }
+                }
             }
         }
     }

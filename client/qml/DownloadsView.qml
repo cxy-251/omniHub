@@ -5,7 +5,7 @@ import QtQuick.Dialogs
 import QtCore
 
 // 下载页：MEGA 与各种脚本任务（有声书、漫画……，由服务端声明，表单自动生成）。
-// 右栏是任务卡片：进度、当前步骤、结果，以及「去收听」「打开文件夹」「停止」「日志」。
+// 任务卡片在右侧的悬浮面板里（可收起）：进度、当前步骤、结果，以及「去收听」「打开文件夹」「停止」「日志」。
 Item {
     id: view
     signal openAudioAlbum(string album)
@@ -15,6 +15,8 @@ Item {
     property var settings: ({})
     property string message: ""
     property bool messageIsError: false
+    property bool showTasks: false
+    readonly property int runningJobs: jobs.filter(function (j) { return j.running }).length
     readonly property var currentKind: kinds.find(function (k) { return k.id === prefs.tab }) || null
 
     Settings { id: prefs; category: "downloads"; property string tab: "mega" }
@@ -30,7 +32,7 @@ Item {
     function refreshJobs() { api.getJSON("/api/downloads/jobs", function (list) { view.jobs = list }) }
     function run(kind, params) {
         say("正在启动…", false)
-        api.send("POST", "/api/downloads/run", {kind: kind, params: params}, function () { view.say("已开始，进度见右边", false); view.refreshJobs() })
+        api.send("POST", "/api/downloads/run", {kind: kind, params: params}, function () { view.say("已开始，进度在「任务」里", false); view.showTasks = true; view.refreshJobs() })
     }
     Component.onCompleted: refresh()
     Timer { interval: 2000; repeat: true; running: view.jobs.some(function (j) { return j.running }); onTriggered: view.refreshJobs() }
@@ -63,6 +65,11 @@ Item {
             Chip { text: "MEGA"; selected: prefs.tab === "mega"; onClicked: prefs.tab = "mega" }
             Item { Layout.fillWidth: true }
             Chip { text: "网络设置"; visible: prefs.tab === "audiobook"; selected: netBox.visible; onClicked: netBox.visible = !netBox.visible }
+            Chip {
+                text: "任务" + (view.runningJobs ? "（" + view.runningJobs + " 个进行中）" : view.jobs.length ? "（" + view.jobs.length + "）" : "")
+                selected: view.showTasks
+                onClicked: view.showTasks = !view.showTasks
+            }
         }
 
         // 网络设置（yt-dlp 的代理与 Cookie）
@@ -144,15 +151,26 @@ Item {
                 }
             }
 
-            // 任务卡片
-            Rectangle {
-                Layout.preferredWidth: Math.min(360, view.width * 0.3)
-                Layout.fillHeight: true
+
+        }
+    }
+
+    // 任务：悬浮在右侧、可收起（标签栏右侧的「任务」按钮开关；开始下载时自动弹出）
+    Rectangle {
+                id: taskPanel
+                visible: view.showTasks
+                z: 10
+                anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom
+                anchors.topMargin: 52; anchors.rightMargin: 10; anchors.bottomMargin: 10
+                width: Math.min(400, view.width * 0.42)
                 radius: 6; color: "#161b22"; border.color: "#30363d"
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 8
                     spacing: 6
-                    Label { text: "任务"; color: "#e6edf3"; font.pixelSize: 14 }
+                    RowLayout {
+                        Label { text: "任务"; color: "#e6edf3"; font.pixelSize: 14; Layout.fillWidth: true }
+                        IconButton { glyph: "close"; size: 28; onClicked: view.showTasks = false; ToolTip.text: "收起" }
+                    }
                     ListView {
                         id: jobList
                         Layout.fillWidth: true
@@ -244,6 +262,4 @@ Item {
                     }
                 }
             }
-        }
-    }
 }

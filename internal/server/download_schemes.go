@@ -192,34 +192,9 @@ func (r *Router) probeDownload(w http.ResponseWriter, req *http.Request, body []
 		http.Error(w, "请粘贴一个网址", http.StatusBadRequest)
 		return
 	}
-	uv, err := exec.LookPath("uv")
-	if err != nil {
-		http.Error(w, "本机没有 uv", http.StatusServiceUnavailable)
-		return
-	}
-	project, err := dlassets.Prepare(filepath.Join(r.cacheDir, "downloads"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	env := append(os.Environ(), "UV_PROJECT_ENVIRONMENT="+filepath.Join(project, "venv"), "PYTHONUNBUFFERED=1")
-	if p := platformOf(u.Hostname()); p != nil {
-		if f := r.CookieFile(p.ID); f != "" {
-			env = append(env, "OMNIHUB_COOKIES_FILE="+f)
-		}
-	}
-	r.downloads.mu.Lock()
-	if proxy := r.downloads.settings.YtdlpProxy; proxy != "" {
-		env = append(env, "OMNIHUB_YTDLP_PROXY="+proxy)
-	}
-	r.downloads.mu.Unlock()
 	ctx, cancel := context.WithTimeout(req.Context(), 3*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, uv, "run", "--frozen", "--project", project, "python", filepath.Join(project, "scripts", "probe.py"), u.String())
-	cmd.Dir, cmd.Env = project, env
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, runErr := cmd.Output()
+	out, stderrText, runErr := r.runDownloadScript(ctx, u.Hostname(), "probe.py", u.String())
 	var result struct {
 		Title    string       `json:"title"`
 		Uploader string       `json:"uploader"`
@@ -235,7 +210,7 @@ func (r *Router) probeDownload(w http.ResponseWriter, req *http.Request, body []
 		}
 	}
 	if !found {
-		msg := strings.TrimSpace(stderr.String())
+		msg := strings.TrimSpace(stderrText)
 		if i := strings.LastIndex(msg, "\n"); i >= 0 {
 			msg = msg[i+1:]
 		}
@@ -259,4 +234,83 @@ func (r *Router) probeDownload(w http.ResponseWriter, req *http.Request, body []
 		}
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// runDownloadScript 在下载环境里运行 features/downloads/scripts 下的一个脚本（同步），带上 host 所属平台的
+// 登录 Cookie、代理与 Last.fm key；返回标准输出与标准错误。
+func (r *Router) runDownloadScript(ctx context.Context, host, script string, args ...string) ([]byte, string, error) {
+	uv, err := exec.LookPath("uv")
+	if err != nil {
+		return nil, "", errors.New("本机没有 uv")
+	}
+	project, err := dlassets.Prepare(filepath.Join(r.cacheDir, "downloads"))
+	if err != nil {
+		return nil, "", err
+	}
+	env := append(os.Environ(), "UV_PROJECT_ENVIRONMENT="+filepath.Join(project, "venv"), "PYTHONUNBUFFERED=1")
+	if p := platformOf(host); p != nil {
+		if f := r.CookieFile(p.ID); f != "" {
+			env = append(env, "OMNIHUB_COOKIES_FILE="+f)
+		}
+	}
+	r.downloads.mu.Lock()
+	if proxy := r.downloads.settings.YtdlpProxy; proxy != "" {
+		env = append(env, "OMNIHUB_YTDLP_PROXY="+proxy)
+	}
+	if key := r.downloads.settings.LastfmKey; key != "" {
+		env = append(env, "OMNIHUB_LASTFM_KEY="+key)
+	}
+	r.downloads.mu.Unlock()
+	cmd := exec.CommandContext(ctx, uv, append([]string{"run", "--frozen", "--project", project, "python", filepath.Join(project, "scripts", script)}, args...)...)
+	cmd.Dir, cmd.Env = project, env
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	return out, stderr.String(), err
+}
+
+// detailsDownload 补充一批条目（最多 20 个）的完整信息：播放、点赞、日期、艺人、专辑，音乐再加 Last.fm 重播率与标签。
+func (r *Router) detailsDownload(w http.ResponseWriter, req *http.Request, body []byte) {
+	var in struct {
+		URLs   []string `json:"urls"`
+		Scheme string   `json:"scheme"`
+	}
+	if json.Unmarshal(body, &in) != nil || len(in.URLs) == 0 || len(in.URLs) > 20 {
+		http.Error(w, "每次 1–20 个链接", http.StatusBadRequest)
+		return
+	}
+	args := []string{}
+	host := ""
+	for _, raw := range in.URLs {
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			http.Error(w, "不是网址："+raw, http.StatusBadRequest)
+			return
+		}
+		host = u.Hostname()
+		args = append(args, u.String())
+	}
+	if in.Scheme == "music" {
+		args = append(args, "--music")
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), 4*time.Minute)
+	defer cancel()
+	out, stderrText, err := r.runDownloadScript(ctx, host, "details.py", args...)
+	results := []json.RawMessage{}
+	sc := bufio.NewScanner(strings.NewReader(string(out)))
+	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	for sc.Scan() {
+		if rest, ok := strings.CutPrefix(sc.Text(), "OMNIHUB_DETAIL "); ok && json.Valid([]byte(rest)) {
+			results = append(results, json.RawMessage(rest))
+		}
+	}
+	if len(results) == 0 && err != nil {
+		msg := strings.TrimSpace(stderrText)
+		if i := strings.LastIndex(msg, "\n"); i >= 0 {
+			msg = msg[i+1:]
+		}
+		http.Error(w, "补充数据失败："+msg, http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
 }

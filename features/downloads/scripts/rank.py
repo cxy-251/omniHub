@@ -10,6 +10,7 @@
 import json
 import os
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -72,13 +73,20 @@ def extract_list(url, cookies, pool):
 
 
 def details(url, cookies):
-    """读取单个视频的完整信息（不下载）：播放量、点赞、艺人、曲名。"""
-    with YoutubeDL(ydl_opts(cookies, {})) as ydl:
+    """读取单个视频的完整信息（不下载）：播放量、点赞、艺人、曲名、专辑、日期。
+    只要页面信息，不解析播放地址（跳过播放器脚本与格式列表）：每个从十几秒降到几秒。
+    music.youtube.com 的链接换成 www.youtube.com（同一个视频，前者常读超时）。"""
+    url = url.replace("://music.youtube.com/", "://www.youtube.com/")
+    extra = {"ignore_no_formats_error": True, "socket_timeout": 15,
+             "extractor_args": {"youtube": {"player_skip": ["js", "configs"], "skip": ["dash", "hls"]}}}
+    with YoutubeDL(ydl_opts(cookies, extra)) as ydl:
         info = ydl.extract_info(url, download=False) or {}
     return {
         "views": info.get("view_count"), "likes": info.get("like_count"), "comments": info.get("comment_count"),
         "artist": info.get("artist") or (info.get("artists") or [None])[0] or info.get("creator"),
         "track": info.get("track"), "title": info.get("title") or "", "uploader": info.get("channel") or info.get("uploader") or "",
+        "album": info.get("album"), "year": info.get("release_year") or (str(info.get("upload_date") or "")[:4] or None),
+        "date": info.get("upload_date"), "duration": info.get("duration"),
     }
 
 
@@ -86,16 +94,36 @@ def guess_artist_track(d):
     """艺人与曲名：YouTube Music 的视频直接有；否则从「艺人 - 曲名」样式的标题里拆，再不行用频道名去掉 - Topic。"""
     if d.get("artist") and d.get("track"):
         return d["artist"], d["track"]
-    title = re.sub(r"[\(\[（【][^\)\]）】]*(official|video|audio|lyric|mv|hd|4k|官方|歌词)[^\)\]）】]*[\)\]）】]", "", d["title"], flags=re.I).strip()
+    noise = r"(official|visuali[sz]er|video|audio|lyric|lyrics|mv|m/v|hd|4k|live|performance|官方|歌词|完整版)"
+    title = re.sub(r"[\(\[（【][^\)\]）】]*" + noise + r"[^\)\]）】]*[\)\]）】]", "", d["title"], flags=re.I)
+    # 去掉结尾「– Official Visualizer」「| Lyrics」这类说明段
+    title = re.sub(r"\s+[-–—|]\s+[^-–—|]*" + noise + r"[^-–—|]*$", "", title, flags=re.I).strip()
     m = re.match(r"^(.+?)\s+[-–—|]\s+(.+)$", title)
     if m:
-        return m.group(1).strip(), m.group(2).strip()
+        artist, track = m.group(1).strip(), m.group(2).strip()
+        quoted = re.search(r"[\"“「『]([^\"”」』]+)[\"”」』]", track)   # 「… - "歌名"」取引号里的
+        if quoted:
+            track = quoted.group(1)
+        elif re.search(r"\s+[-–—|]\s+", track):
+            track = re.split(r"\s+[-–—|]\s+", track)[-1]
+        return artist, track.strip(" \"'")
     artist = re.sub(r"\s*-\s*Topic$", "", d.get("uploader") or "")
     return artist, title
 
 
 def lastfm(artist, track, key):
     """Last.fm track.getInfo（自动纠正拼写）：返回 (听众数, 总播放数) 或 None。"""
+    info = lastfm_info(artist, track, key)
+    return (info["listeners"], info["playcount"]) if info else None
+
+
+_lastfm_lock = threading.Lock()
+_lastfm_last = [0.0]
+
+
+def lastfm_info(artist, track, key):
+    """Last.fm track.getInfo：听众数、总播放数、所在专辑、风格标签。查不到返回 None。
+    Last.fm 限制每秒请求数：多线程时排队，两次请求至少隔 0.3 秒；失败重试两次。"""
     q = urllib.parse.urlencode({"method": "track.getInfo", "api_key": key, "artist": artist, "track": track,
                                 "autocorrect": 1, "format": "json"})
     handlers = []
@@ -103,19 +131,38 @@ def lastfm(artist, track, key):
         proxy = os.environ["OMNIHUB_YTDLP_PROXY"]
         handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
     opener = urllib.request.build_opener(*handlers)
-    try:
-        with opener.open("https://ws.audioscrobbler.com/2.0/?" + q, timeout=15) as r:
-            data = json.load(r)
-    except Exception as e:
-        print(f"  Last.fm 请求失败：{e}", flush=True)
+    data = None
+    for attempt in range(3):
+        with _lastfm_lock:
+            wait = _lastfm_last[0] + 0.3 - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            _lastfm_last[0] = time.time()
+        try:
+            with opener.open("https://ws.audioscrobbler.com/2.0/?" + q, timeout=15) as r:
+                data = json.load(r)
+        except Exception as e:
+            if attempt == 2:
+                print(f"  Last.fm 请求失败：{e}", flush=True)
+                return None
+            time.sleep(1 + attempt)
+            continue
+        if data.get("error") == 29:   # 超过频率限制
+            time.sleep(2 + attempt * 2)
+            continue
+        break
+    if not data:
         return None
     t = data.get("track")
     if not t:
         return None
     try:
-        return int(t.get("listeners") or 0), int(t.get("playcount") or 0)
+        listeners, playcount = int(t.get("listeners") or 0), int(t.get("playcount") or 0)
     except ValueError:
         return None
+    tags = [x.get("name") for x in (t.get("toptags") or {}).get("tag") or [] if x.get("name")][:4]
+    return {"listeners": listeners, "playcount": playcount, "lastfm_album": (t.get("album") or {}).get("title"),
+            "tags": tags, "lastfm_name": f"{(t.get('artist') or {}).get('name', '')} - {t.get('name', '')}"}
 
 
 def score(d, rule):

@@ -449,6 +449,9 @@ func (r *Router) handleDownloads(w http.ResponseWriter, req *http.Request) {
 	case "probe":
 		r.probeDownload(w, req, body)
 		return
+	case "details":
+		r.detailsDownload(w, req, body)
+		return
 	case "run":
 		var in struct {
 			Kind   string   `json:"kind"`
