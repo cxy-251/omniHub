@@ -24,8 +24,8 @@ func (r *Router) protectRoutes(next http.Handler) http.Handler {
 				}
 			}
 		}
-		// Upload streams and game saves retain their own bounded limits. JSON control payloads are small.
-		if !strings.HasPrefix(req.URL.Path, "/api/tools/shared/upload") && !gameSave {
+		// Upload streams, game saves and WebDAV file bodies retain their own limits. JSON control payloads are small.
+		if !strings.HasPrefix(req.URL.Path, "/api/tools/shared/upload") && !gameSave && req.URL.Path != davPrefix && !strings.HasPrefix(req.URL.Path, davPrefix+"/") {
 			req.Body = http.MaxBytesReader(w, req.Body, 64*1024)
 		}
 		path := req.URL.Path

@@ -128,6 +128,8 @@ function SharedFiles() {
       </li>)}
       {!regular.length ? <li className="text-sm text-muted">还没有共享文件</li> : null}
     </ul>
+    <p className="text-xs text-muted">挂成网络盘（WebDAV，局域网内）：<code className="select-all">{`${window.location.protocol}//${window.location.host}/dav/`}</code>，
+      用 omniHub 账号登录。Windows「映射网络驱动器」、macOS 访达「连接服务器」、Linux 文件管理器把 http:// 换成 dav:// 都能打开；删除的文件进 Deck 的回收站。</p>
   </div>;
 }
 

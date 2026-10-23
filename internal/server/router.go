@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/webdav"
+
 	"omnihub/internal/audio"
 	"omnihub/internal/auth"
 	"omnihub/internal/catalog"
@@ -36,6 +38,8 @@ type Router struct {
 	libMgr         *library.Manager
 	authDB         *auth.DB
 	authMid        *auth.Middleware
+	davAuth        davAuthCache
+	davLocks       webdav.LockSystem
 	clipboard      *tools.ClipboardManager
 	taskMgr        *tasks.Manager
 	taskRegistry   *tasks.Registry
@@ -106,6 +110,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		libMgr:         libMgr,
 		authDB:         authDB,
 		authMid:        auth.NewMiddleware(authDB, localToken),
+		davLocks:       webdav.NewMemLS(),
 		clipboard:      tools.NewClipboardManager(50),
 		taskMgr:        tasks.NewManager(),
 		taskRegistry:   registry,
@@ -347,7 +352,8 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/tools/shared/file", r.handleToolsSharedFile)
 	r.mux.HandleFunc("/api/tools/speed", r.handleToolsSpeed)
 	r.mux.HandleFunc("/api/tools/webshell", r.handleToolsWebShell)
-
+	r.mux.HandleFunc(davPrefix, r.handleWebDAV)
+	r.mux.HandleFunc(davPrefix+"/", r.handleWebDAV)
 
 	// MEGA 客户端接口 (第 10.2 节)
 	r.mux.HandleFunc("/api/mega/", r.handleMega)

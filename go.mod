@@ -7,6 +7,7 @@ require (
 	github.com/shirou/gopsutil/v4 v4.26.9
 	golang.org/x/crypto v0.58.0
 	golang.org/x/image v0.47.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.60.1
 )
@@ -26,7 +27,6 @@ require (
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/net v0.60.0 // indirect
 	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
