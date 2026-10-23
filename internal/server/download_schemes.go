@@ -46,11 +46,11 @@ func (r *Router) schemeKinds() []*dlKind {
 	}
 	return []*dlKind{
 		{
-			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑或单曲（YouTube、YouTube Music、B 站等），全部下载，不筛选；每个歌单放进自己的文件夹。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
-			Scheme: &dlScheme{Steps: []string{"粘贴歌单/专辑链接（一行一个）", "全部下载到暂存区（下过的跳过）", "播放数、点赞、日期、Last.fm 信息写进标签", "在「暂存区」试听、删掉不要的", "移入资源库"}, Destination: "音声 / 音乐 / <专辑名>/",
+			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑或单曲（YouTube、YouTube Music、B 站等），全部下载，不筛选；按歌手归档，单曲放在歌手文件夹里，整张专辑（YouTube Music 专辑）放进歌手下的专辑文件夹。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
+			Scheme: &dlScheme{Steps: []string{"粘贴歌单/专辑链接（一行一个）", "全部下载到暂存区（下过的跳过）", "播放数、点赞、日期、Last.fm 信息写进标签", "在「暂存区」试听、删掉不要的", "移入资源库"}, Destination: "音声 / 音乐 / <歌手>/（整张专辑放 <歌手>/<专辑>/）",
 				Input: "歌单、专辑或单曲链接，一行一个", Placeholder: "https://music.youtube.com/playlist?list=…\nhttps://www.youtube.com/playlist?list=…\nhttps://www.youtube.com/watch?v=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, {Name: "album", Label: "专辑名", Type: "text", Help: "留空时每个歌单用自己的名字"}, library},
+			Fields: []dlField{urls, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("music", p) },
 		},
 		{

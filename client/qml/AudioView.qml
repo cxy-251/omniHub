@@ -3,12 +3,16 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtCore
 
-// 音声页：左栏「继续收听」与专辑列表，右栏所选专辑的分集（可搜索、按页懒加载，显示各集断点）。
+// 音声页：左栏顶部切换「音乐 / 有声书」。音乐：左栏歌手，右栏 MusicPane（单曲、专辑、循环范围）；
+// 有声书：左栏「继续收听」与专辑列表，右栏所选专辑的分集（可搜索、按页懒加载，显示各集断点）。
 // 播放交给全局 AudioEngine，离开本页不中断。
 Item {
     id: view
     required property var engine
     property var albums: []
+    property var artists: []
+    readonly property bool music: prefs.section === "music"
+    readonly property var selectedArtist: artists.find(function (a) { return a.id === prefs.artist }) || null
     property var recent: []
     property string error: ""
     // 其它页面（如下载完成后的「去收听」）要求打开并播放的专辑。
@@ -16,7 +20,7 @@ Item {
     property bool pendingPlay: false
     readonly property var selected: albums.find(function (a) { return a.id === prefs.album }) || null
 
-    Settings { id: prefs; category: "audioView"; property string album: ""; property string query: "" }
+    Settings { id: prefs; category: "audioView"; property string album: ""; property string query: ""; property string section: "music"; property string artist: "" }
     property bool unsyncedOnly: false   // 只看没有带时间轴歌词的（以后单独补）
     readonly property var lyricStatusText: ({plain: "只有纯文本歌词", search: "歌词是搜索来的，待核对", none: "查不到歌词", error: "歌词查询失败", unknown: "没查过歌词"})
     ApiClient { id: api; onErrorChanged: view.error = error }
@@ -28,6 +32,10 @@ Item {
             if (view.pendingPlay && view.selected) { view.pendingPlay = false; view.continueAlbum(view.selected) }
         })
         api.getJSON("/api/media/audio/recent?limit=6", function (list) { view.recent = list })
+        api.getJSON("/api/media/audio/artists", function (list) {
+            view.artists = list
+            if (!view.selectedArtist && list.length) prefs.artist = list[0].id
+        })
     }
     Component.onCompleted: {
         if (request) { prefs.album = request; pendingPlay = true }
@@ -97,9 +105,12 @@ Item {
                 ScrollBar.vertical: ScrollBar {}
                 header: Column {
                     width: side.width
-                    visible: view.recent.length > 0
-                    height: visible ? implicitHeight : 0
-                    Label { text: "继续收听"; color: "#8b949e"; font.pixelSize: 12; topPadding: 4; bottomPadding: 4; leftPadding: 4 }
+                    Row {
+                        spacing: 6; bottomPadding: 6
+                        Chip { text: "音乐"; selected: view.music; onClicked: prefs.section = "music" }
+                        Chip { text: "有声书"; selected: !view.music; onClicked: prefs.section = "book" }
+                    }
+                    Label { visible: view.recent.length > 0; text: "继续收听"; color: "#8b949e"; font.pixelSize: 12; topPadding: 4; bottomPadding: 4; leftPadding: 4 }
                     Repeater {
                         model: view.recent
                         delegate: ItemDelegate {
@@ -115,20 +126,23 @@ Item {
                                 }
                             }
                             onClicked: {
-                                var album = view.albums.find(function (a) { return a.id === modelData.album_id })
-                                if (album) { prefs.album = album.id; view.playId(album, modelData.audio_id) }
+                                // 音乐的专辑不在有声书列表里：直接按目录放
+                                var album = view.albums.find(function (a) { return a.id === modelData.album_id }) || {id: modelData.album_id, title: modelData.album_title}
+                                if (view.albums.indexOf(album) >= 0) prefs.album = album.id
+                                view.playId(album, modelData.audio_id)
                             }
                         }
                     }
-                    Label { text: "专辑"; color: "#8b949e"; font.pixelSize: 12; topPadding: 8; bottomPadding: 4; leftPadding: 4 }
+                    Label { text: view.music ? "歌手" : "专辑"; color: "#8b949e"; font.pixelSize: 12; topPadding: 8; bottomPadding: 4; leftPadding: 4 }
                 }
-                model: view.albums
+                model: view.music ? view.artists : view.albums
                 delegate: ItemDelegate {
                     required property var modelData
                     width: side.width
                     height: 52
                     padding: 4
-                    highlighted: prefs.album === modelData.id
+                    readonly property bool chosen: view.music ? prefs.artist === modelData.id : prefs.album === modelData.id
+                    highlighted: chosen
                     contentItem: RowLayout {
                         spacing: 8
                         Rectangle {
@@ -144,17 +158,32 @@ Item {
                         }
                         Column {
                             Layout.fillWidth: true
-                            Label { width: parent.width; elide: Text.ElideRight; text: modelData.title; color: prefs.album === modelData.id ? "#58a6ff" : "#e6edf3"; font.pixelSize: 13 }
-                            Label { text: modelData.track_count + " 集 · " + (modelData.library_name || ""); color: "#8b949e"; font.pixelSize: 11 }
+                            Label { width: parent.width; elide: Text.ElideRight; text: modelData.title; color: chosen ? "#58a6ff" : "#e6edf3"; font.pixelSize: 13 }
+                            Label {
+                                color: "#8b949e"; font.pixelSize: 11
+                                text: view.music ? modelData.single_count + " 首单曲 · " + modelData.album_count + " 张专辑"
+                                                 : modelData.track_count + " 集 · " + (modelData.library_name || "")
+                            }
                         }
                     }
-                    onClicked: prefs.album = modelData.id
+                    onClicked: if (view.music) prefs.artist = modelData.id; else prefs.album = modelData.id
                 }
             }
         }
 
-        // 右栏：专辑分集
+        // 右栏（音乐）：歌手的单曲与专辑
+        MusicPane {
+            visible: view.music
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.margins: 10
+            engine: view.engine
+            artist: view.selectedArtist
+        }
+
+        // 右栏（有声书）：专辑分集
         ColumnLayout {
+            visible: !view.music
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.margins: 10

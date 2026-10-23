@@ -17,7 +17,7 @@ type Engine = {
   continueAlbum(album: string, title: string): void;
   toggle(): void; seek(seconds: number): void; seekBy(delta: number): void;
   next(): void; previous(): void; stop(): void;
-  cycleRate(): void; cycleMode(): void; cycleSleep(): void;
+  cycleRate(): void; cycleMode(): void; cycleSleep(): void; setMode(m: Mode): void;
 };
 
 const Context = createContext<Engine | undefined>(undefined);
@@ -166,6 +166,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
     seek: s => { if (audio.current) audio.current.currentTime = s; },
     seekBy: d => { if (audio.current) audio.current.currentTime = Math.max(0, audio.current.currentTime + d); },
     cycleRate: () => setRate(r => speeds[(speeds.indexOf(r) + 1) % speeds.length]),
+    setMode,
     cycleMode: () => setMode(m => (['list', 'single', 'random'] as Mode[])[(['list', 'single', 'random'].indexOf(m) + 1) % 3]),
     cycleSleep: () => {
       const n = sleepChoices[(sleepChoices.indexOf(sleepMinutes) + 1) % sleepChoices.length];

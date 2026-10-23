@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"omnihub/internal/audio"
 	"omnihub/internal/auth"
+	"omnihub/internal/ordering"
 )
 
 func (r *Router) listAudioLibraries(w http.ResponseWriter, req *http.Request) {
@@ -51,6 +53,9 @@ func (r *Router) listAudioLibraries(w http.ResponseWriter, req *http.Request) {
 		}
 		offset = 0
 		for _, dir := range dirs {
+			if p := filepath.ToSlash(dir.Path); p == "music" || strings.HasPrefix(p, "music/") {
+				continue // 音乐按歌手浏览（/api/media/audio/artists），不混在有声书专辑里
+			}
 			logical := lib.ID + ":" + filepath.ToSlash(filepath.Join("media_library/audio", dir.Path))
 			if !access.allows(logical) {
 				continue
@@ -156,7 +161,7 @@ func (r *Router) handleAudioTracks(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "invalid page bounds", 400)
 		return
 	}
-	album, err := audio.ScanAlbum(fullPath)
+	album, err := scanAudioDir(relPath, fullPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -265,4 +270,117 @@ func (r *Router) handleAudioRecent(w http.ResponseWriter, req *http.Request) {
 		out = append(out, recentOut{Progress: p, Title: strings.TrimSuffix(filepath.Base(full), filepath.Ext(full)), AlbumID: album, AlbumTitle: filepath.Base(filepath.Dir(full))})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// scanAudioDir 扫描一个音声目录：music/<歌手> 这一层展开成整个歌手的播放列表（单曲 + 各张专辑），
+// 这样「循环这个歌手」和「点一首歌、播完接着下一首单曲或专辑」都用同一个列表；其余目录照旧只看本层。
+func scanAudioDir(logical, full string) (*audio.Album, error) {
+	if _, rel, ok := strings.Cut(logical, ":"); ok && audio.IsArtistDir(rel) {
+		album, _, err := audio.ScanArtist(full)
+		return album, err
+	}
+	return audio.ScanAlbum(full)
+}
+
+type artistOut struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	SingleCount int    `json:"single_count"`
+	AlbumCount  int    `json:"album_count"`
+	TrackCount  int    `json:"track_count"`
+	CoverPath   string `json:"cover_path"`
+	LibraryName string `json:"library_name"`
+}
+
+// artistCover 用歌手列表里第一首带封面的歌（最多看 5 首）当封面。
+func (r *Router) artistCover(req *http.Request, dir, logical string, tracks []*audio.Track) string {
+	for _, t := range tracks[:min(5, len(tracks))] {
+		if meta, err := r.audioMetadata.Get(req.Context(), filepath.Join(dir, filepath.FromSlash(t.Filename)), false); err == nil && meta.HasCover {
+			return logical + "/" + t.Filename
+		}
+	}
+	return ""
+}
+
+// handleAudioArtists 列出各资源库 music/ 下的歌手（按名字自然序），带单曲数、专辑数和封面。
+func (r *Router) handleAudioArtists(w http.ResponseWriter, req *http.Request) {
+	if !r.checkSectionAccess(w, req, "audio", auth.TargetAll) {
+		return
+	}
+	libraries, ok := r.queryLibraries(w, req)
+	if !ok {
+		return
+	}
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", 503)
+		return
+	}
+	out := []artistOut{}
+	for _, lib := range libraries {
+		root, err := r.libMgr.ResolveCategoryPath(lib.ID+":"+audio.MusicRoot, "media_library/audio")
+		if err != nil {
+			continue
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || len(out) >= 5000 {
+				continue
+			}
+			logical := lib.ID + ":" + audio.MusicRoot + "/" + e.Name()
+			if !access.allows(logical) {
+				continue
+			}
+			dir := filepath.Join(root, e.Name())
+			album, sections, err := audio.ScanArtist(dir)
+			if err != nil || len(album.Tracks) == 0 {
+				continue
+			}
+			out = append(out, artistOut{ID: logical, Title: e.Name(), SingleCount: sections[0].Count, AlbumCount: len(sections) - 1,
+				TrackCount: len(album.Tracks), CoverPath: r.artistCover(req, dir, logical, album.Tracks), LibraryName: lib.Name})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return ordering.NaturalLess(strings.ToLower(out[i].Title), strings.ToLower(out[j].Title))
+	})
+	writeJSON(w, 200, out)
+}
+
+// handleAudioArtist 返回一个歌手的分段：第一段是单曲，其后每张专辑一段（id 是专辑目录，offset 是在歌手播放列表里的起点）。
+func (r *Router) handleAudioArtist(w http.ResponseWriter, req *http.Request) {
+	relPath := req.URL.Query().Get("path")
+	if !r.allowPath(w, req, relPath) {
+		return
+	}
+	_, rel, _ := strings.Cut(relPath, ":")
+	full, err := r.libMgr.ResolveCategoryPath(relPath, "media_library/audio")
+	if err != nil || !audio.IsArtistDir(rel) {
+		http.Error(w, "artist not found", http.StatusNotFound)
+		return
+	}
+	album, sections, err := audio.ScanArtist(full)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type sectionOut struct {
+		audio.ArtistSection
+		ID        string `json:"id"`
+		CoverPath string `json:"cover_path"`
+	}
+	out := make([]sectionOut, 0, len(sections))
+	for _, sec := range sections {
+		o := sectionOut{ArtistSection: sec}
+		if sec.Album != "" {
+			o.ID = relPath + "/" + sec.Album
+		}
+		if sec.Count > 0 {
+			o.CoverPath = r.artistCover(req, full, relPath, album.Tracks[sec.Offset:sec.Offset+sec.Count])
+		}
+		out = append(out, o)
+	}
+	writeJSON(w, 200, map[string]any{"id": relPath, "title": filepath.Base(full), "track_count": len(album.Tracks), "sections": out})
 }

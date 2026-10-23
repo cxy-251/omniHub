@@ -181,6 +181,7 @@ Item {
         prefs.lastPosition = -1
     }
     function cycleRate() { prefs.rate = speeds[(speeds.indexOf(prefs.rate) + 1) % speeds.length] }
+    function setMode(m) { prefs.mode = m }
     function cycleMode() { var m = ["list", "single", "random"]; prefs.mode = m[(m.indexOf(prefs.mode) + 1) % m.length] }
     function cycleSleep() {
         sleepMinutes = sleepChoices[(sleepChoices.indexOf(sleepMinutes) + 1) % sleepChoices.length]

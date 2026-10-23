@@ -315,6 +315,8 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/audio/cover", r.handleAudioCover)
 	r.mux.HandleFunc("/api/media/audio/metadata", r.handleAudioMetadata)
 	r.mux.HandleFunc("/api/media/audio/lyrics", r.handleAudioLyrics)
+	r.mux.HandleFunc("/api/media/audio/artists", r.handleAudioArtists)
+	r.mux.HandleFunc("/api/media/audio/artist", r.handleAudioArtist)
 	r.mux.HandleFunc("/api/media/audio/progress", r.handleAudioProgress)
 	r.mux.HandleFunc("/api/media/audio/tracks", r.handleAudioTracks)
 	r.mux.HandleFunc("/api/media/audio/recent", r.handleAudioRecent)
@@ -709,7 +711,7 @@ func (r *Router) handleAudioAlbum(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	album, err := audio.ScanAlbum(fullPath)
+	album, err := scanAudioDir(relPath, fullPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

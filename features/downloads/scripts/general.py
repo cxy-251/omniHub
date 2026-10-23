@@ -2,7 +2,8 @@
 """按方案下载到暂存区的一个批次（不直接进资源库）。由 omniHub 服务按需调用。
 
 方案（--scheme）决定工具和去向：
-  music     yt-dlp 只取最好的音轨（不转码，嵌封面与标签）→ media_library/audio/music/<专辑>/<序号 标题>
+  music     yt-dlp 只取最好的音轨（不转码，嵌封面、歌词与标签）→ media_library/audio/music/<歌手>/<曲名>（单曲）
+            或 …/<歌手>/<专辑>/<曲序 曲名>（整张专辑）
   youtube   yt-dlp 视频 → media_library/shortvideo/YouTube/<频道>/<日期>_<标题>_<id>
   bilibili  yt-dlp 视频 → media_library/shortvideo/B站/<UP主>/…
   x         gallery-dl → 图片 gallery/X/<用户>/（移入资源库时并进相册），视频 media_library/shortvideo/X/<用户>/
@@ -83,10 +84,9 @@ def ytdlp(urls, a, platform):
     elif a.items:
         cmd += ["--playlist-items", a.items]
     if a.scheme == "music":
-        album = safe(a.album) if a.album else "%(playlist_title,album,artist,uploader|未分类)s"
-        name = "%(autonumber)02d %(title).100B.%(ext)s" if a.album else "%(playlist_index&{:02d} |)s%(title).100B.%(ext)s"
+        # 先下到批次里的 .incoming/<视频 ID>，写完标签后由 organize_music 按「歌手 / 单曲、歌手 / 专辑 / 歌」归档
         cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "best", "--embed-metadata", "--embed-thumbnail",
-                "-o", os.path.join(a.batch, "media_library", "audio", "music", album, name)]
+                "-o", os.path.join(a.batch, ".incoming", "%(id)s.%(ext)s")]
     else:
         h = a.max_height
         fmt = "bv*+ba/b" if h <= 0 else f"bv*[height<={h}]+ba/b[height<={h}]/b"
@@ -111,6 +111,9 @@ def ytdlp(urls, a, platform):
                     hints.add(hint.format(platform["dir"]))
         log(line)
     proc.wait()
+    if a.album:   # 指定了专辑（按质量挑时的整张专辑）：按下载顺序就是曲序
+        for n, f in enumerate(files, 1):
+            a.album_of[f] = (a.album, n)
     return files, skipped, errors
 
 
@@ -197,16 +200,55 @@ def lastfm_fields(info):
     return fields
 
 
-def write_tags(path, fields, genre="", lyrics=""):
+def music_place(meta, info, guess, album_hint):
+    """一首歌的归档位置与标准标签：返回 (歌手, 专辑或空, 曲序或 None, 曲名)。
+    歌手：yt-dlp 给的（YouTube 标了音乐信息时有）→ Last.fm 纠正过的 → 从标题拆的 → 频道名（去掉 - Topic、VEVO）；
+    yt-dlp 与 Last.fm 只差大小写时用 Last.fm 的写法。
+    专辑：只有整张专辑下载（YouTube Music 专辑，列表 ID 以 OLAK5uy_ 开头）才归进专辑文件夹，其余都算单曲。"""
+    info = info or {}
+    yt = (meta.get("artists") or [None])[0] or meta.get("artist")
+    lf = info.get("lastfm_artist")
+    channel = re.sub(r"\s*-\s*Topic$|VEVO$", "", meta.get("channel") or meta.get("uploader") or "").strip()
+    artist = lf if yt and lf and yt.casefold() == lf.casefold() else (yt or lf or guess[0] or channel or "未知歌手")
+    # 合作曲（「A, B」「A & B」「A feat. B」）归到第一位歌手名下；Last.fm 认这个整体名字（如 Simon & Garfunkel）时不拆
+    if not (lf and lf.casefold() == artist.casefold()):
+        artist = re.split(r",\s*|\s+&\s+|\s+(?:feat\.?|ft\.?|with|x)\s+", artist, flags=re.I)[0].strip() or artist
+    track = meta.get("track") or info.get("lastfm_track") or guess[1] or meta.get("title") or meta.get("id") or "未知曲目"
+    album, number = "", None
+    if album_hint:
+        album, number = album_hint
+    elif str(meta.get("playlist_id") or "").startswith("OLAK5uy_"):
+        album = meta.get("album") or re.sub(r"^Album - ", "", meta.get("playlist_title") or "")
+        number = meta.get("playlist_index")
+    if album:
+        artist = (meta.get("album_artists") or [None])[0] or artist   # 专辑放在专辑歌手名下（合作曲不拆散专辑）
+    return artist, album, number, track
+
+
+def move_music(batch, f, artist, album, number, track, video_id):
+    """移到 media_library/audio/music/<歌手>/[<专辑>/][曲序 ]<曲名>.<扩展名>；重名时名字后加视频 ID。返回新路径。"""
+    folder = os.path.join(batch, "media_library", "audio", "music", safe(artist), *([safe(album)] if album else []))
+    os.makedirs(folder, exist_ok=True)
+    ext = os.path.splitext(f)[1]
+    name = (f"{int(number):02d} " if number else "") + safe(track)
+    dest = os.path.join(folder, name + ext)
+    if os.path.exists(dest):
+        dest = os.path.join(folder, f"{name} [{video_id}]{ext}")
+    shutil.move(f, dest)
+    return dest
+
+
+def write_tags(path, fields, genre="", lyrics="", std=None):
     """把自定义字段写进音频文件：风格写标准 GENRE 字段（多个用 ; 分隔），歌词写标准歌词字段
-    （Vorbis LYRICS、MP4 ©lyr、ID3 USLT；带时间轴的就是 LRC 文本），其余按格式写
+    （Vorbis LYRICS、MP4 ©lyr、ID3 USLT；带时间轴的就是 LRC 文本），std 是标准的歌手、曲名、专辑、曲序，其余按格式写
     MP4 自由格式（----:com.apple.iTunes:键）、ID3 TXXX、Vorbis 注释（Opus、FLAC）。"""
     import mutagen
-    from mutagen.id3 import ID3, TCON, TXXX, USLT
+    from mutagen.id3 import ID3, TALB, TCON, TIT2, TPE1, TRCK, TXXX, USLT
     from mutagen.mp4 import MP4, MP4FreeForm
     f = mutagen.File(path)
     if f is None:
         return False
+    std = {k: v for k, v in (std or {}).items() if v}
     # 风格只用 Last.fm 的标签；yt-dlp 写进去的是 YouTube 分类（Music、Entertainment），不是风格，没有就清掉
     if isinstance(f, MP4):
         if genre:
@@ -215,6 +257,11 @@ def write_tags(path, fields, genre="", lyrics=""):
             f.pop("\xa9gen", None)
         if lyrics:
             f["\xa9lyr"] = [lyrics]
+        for k, atom in (("artist", "\xa9ART"), ("title", "\xa9nam"), ("album", "\xa9alb")):
+            if k in std:
+                f[atom] = [std[k]]
+        if "number" in std:
+            f["trkn"] = [(int(std["number"]), 0)]
         for k, v in fields.items():
             f["----:com.apple.iTunes:" + k] = [MP4FreeForm(v.encode())]
     elif isinstance(f.tags, ID3):
@@ -225,6 +272,9 @@ def write_tags(path, fields, genre="", lyrics=""):
         if lyrics:
             f.tags.delall("USLT")
             f.tags.add(USLT(encoding=3, lang="XXX", desc="", text=lyrics))
+        for k, frame in (("artist", TPE1), ("title", TIT2), ("album", TALB), ("number", TRCK)):
+            if k in std:
+                f.tags.add(frame(encoding=3, text=[str(std[k])]))
         for k, v in fields.items():
             f.tags.add(TXXX(encoding=3, desc=k, text=[v]))
     else:   # Opus、Vorbis、FLAC：Vorbis 注释
@@ -236,6 +286,9 @@ def write_tags(path, fields, genre="", lyrics=""):
             del f.tags["GENRE"]
         if lyrics:
             f.tags["LYRICS"] = lyrics
+        for k, key in (("artist", "ARTIST"), ("title", "TITLE"), ("album", "ALBUM"), ("number", "TRACKNUMBER")):
+            if k in std:
+                f.tags[key] = str(std[k])
         for k, v in fields.items():
             f.tags[k] = v
     f.save()
@@ -247,7 +300,7 @@ META_DROP = ("formats", "requested_formats", "requested_downloads", "thumbnails"
              "heatmap", "http_headers", "_format_sort_fields", "fragments", "_version")
 
 
-def enrich_music(files, known, batch):
+def enrich_music(files, known, batch, album_of):
     """音乐下完后给每首写标签，不做筛选：
       来源网站的播放数、点赞数、发布日期、下载日期、原链接；
       Last.fm 的风格、听众、总播放、重播率、专辑（按 .info.json 里的标题、艺人、频道查；排名时查过的直接用；没有 key 跳过）；
@@ -285,7 +338,18 @@ def enrich_music(files, known, batch):
 
     tagged, with_lastfm, records = 0, 0, []
     counts = dict.fromkeys(("synced", "plain", "instrumental", "none", "error"), 0)
-    for f, (meta_path, meta), info, lyr in zip(audio, metas, infos, found):
+    places = [music_place(m, i, p, album_of.get(f)) for f, (_, m), i, p in zip(audio, metas, infos, pairs)]
+    # 同一张专辑放在同一位歌手名下：取专辑里出现最多的歌手（合作曲不把专辑拆散）
+    votes = {}
+    for artist, album, _, _ in places:
+        if album:
+            votes.setdefault(album, []).append(artist)
+    owner = {album: max(set(names), key=names.count) for album, names in votes.items()}
+    places = [(owner[album] if album else artist, album, number, track) for artist, album, number, track in places]
+    placed = 0
+    for f, (meta_path, meta), info, lyr, place in zip(audio, metas, infos, found, places):
+        artist, album, number, track = place
+        std = {"artist": artist, "title": track, "album": album, "number": number}
         fields = source_fields(meta)
         if info:
             fields.update(lastfm_fields(info))
@@ -295,10 +359,15 @@ def enrich_music(files, known, batch):
             fields["LYRICS_MATCH"] = lyr["match"]
         counts[lyr["status"]] += 1
         try:
-            if write_tags(f, fields, "; ".join((info or {}).get("tags") or []), lyr["text"]):
+            if write_tags(f, fields, "; ".join((info or {}).get("tags") or []), lyr["text"], std):
                 tagged += 1
         except Exception as e:
             log(f"写入标签失败 {os.path.basename(f)}：{e}")
+        try:
+            f = move_music(batch, f, artist, album, number, track, meta.get("id") or "")
+            placed += 1
+        except OSError as e:
+            log(f"归档失败 {os.path.basename(f)}：{e}")
         if meta:
             rec = {k: v for k, v in meta.items() if k not in META_DROP}
             rec["omnihub_file"] = os.path.relpath(f, batch)
@@ -308,6 +377,8 @@ def enrich_music(files, known, batch):
             records.append(rec)
         if os.path.isfile(meta_path):
             os.remove(meta_path)
+    if placed == len(audio):
+        shutil.rmtree(os.path.join(batch, ".incoming"), ignore_errors=True)
     if records:
         with open(os.path.join(batch, time.strftime("download-meta-%Y%m%d-%H%M%S.json")), "w", encoding="utf-8") as fh:
             json.dump(records, fh, ensure_ascii=False)
@@ -345,8 +416,8 @@ def ranked(a):
             continue
         sub = argparse.Namespace(**vars(a))
         sub.per_list, sub.items = 0, ""
-        if a.scheme == "music" and not a.album:
-            sub.album = title   # 每个歌单、专辑进自己的文件夹（专辑的序号就是原曲序）
+        if a.scheme == "music" and rule == "album" and not a.album:
+            sub.album = title   # 完整专辑进自己的文件夹（下载顺序就是原曲序）
         f, s, e = ytdlp([c["url"] for c in chosen], sub, platform)
         files, skipped, errors = files + f, skipped + s, errors + e
     if report:
@@ -373,6 +444,7 @@ def main():
     p.add_argument("--x-limit", type=int, default=0, help="X：每个用户最多下最近这么多个文件，0 表示不限")
     a = p.parse_args()
     a.lastfm_known = {}   # 排名时查到的 Last.fm 信息（按视频 ID），下载后写进标签时复用
+    a.album_of = {}       # 文件 → (专辑名, 曲序)：指定了专辑时由 ytdlp() 记下
 
     if a.scheme == "x":
         files, skipped, errors = gallerydl(a.urls, a)
@@ -392,7 +464,7 @@ def main():
             (p for p in PLATFORMS if p["id"] == SCHEME_PLATFORM[a.scheme]), platform_of(a.urls[0]))
         files, skipped, errors = ytdlp(a.urls, a, platform)
     if a.scheme == "music":
-        enrich_music(files, a.lastfm_known, a.batch)
+        enrich_music(files, a.lastfm_known, a.batch, a.album_of)
     progress(len(a.urls), len(a.urls), f"完成：新下载 {len(files)} 个文件，跳过已下载 {skipped} 个，出错 {errors} 个")
     for h in sorted(hints):
         log("提示：" + h)

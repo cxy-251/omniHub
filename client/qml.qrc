@@ -21,6 +21,7 @@
         <file>qml/AudioEngine.qml</file>
         <file>qml/AudioBar.qml</file>
         <file>qml/AudioView.qml</file>
+        <file>qml/MusicPane.qml</file>
         <file>qml/MegaPanel.qml</file>
         <file>qml/DownloadsView.qml</file>
         <file>qml/DownloadForm.qml</file>
