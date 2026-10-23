@@ -146,7 +146,7 @@ Item {
 
             // 任务卡片
             Rectangle {
-                Layout.preferredWidth: 420
+                Layout.preferredWidth: Math.min(360, view.width * 0.3)
                 Layout.fillHeight: true
                 radius: 6; color: "#161b22"; border.color: "#30363d"
                 ColumnLayout {

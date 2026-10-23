@@ -124,35 +124,30 @@ ColumnLayout {
     readonly property var rankFields: ["rank", "top", "pool"]
     Timer { id: analyzeTimer; interval: 300; onTriggered: if (panel.kind.id === "other") api.send("POST", "/api/downloads/analyze", {urls: panel.input, mode: "video", library: panel.values.library || ""}, function (r) { panel.analysis = r }) }
 
-    // 流程与去向
-    Flow {
-        Layout.fillWidth: true
-        spacing: 4
-        Repeater {
-            model: panel.scheme.steps
-            delegate: Row {
-                required property string modelData
-                required property int index
-                spacing: 4
-                Label { text: (index + 1) + " " + modelData; color: "#c9d1d9"; font.pixelSize: 12 }
-                Label { visible: index < panel.scheme.steps.length - 1; text: "→"; color: "#6e7681"; font.pixelSize: 12 }
-            }
-        }
-    }
+    property bool showHelp: false
+
+    // 去向 + 说明（默认收起）
     RowLayout {
+        Layout.fillWidth: true
         spacing: 6
         Label { text: "放到"; color: "#8b949e"; font.pixelSize: 12 }
-        Label { text: panel.scheme.destination; color: "#3fb950"; font.pixelSize: 13; font.bold: true }
-        Label { text: "（先进暂存区，确认后移入）"; color: "#6e7681"; font.pixelSize: 12; TapHandler { onTapped: panel.openTab("staging") } }
+        Label { text: panel.scheme.destination; color: "#3fb950"; font.pixelSize: 14; font.bold: true }
+        Label { text: "（先进暂存区，确认后再移入）"; color: "#6e7681"; font.pixelSize: 12 }
+        Item { Layout.fillWidth: true }
+        Chip { text: panel.showHelp ? "收起说明" : "怎么用？"; selected: panel.showHelp; onClicked: panel.showHelp = !panel.showHelp }
     }
-    Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: panel.kind.description; color: "#8b949e"; font.pixelSize: 12 }
+    Label {
+        visible: panel.showHelp
+        Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12; color: "#adbac7"
+        text: panel.kind.description + "\n步骤：" + panel.scheme.steps.join(" → ")
+    }
 
     // 链接（一行一个）
     ScrollView {
         Layout.fillWidth: true
         implicitHeight: 96
         TextArea {
-            placeholderText: panel.scheme.placeholder
+            placeholderText: panel.scheme.input + "\n" + panel.scheme.placeholder
             text: panel.input
             wrapMode: TextEdit.WrapAnywhere; font.pixelSize: 13
             onTextChanged: if (text !== panel.input) { panel.input = text; analyzeTimer.restart() }
@@ -160,19 +155,19 @@ ColumnLayout {
         }
     }
 
-    // 选项（一行）
-    RowLayout {
+    // 通用选项（放不下自动换行）
+    Flow {
         Layout.fillWidth: true
-        spacing: 6
+        spacing: 8
         Repeater {
-            model: panel.kind.fields.filter(function (f) { return ["urls", "library"].indexOf(f.name) < 0 && panel.rankFields.indexOf(f.name) < 0 && !(f.name === "album" && panel.groups.length !== 1) })
-            delegate: RowLayout {
+            model: panel.kind.fields.filter(function (f) { return ["urls"].indexOf(f.name) < 0 && panel.rankFields.indexOf(f.name) < 0 && !(f.name === "album" && panel.groups.length !== 1) })
+            delegate: Row {
                 required property var modelData
                 spacing: 4
-                Label { text: modelData.label; color: "#8b949e"; font.pixelSize: 12 }
+                Label { text: modelData.label; color: "#8b949e"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
                 ComboBox {
                     visible: modelData.type === "choice"
-                    implicitHeight: 30; Layout.preferredWidth: 130; font.pixelSize: 12
+                    implicitHeight: 30; width: modelData.name === "library" ? 120 : 130; font.pixelSize: 12
                     textRole: "label"; valueRole: "value"
                     model: modelData.options || []
                     currentIndex: Math.max(0, (modelData.options || []).findIndex(function (o) { return o.value === panel.values[modelData.name] }))
@@ -180,51 +175,89 @@ ColumnLayout {
                 }
                 TextField {
                     visible: modelData.type === "text"
-                    implicitHeight: 30; Layout.preferredWidth: 220; font.pixelSize: 12
+                    implicitHeight: 30; width: 220; font.pixelSize: 12
                     placeholderText: modelData.help || ""
                     text: panel.values[modelData.name] || ""
                     onTextEdited: panel.set(modelData.name, text)
                 }
             }
         }
-        Item { Layout.fillWidth: true }
-        Label { text: "暂存到"; color: "#8b949e"; font.pixelSize: 12 }
-        ComboBox {
-            implicitHeight: 30; Layout.preferredWidth: 120; font.pixelSize: 12
-            textRole: "label"; valueRole: "value"
-            model: panel.field("library") ? panel.field("library").options : []
-            currentIndex: Math.max(0, (panel.field("library") ? panel.field("library").options : []).findIndex(function (o) { return o.value === panel.values.library }))
-            onActivated: panel.set("library", currentValue)
-        }
     }
 
-    // 两种下法
-    RowLayout {
+    // 两种下法：两张卡片
+    Flow {
         visible: panel.scheme.probe
         Layout.fillWidth: true
-        spacing: 6
-        Label { text: "直接下载："; color: "#c9d1d9"; font.pixelSize: 12 }
-        Repeater {
-            model: panel.kind.fields.filter(function (f) { return panel.rankFields.indexOf(f.name) >= 0 && (f.name === "rank" || panel.values.rank !== "none") })
-            delegate: RowLayout {
-                required property var modelData
-                spacing: 4
-                Label { text: modelData.label; color: "#8b949e"; font.pixelSize: 12 }
-                ComboBox {
-                    implicitHeight: 30; Layout.preferredWidth: modelData.name === "rank" ? 150 : 110; font.pixelSize: 12
-                    textRole: "label"; valueRole: "value"
-                    model: modelData.options || []
-                    currentIndex: Math.max(0, (modelData.options || []).findIndex(function (o) { return o.value === panel.values[modelData.name] }))
-                    onActivated: panel.set(modelData.name, currentValue)
-                    ToolTip.visible: hovered && !!modelData.help; ToolTip.text: modelData.help || ""
+        spacing: 8
+        readonly property real cardWidth: width >= 640 ? (width - spacing) / 2 : width
+        // 自动挑选
+        Rectangle {
+            width: parent.cardWidth
+            height: autoCol.implicitHeight + 20
+            radius: 6; color: "#161b22"; border.color: "#1f6feb"
+            ColumnLayout {
+                id: autoCol
+                anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10
+                spacing: 6
+                Label { text: "自动挑选，设好就不用管"; color: "#e6edf3"; font.pixelSize: 14; font.bold: true }
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 12
+                    text: panel.values.rank === "none" ? "每个链接全部下载。"
+                        : "每个链接：提取单个视频 → 逐个读数据 → 按" + panel.optionLabel("rank") + "取" + panel.optionLabel("top") + "，排名表写进任务日志。"
+                          + (panel.kind.id === "music" ? "完整专辑整张下，不排名。" : "")
+                }
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    Repeater {
+                        model: panel.kind.fields.filter(function (f) { return panel.rankFields.indexOf(f.name) >= 0 && (f.name === "rank" || panel.values.rank !== "none") })
+                        delegate: Row {
+                            required property var modelData
+                            spacing: 4
+                            Label { text: modelData.label; color: "#8b949e"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+                            ComboBox {
+                                implicitHeight: 30; width: modelData.name === "rank" ? 150 : 110; font.pixelSize: 12
+                                textRole: "label"; valueRole: "value"
+                                model: modelData.options || []
+                                currentIndex: Math.max(0, (modelData.options || []).findIndex(function (o) { return o.value === panel.values[modelData.name] }))
+                                onActivated: panel.set(modelData.name, currentValue)
+                                ToolTip.visible: hovered && !!modelData.help; ToolTip.text: modelData.help || ""
+                            }
+                        }
+                    }
+                }
+                PrimaryButton {
+                    text: panel.lines.length ? "开始：自动挑选并下载 " + panel.lines.length + " 个链接" : "先在上面粘贴链接"
+                    enabled: panel.canDirect && panel.probingIndex < 0 && !(panel.kind.missing && panel.kind.missing.length)
+                    onClicked: panel.startDirect()
                 }
             }
         }
-        PrimaryButton { text: "直接下载 " + panel.lines.length + " 个链接"; enabled: panel.canDirect && panel.probingIndex < 0; onClicked: panel.startDirect() }
-        Divider { Layout.leftMargin: 4; Layout.rightMargin: 4 }
-        Chip { text: panel.probingIndex >= 0 ? "正在读第 " + (panel.probingIndex + 1) + "/" + panel.lines.length + " 个…" : "读取列表挑选"; enabled: panel.canDirect && panel.probingIndex < 0; onClicked: panel.readAll() }
-        BusyIndicator { running: panel.probingIndex >= 0; visible: running; implicitWidth: 24; implicitHeight: 24 }
-        Item { Layout.fillWidth: true }
+        // 自己挑
+        Rectangle {
+            width: parent.cardWidth
+            height: pickCol.implicitHeight + 20
+            radius: 6; color: "#161b22"; border.color: "#30363d"
+            ColumnLayout {
+                id: pickCol
+                anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10
+                spacing: 6
+                Label { text: "先看列表，自己勾选"; color: "#e6edf3"; font.pixelSize: 14; font.bold: true }
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 12
+                    text: "逐个读出每个链接里有哪些（只读信息，不下载），在下面按列表分组显示，勾好后一起下。已下载过的会标出来。"
+                }
+                RowLayout {
+                    spacing: 6
+                    Button {
+                        text: panel.probingIndex >= 0 ? "正在读第 " + (panel.probingIndex + 1) + "/" + panel.lines.length + " 个…" : "读取列表"
+                        enabled: panel.canDirect && panel.probingIndex < 0
+                        onClicked: panel.readAll()
+                    }
+                    BusyIndicator { running: panel.probingIndex >= 0; visible: running; implicitWidth: 24; implicitHeight: 24 }
+                }
+            }
+        }
     }
 
     // 列表（按链接分组）
@@ -296,20 +329,15 @@ ColumnLayout {
         }
     }
 
-    // 后果与开始
+    // 下载：勾选的（读取列表后）／没有列表的方案直接下
     RowLayout {
         Layout.fillWidth: true
         spacing: 8
+        visible: panel.groups.length > 0 || !panel.scheme.probe
         Label {
             Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12; color: "#8b949e"
-            text: panel.scheme.probe
-                ? (panel.groups.length ? "已勾选 " + panel.pickedCount + " 条。" : "")
-                  + "直接下载：" + panel.lines.length + " 个链接" + (panel.values.rank === "none" ? "全部下载"
-                      : "各自在" + panel.optionLabel("pool") + "里逐个读数据、按" + panel.optionLabel("rank") + "排名取" + panel.optionLabel("top")
-                        + "（每个视频约 1～2 秒，排名表写进任务日志）")
-                  + "，排成一个任务按顺序下完，可以不用管；下过的自动跳过。"
-                  + "都先进暂存区，确认后「移入资源库」才会出现在 " + panel.scheme.destination + "。"
-                : (panel.lines.length ? panel.lines.length + " 项下载到暂存区（新批次），下过的自动跳过；确认后「移入资源库」才会出现在 " + panel.scheme.destination + "。" : "先填上面的内容。")
+            text: panel.scheme.probe ? "已勾选 " + panel.pickedCount + " 条，下到暂存区（下过的自动跳过）。"
+                : (panel.lines.length ? panel.lines.length + " 项下到暂存区（新批次），下过的自动跳过。" : "先在上面填内容。")
         }
         PrimaryButton {
             visible: panel.scheme.probe
