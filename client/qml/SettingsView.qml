@@ -101,6 +101,32 @@ Item {
                         }
                     }
                 }
+                // 广域网访问：托管 cloudflared 命名隧道（~/.cloudflared/config.yml），外网经域名访问网页端。
+                Toggle {
+                    id: wanSwitch
+                    Layout.topMargin: 12
+                    text: "允许广域网访问"
+                    property bool loaded: false
+                    property var status: ({})
+                    enabled: loaded
+                    function apply(r) { status = r; checked = r.enabled; loaded = true }
+                    Component.onCompleted: lanApi.getJSON("/api/network/wan", apply)
+                    onToggled: lanApi.send("POST", "/api/network/wan", {enabled: checked}, apply)
+                    // 打开期间每 3 秒刷新连接状态
+                    Timer { interval: 3000; repeat: true; running: wanSwitch.checked; onTriggered: lanApi.getJSON("/api/network/wan", wanSwitch.apply) }
+                }
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
+                    readonly property var st: wanSwitch.status
+                    text: !wanSwitch.loaded ? "" :
+                          !st.binary ? "没有找到 cloudflared，放到 ~/Applications/cloudflared/cloudflared。" :
+                          !st.domain ? "没有读到隧道配置里的域名：" + st.config :
+                          !wanSwitch.checked ? "关闭中：经隧道来的请求一律拒绝。打开后在外网用 https://" + st.domain + " 访问（需要登录账号）。" :
+                          st.connections > 0 ? "已连通（" + st.connections + " 条连接）：https://" + st.domain :
+                          st.running ? "正在连接 Cloudflare…" + (st.error ? "（" + st.error + "）" : "") :
+                          "未运行" + (st.error ? "：" + st.error : "")
+                    color: wanSwitch.checked && st.connections > 0 ? "#3fb950" : (wanSwitch.checked && st.error ? "#f85149" : "#8b949e")
+                }
                 Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12; color: "#8b949e"
                     text: "下载用的代理与 Cookie 在「下载 → 有声书 → 网络设置」里。"

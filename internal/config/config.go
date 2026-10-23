@@ -25,6 +25,12 @@ type ServerConfig struct {
 	Host string `json:"host"`
 	// LANDisabled 为 true 时只接受本机直连请求，局域网访问返回 403，并停止 mDNS 广播。
 	LANDisabled bool `json:"lan_disabled,omitempty"`
+	// WANEnabled 为 true 时托管 cloudflared 隧道，允许经隧道从公网访问（默认关闭）。
+	WANEnabled bool `json:"wan_enabled,omitempty"`
+	// Cloudflared 与 CloudflaredConfig 覆盖隧道程序与配置位置；留空时找 ~/Applications/cloudflared/cloudflared
+	// 与 ~/.cloudflared/config.yml。
+	Cloudflared       string `json:"cloudflared,omitempty"`
+	CloudflaredConfig string `json:"cloudflared_config,omitempty"`
 }
 
 // Config 是 omniHub 的根配置结构体。

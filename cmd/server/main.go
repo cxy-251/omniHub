@@ -134,6 +134,15 @@ func run(options launchOptions) (result error) {
 	app.OnLANChanged = setMDNS
 	defer setMDNS(false)
 
+	// 广域网：按保存的开关托管 cloudflared 隧道（用户自己的命名隧道配置），退出时结束它。
+	tunnelConfig := cfg.Server.CloudflaredConfig
+	if tunnelConfig == "" {
+		tunnelConfig = network.DefaultTunnelConfig()
+	}
+	app.Tunnel = network.NewTunnel(network.FindCloudflared(cfg.Server.Cloudflared), tunnelConfig)
+	app.Tunnel.SetEnabled(app.WANEnabled())
+	defer app.Tunnel.SetEnabled(false)
+
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", cfg.Server.Host, port),
 		Handler:           app,

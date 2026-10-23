@@ -53,6 +53,9 @@ type Application struct {
 	lanEnabled   atomic.Bool
 	// OnLANChanged 在局域网开关变化时调用（main 用来开关 mDNS 广播）。
 	OnLANChanged func(enabled bool)
+	// Tunnel 是 main 创建的 cloudflared 隧道；nil 表示不支持广域网。
+	Tunnel     *network.Tunnel
+	wanEnabled atomic.Bool
 }
 
 // New 创建服务生命周期控制器。全局状态暂不可用时返回离线实例，不创建替代账号。
@@ -69,6 +72,7 @@ func New(cfg *config.Config, configDir, localToken string) (*Application, error)
 	}
 	a := &Application{cfg: ownedConfig, configDir: configDir, localToken: localToken}
 	a.lanEnabled.Store(!ownedConfig.Server.LANDisabled)
+	a.wanEnabled.Store(ownedConfig.Server.WANEnabled)
 	if err := state.Recover(a.journalPath(), cfg.StateDirectory); err != nil {
 		log.Printf("Migration requires recovery: %v", err)
 	}
@@ -212,13 +216,23 @@ func (a *Application) leave() {
 
 // ServeHTTP 在切换期间拒绝新业务请求；离线时仅保留受本机凭证保护的管理入口。
 func (a *Application) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	// 局域网开关：关闭时只接受本机直连（不经反代）的请求。
-	if !a.lanEnabled.Load() && !auth.IsLoopbackDirect(req) {
-		http.Error(w, "局域网访问已关闭，请在 Deck 上的 omniHub「资源库」页打开", http.StatusForbidden)
+	// 广域网开关：经 Cloudflare 隧道来的请求（本机 cloudflared 转发，带 CF-Connecting-IP）只在打开时接受。
+	tunneled := isTunneled(req)
+	if tunneled && !a.wanEnabled.Load() {
+		http.Error(w, "广域网访问已关闭，请在 Deck 上的 omniHub「设置 → 网络」打开", http.StatusForbidden)
 		return
 	}
-	if req.URL.Path == "/api/network/lan" {
+	// 局域网开关：关闭时只接受本机直连（不经反代）的请求，以及已允许的隧道请求。
+	if !a.lanEnabled.Load() && !auth.IsLoopbackDirect(req) && !tunneled {
+		http.Error(w, "局域网访问已关闭，请在 Deck 上的 omniHub「设置 → 网络」打开", http.StatusForbidden)
+		return
+	}
+	switch req.URL.Path {
+	case "/api/network/lan":
 		a.handleLAN(w, req)
+		return
+	case "/api/network/wan":
+		a.handleWAN(w, req)
 		return
 	}
 	if isManagementPath(req.URL.Path) {
@@ -547,3 +561,74 @@ func (a *Application) handleLAN(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"enabled": a.lanEnabled.Load(), "urls": urls})
 }
+
+// isTunneled 判断请求是否由本机 cloudflared 转发而来：对端是回环地址且带 CF-Connecting-IP。
+// 局域网设备自己加这个头也不行，因为对端不是回环。
+func isTunneled(req *http.Request) bool {
+	if req.Header.Get("CF-Connecting-IP") == "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// handleWAN：GET 返回广域网隧道状态；POST {"enabled": bool} 保存开关并启停 cloudflared。只允许本机客户端操作。
+func (a *Application) handleWAN(w http.ResponseWriter, req *http.Request) {
+	g, ok := a.enter()
+	if !ok {
+		http.Error(w, "service reconfiguration in progress", http.StatusServiceUnavailable)
+		return
+	}
+	trusted := auth.NewMiddleware(g.authDB, a.localToken).IsTrustedLocal(req)
+	a.leave()
+	if !trusted {
+		http.Error(w, "只能在 Deck 本机修改", http.StatusForbidden)
+		return
+	}
+	if a.Tunnel == nil {
+		http.Error(w, "广域网隧道不可用", http.StatusServiceUnavailable)
+		return
+	}
+	if req.Method == http.MethodPost {
+		var in struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1024)).Decode(&in); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		if !a.operation.TryLock() {
+			http.Error(w, "configuration change in progress; retry later", http.StatusConflict)
+			return
+		}
+		next, err := cloneConfig(a.cfg)
+		if err == nil {
+			next.Server.WANEnabled = in.Enabled
+			if err = config.Save(next); err != nil && config.WriteWasCommitted(err) {
+				err = nil
+			}
+		}
+		if err == nil {
+			a.cfg = next
+			a.wanEnabled.Store(in.Enabled)
+		}
+		a.operation.Unlock()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		a.Tunnel.SetEnabled(in.Enabled)
+	} else if req.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(a.Tunnel.Status())
+}
+
+// WANEnabled 返回保存的广域网开关（main 启动时据此拉起隧道）。
+func (a *Application) WANEnabled() bool { return a.wanEnabled.Load() }
