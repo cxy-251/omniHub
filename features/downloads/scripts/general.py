@@ -101,16 +101,16 @@ def ytdlp(urls, a, platform):
         cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "best", "--embed-metadata", "--embed-thumbnail",
                 "--convert-thumbnails", "jpg", "--ppa", "ThumbnailsConvertor:-q:v 2 -vf crop=\"'min(iw,ih)':'min(iw,ih)'\"",
                 "-o", os.path.join(a.batch, ".incoming", "%(id)s.%(ext)s")]
-    elif a.want == "audio":   # 只要音频（有声书）：音声/<standard|nsfw>/<专辑>/<标题>，专辑默认用播放列表名
+    elif a.mode == "audio":   # 有声书 / 音频：音声/standard/<书名>/<标题>，书名默认用播放列表名
         album = safe(a.album) if a.album else "%(playlist_title,title)s"
         cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "best", "--embed-metadata", "--embed-thumbnail",
                 "--convert-thumbnails", "jpg",
-                "-o", os.path.join(a.batch, "media_library", "audio", a.audio_area, album, "%(title).100B.%(ext)s")]
+                "-o", os.path.join(a.batch, "media_library", "audio", "standard", album, "%(title).100B.%(ext)s")]
     else:
         h = a.max_height
         fmt = "bv*+ba/b" if h <= 0 else f"bv*[height<={h}]+ba/b[height<={h}]/b"
         out = os.path.join(a.batch, "media_library", "shortvideo", platform["dir"], "%(channel,uploader,uploader_id|未知作者)s",
-                           *([safe(a.group)] if a.group else []),   # 按团分：<频道>/<团名>/
+                           *([safe(a.group)] if a.group else []),   # MV 按艺人分：<公司频道>/<艺人>/
                            "%(upload_date>%Y-%m-%d)s_%(title).80B_%(id)s.%(ext)s")
         if a.mv_artist:
             out = os.path.join(a.batch, "media_library", "shortvideo", "MV", safe(a.mv_artist), "%(title).80B [%(id)s].%(ext)s")
@@ -252,62 +252,78 @@ def planned_path(info):
     return "/".join([safe(artist)] + ([safe(album)] if album else []) + [name])
 
 
-OFF_TOPIC = "标题里没有要的团名"
+# 视频方案的模式（YouTube 三种，B 站只有普通视频）：挑什么、怎么排、默认勾哪些、放哪里都由模式决定，界面上只选模式
+#   video  普通视频：全部，按播放量排；短视频/<平台>/<发布者>/
+#   mv     MV：只留正式 MV（按标题，见 ytmusic.is_mv），从标题认艺人、按艺人分组；短视频/<平台>/<公司频道>/<艺人>/，4K
+#   audio  有声书 / 音频：只要声音，按列表顺序；音声/standard/<书名>/，书名默认是播放列表名
+PICK_ALL_UP_TO = 50   # 候选不多于这么多时默认全勾；多了：普通视频勾播放量前 PICK_TOP 个，MV 一个都不勾（按艺人勾）
+PICK_TOP = 30
+UNKNOWN_ARTIST = "未认出艺人"
 
 
-def keyword_list(a):
-    """「标题含」里填的词（团名），保留原写法（用作文件夹名）。"""
-    return [w.strip() for w in re.split(r"[,，\n]", a.keywords) if w.strip()]
+def mv_song(title):
+    """MV 标题里引号中的歌名（「IVE 아이브 'LOVE DIVE' MV」→ LOVE DIVE），没有就用整个标题。"""
+    m = re.search(r"[\"'‘“「『【]([^\"'’”」』】]+)[\"'’”」』】]", title or "")
+    return m.group(1).strip() if m else title
 
 
-def matched_group(a, title):
-    """标题里出现的第一个团名（整词，不分大小写），没有返回空。"""
-    t = (title or "").casefold()
-    return next((w for w in keyword_list(a) if re.search(r"(?<![a-z0-9])" + re.escape(w.casefold()) + r"(?![a-z0-9])", t)), "")
-
-
-def video_keep(a):
-    """视频方案的筛选：--only mv 只要正式 MV（按标题，见 ytmusic.is_mv）；--keywords 标题里要有其中一个词（如团名，逗号分隔）。
-    返回 keep(条目) → 不要的原因或 None。"""
-    import ytmusic
-
-    def keep(e):
-        t = e.get("title") or ""
-        if keyword_list(a) and not matched_group(a, t):   # 整词：IVE 不算 FIVE
-            return OFF_TOPIC
-        if a.only == "mv" and not ytmusic.is_mv(t):
-            return "不是正式 MV（预告、练习室、舞台、花絮、反应视频等）" if ytmusic.MV_TITLE.search(t) else "不是 MV"
-        return None
-    return keep
-
-
-def write_video_plan(a):
-    """视频方案只读取、不下载：每个链接读一次列表页、筛选、按播放量排名，前 N 个默认勾上，其余列出来不勾。"""
+def list_videos(a):
+    """视频方案读列表（只读列表页，不逐个打开视频）：按模式筛选、排序、定默认勾选。返回列表（plan）。"""
     import rank
-    done, videos, skipped, ndone, errors, off_topic = archived(a), [], [], 0, 0, 0
-    keep = video_keep(a)
+    import ytmusic
+    done, videos, skipped, ndone, errors, other_count = archived(a), [], [], 0, 0, 0
+    book = ""
     for i, url in enumerate(a.urls):
         url = normalize(url)
         progress(i, len(a.urls), f"读第 {i + 1}/{len(a.urls)} 个链接：{url}")
         try:
-            title, cands, dropped, n = rank.candidates(url, cookie_file(platform_of(url)["id"]), a.rank, done, keep, progress, log)
+            title, entries, _ = rank.extract_list(url, cookie_file(platform_of(url)["id"]), 0)
         except Exception as e:
             log(f"ERROR: 读取失败 {url}：{e}")
             errors += 1
             continue
-        ndone += n
-        for k, e in enumerate(cands):
-            videos.append({"id": e["id"], "url": e["url"], "title": e["title"], "channel": e.get("uploader") or title,
-                           "views": e.get("views"), "list": title, "group": matched_group(a, e["title"]),
-                           "picked": a.rank == "none" or a.top <= 0 or k < a.top})
-        # 标题里没有团名的（公司频道里别的艺人）只记数量，不列出来
-        skipped += [{"id": e["id"], "title": e["title"], "artists": [], "reason": e["reason"]} for e in dropped if e["reason"] != OFF_TOPIC]
-        off_topic += sum(e["reason"] == OFF_TOPIC for e in dropped)
-    plan = {"urls": a.urls, "songs": [], "mvs": [], "videos": videos, "skipped": skipped, "done": [],
-            "done_count": ndone, "off_topic": off_topic, "other": [], "errors": errors}
-    save_plan(a, plan)
-    log(f"列表：候选 {len(videos)} 个（默认勾上 {sum(v['picked'] for v in videos)} 个）；不要的 {len(skipped)} 个；标题里没有团名的 {off_topic} 个；"
-        f"已下载过 {ndone} 个；出错 {errors} 个")
+        log(f"== {title or url}：列表里 {len(entries)} 个")
+        book = book or (title if len(entries) > 1 else (entries[0]["title"] if entries else ""))
+        for k, e in enumerate(entries):
+            if e["id"] in done:
+                ndone += 1
+                continue
+            channel = e.get("uploader") or re.sub(r"\s+-\s+(Videos|Shorts|Live|Home|Playlists)$", "", title or "")   # 「HYBE LABELS - Videos」→ 频道名
+            item = {"id": e["id"], "url": e["url"], "title": e["title"], "channel": channel,
+                    "views": e.get("views"), "list": title, "index": k + 1, "group": ""}
+            if a.mode == "mv":
+                if not ytmusic.is_mv(e["title"]):
+                    if ytmusic.MV_TITLE.search(e["title"]):   # 带 MV 字样但不是正式 MV 的列出来，其余只记数量
+                        skipped.append({"id": e["id"], "title": e["title"], "artists": [], "reason": "预告、练习室、舞台、花絮、反应视频等"})
+                    else:
+                        other_count += 1
+                    continue
+                item["group"] = ytmusic.mv_artist(e["title"]) or UNKNOWN_ARTIST
+            videos.append(item)
+    if a.mode == "mv":   # 同一艺人大小写不同（Hyolyn / HYOLYN）并成一组，用出现最多的写法
+        spell = {}
+        for v in videos:
+            spell.setdefault(v["group"].casefold(), []).append(v["group"])
+        for v in videos:
+            names = spell[v["group"].casefold()]
+            v["group"] = max(set(names), key=names.count)
+        videos.sort(key=lambda v: (v["group"] == UNKNOWN_ARTIST, v["group"].casefold(), -(v["views"] or -1)))
+    elif a.mode == "video":
+        videos.sort(key=lambda v: -(v["views"] if v["views"] is not None else -1))
+    many = len(videos) > PICK_ALL_UP_TO
+    for k, v in enumerate(videos):
+        v["picked"] = not many or (a.mode == "video" and k < PICK_TOP) or a.mode == "audio"
+    plan = {"urls": a.urls, "mode": a.mode, "videos": videos, "book": book, "skipped": skipped, "other_count": other_count,
+            "done_count": ndone, "songs": [], "mvs": [], "done": [], "other": [], "errors": errors,
+            "pick_note": "" if not many else {"video": f"太多了：默认勾播放量前 {PICK_TOP} 个", "mv": "太多了：默认不勾，按艺人勾选",
+                                                "audio": ""}[a.mode]}
+    log(f"列表：候选 {len(videos)} 个（默认勾上 {sum(v['picked'] for v in videos)} 个）；带 MV 字样但不要的 {len(skipped)} 个；"
+        f"其他视频 {other_count} 个；已下载过 {ndone} 个；出错 {errors} 个")
+    return plan
+
+
+def write_video_plan(a):
+    save_plan(a, list_videos(a))
 
 
 def save_plan(a, plan):
@@ -355,21 +371,24 @@ def load_plan(a):
     return ["https://www.youtube.com/watch?v=" + v for v in a.music_info], plan.get("other") or []
 
 
-def load_video_plan(a):
-    """视频方案按读取好的列表下：去掉 --exclude 的。返回 [(视频链接, 团名, 列表名)]。"""
-    with open(a.plan, encoding="utf-8") as f:
-        plan = json.load(f)
-    skip = set(filter(None, a.exclude.split(",")))
-    return [(v["url"], v.get("group") or "", v.get("list") or "") for v in plan.get("videos") or [] if v["id"] not in skip]
-
-
-def download_grouped(a, items, platform):
-    """按团名（视频）或专辑（只要音频时，没填专辑名就用列表名）分组，每组一个 yt-dlp 进程，一个一个下。
-    items 是 [(链接, 团名, 列表名)]。"""
+def download_videos(a, plan, skip, platform):
+    """视频方案按列表下（去掉 skip 里的）：MV 按艺人、有声书按书分组，每组一个 yt-dlp 进程，一个一个下。
+    每个视频要写进文件的元信息（模式、公司、艺人、歌名、书名、集数）记在 a.video_extra[视频 ID]。"""
     groups = {}
-    for url, group, list_title in items:
-        key = (group, "") if a.want != "audio" else ("", a.album or list_title)
-        groups.setdefault(key, []).append(url)
+    for v in plan["videos"]:
+        if v["id"] in skip:
+            continue
+        if a.mode == "audio":
+            key = ("", a.album or plan.get("book") or v["list"])
+            a.video_extra[v["id"]] = {"fields": {"OMNIHUB_MODE": "audio"}, "std": {"album": key[1], "title": v["title"], "number": v["index"]}}
+        elif a.mode == "mv":
+            key = (v["group"] if v["group"] != UNKNOWN_ARTIST else "", "")
+            a.video_extra[v["id"]] = {"fields": {"OMNIHUB_MODE": "mv", "COMPANY": v["channel"]},
+                                      "std": {"artist": key[0], "title": mv_song(v["title"])}}
+        else:
+            key = ("", "")
+            a.video_extra[v["id"]] = {"fields": {"OMNIHUB_MODE": "video"}, "std": {}}
+        groups.setdefault(key, []).append(v["url"])
     files, skipped, errors = [], 0, 0
     for (group, album), urls in groups.items():
         sub = argparse.Namespace(**vars(a))
@@ -708,13 +727,7 @@ def ranked(a):
         cookies = cookie_file(platform["id"])
         log(f"[{n + 1}/{len(a.urls)}] {url}")
         try:
-            if a.scheme == "music":
-                title, chosen, rule = rank.pick(url, cookies, a.rank, a.top, done, progress, log)
-            else:   # 视频：先筛（只要 MV、标题含团名），缺播放量的补上，再排名
-                title, cands, _, _ = rank.candidates(url, cookies, a.rank, done, video_keep(a), progress, log)
-                chosen, rule = cands[:a.top] if a.top > 0 and a.rank != "none" else cands, a.rank
-                for k, c in enumerate(chosen, 1):
-                    log(f"   ✓ {k:>3}. 播放 {rank.fmt_count(c.get('views'))}  {c['title'][:70]}")
+            title, chosen, rule = rank.pick(url, cookies, a.rank, a.top, done, progress, log)
         except Exception as e:
             log(f"   提取或排名失败：{e}")
             errors += 1
@@ -724,10 +737,6 @@ def ranked(a):
             if c.get("listeners") is not None:
                 a.lastfm_known[c["id"]] = {k: c.get(k) for k in ("listeners", "playcount", "lastfm_album", "tags", "lastfm_name")}
         if not chosen:
-            continue
-        if a.scheme != "music":
-            f, s, e = download_grouped(a, [(c["url"], matched_group(a, c["title"]), title) for c in chosen], platform)
-            files, skipped, errors = files + f, skipped + s, errors + e
             continue
         sub = argparse.Namespace(**vars(a))
         sub.per_list, sub.items = 0, ""
@@ -745,18 +754,19 @@ INFO_TAG = "SOURCE_INFO"
 EMBEDDABLE = (".mp4", ".m4a", ".m4b", ".mov", ".opus", ".ogg", ".flac", ".mp3")
 
 
-def embed_info(path, rec):
-    """把下载记录写进媒体文件自己的标签；文件格式不支持（webm、mkv、图片）或写失败时返回 False。"""
+def embed_info(path, rec, fields=None, std=None):
+    """把下载记录（和模式给的字段、标准的歌手/曲名/专辑/曲序）写进媒体文件自己的标签；
+    文件格式不支持（webm、mkv、图片）或写失败时返回 False。"""
     if not path.lower().endswith(EMBEDDABLE):
         return False
     try:
-        return write_tags(path, {INFO_TAG: json.dumps(rec, ensure_ascii=False)}, keep_genre=True)
+        return write_tags(path, {**(fields or {}), INFO_TAG: json.dumps(rec, ensure_ascii=False)}, std=std, keep_genre=True)
     except Exception as e:
         log(f"下载记录写不进 {os.path.basename(path)}：{e}")
         return False
 
 
-def collect_sidecars(batch):
+def collect_sidecars(batch, extra=None):
     """批次里每个文件旁边的元数据（yt-dlp 的 <名字>.info.json、gallery-dl 的 <文件>.json）：精简后写进对应的媒体文件
     （embed_info）；写不进的返回，由 main 合成批次的一个元数据文件（每条加 omnihub_file）。单个的 .json 都删掉。"""
     records = []
@@ -774,7 +784,10 @@ def collect_sidecars(batch):
             rec = {k: v for k, v in meta.items() if k not in META_DROP} if isinstance(meta, dict) else {"value": meta}
             stem = name[:-len(".info.json")] if name.endswith(".info.json") else name[:-len(".json")]
             media = next((os.path.join(folder, n) for n in names if n != name and (n == stem or os.path.splitext(n)[0] == stem)), path)
-            if media == path or not embed_info(media, rec):
+            more = (extra or {}).get(rec.get("id")) or {}
+            for k, v in (more.get("fields") or {}).items():
+                rec[k.lower()] = v
+            if media == path or not embed_info(media, rec, more.get("fields"), more.get("std")):
                 rec["omnihub_file"] = os.path.relpath(media, batch)
                 records.append(rec)
             os.remove(path)
@@ -805,19 +818,20 @@ def main():
     p.add_argument("--plan-out", default="", help="音乐：只读取列表，把会下什么写进这个 JSON 文件，不下载")
     p.add_argument("--plan", default="", help="音乐：按读取好的列表（--plan-out 写的文件）下载")
     p.add_argument("--exclude", default="", help="按列表下载时不要的视频 ID，逗号分隔")
-    p.add_argument("--only", choices=["all", "mv"], default="all", help="视频：mv 只要正式 MV（按标题）")
-    p.add_argument("--keywords", default="", help="视频：标题里要有其中一个词（逗号分隔，如团名）；视频按团名分文件夹")
-    p.add_argument("--want", choices=["video", "audio"], default="video", help="视频方案：audio 只要音频（有声书），进音声")
-    p.add_argument("--audio-area", choices=["standard", "nsfw"], default="standard", help="只要音频时放进音声的哪个分区")
+    p.add_argument("--mode", choices=["video", "mv", "audio"], default="video",
+                   help="视频方案的模式：video 普通视频、mv MV（按艺人分）、audio 有声书/音频（B 站只有 video）")
     a = p.parse_args()
     a.lastfm_known = {}   # 排名时查到的 Last.fm 信息（按视频 ID），下载后写进标签时复用
     a.album_of = {}       # 文件 → (专辑名, 曲序)：指定了专辑时由 ytdlp() 记下
     a.music_info = {}     # 视频 ID → YouTube Music 上的曲名、歌手、专辑、曲序：music_targets() 查到的
     a.mv_jobs = []        # [(歌手, [(MV 视频 ID, 标题)])]：给的是歌手页时由 music_targets() 记下，或从列表读
     a.mv_artist = ""      # 正在下谁的 MV（download_mvs 设）
-    a.group = ""          # 视频按团名分的子文件夹（download_grouped 设）
-    if a.want == "audio":   # 有声书：整个列表按原顺序全要，不挑 MV、不排名
-        a.only, a.rank = "all", "none"
+    a.group = ""          # MV 按艺人分的子文件夹（download_videos 设）
+    a.video_extra = {}    # 视频 ID → 写进文件的模式字段与标准标签（download_videos 记下）
+    if a.scheme == "bilibili":
+        a.mode = "video"
+    if a.mode == "mv" and a.max_height == 1080:   # MV 要高画质：有 4K 就要
+        a.max_height = 2160
     a.meta_records = []   # 批次的下载元数据：音乐每首、排名表；最后连同其他文件旁边的 .json 合成一个文件
     a.music_skipped = []  # 不下的歌及原因、已下载过的：读取列表时列出来
     a.music_done = []
@@ -841,13 +855,19 @@ def main():
         for urls in groups.values():
             f, s, e = ytdlp(urls, a, platform_of(urls[0]))
             files, skipped, errors = files + f, skipped + s, errors + e
-    elif a.plan and a.scheme in ("youtube", "bilibili"):
-        a.per_list, a.items = 0, ""
-        items = load_video_plan(a)
-        platform = next((p for p in PLATFORMS if p["id"] == SCHEME_PLATFORM[a.scheme]), platform_of(items[0][0]) if items else {})
-        files, skipped, errors = download_grouped(a, items, platform) if items else ([], 0, 0)
-    elif a.scheme in ("youtube", "bilibili") and (a.only == "mv" or a.keywords):
-        files, skipped, errors = ranked(a)   # 要筛选时先读列表页（不排名时按列表顺序全要）
+    elif a.scheme in ("youtube", "bilibili"):   # 按读取好的列表下（去掉没勾的）；没给列表时先读、按默认勾选下
+        if a.plan:
+            with open(a.plan, encoding="utf-8") as f:
+                plan = json.load(f)
+            skip = set(filter(None, a.exclude.split(",")))
+        else:
+            plan = list_videos(a)
+            skip = {v["id"] for v in plan["videos"] if not v["picked"]}
+        a.mode = plan.get("mode") or a.mode
+        if a.mode == "mv" and a.max_height == 1080:
+            a.max_height = 2160
+        platform = next((p for p in PLATFORMS if p["id"] == SCHEME_PLATFORM[a.scheme]), {"id": a.scheme, "dir": a.scheme})
+        files, skipped, errors = download_videos(a, plan, skip, platform)
     elif a.scheme == "music" and a.plan:
         songs, other = load_plan(a)
         youtube = next((p for p in PLATFORMS if p["id"] == "youtube"), platform_of(songs[0]) if songs else {"id": "youtube", "dir": "YouTube"})
@@ -867,7 +887,7 @@ def main():
         if a.mv_jobs:
             f, s, e = download_mvs(a, next((p for p in PLATFORMS if p["id"] == "youtube"), platform_of(a.urls[0])))
             files, skipped, errors = files + f, skipped + s, errors + e
-    write_meta(a.batch, a.meta_records + collect_sidecars(a.batch))
+    write_meta(a.batch, a.meta_records + collect_sidecars(a.batch, a.video_extra))
     progress(len(a.urls), len(a.urls), f"完成：新下载 {len(files)} 个文件，跳过已下载 {skipped} 个，出错 {errors} 个")
     for h in sorted(hints):
         log("提示：" + h)

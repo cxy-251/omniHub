@@ -122,7 +122,7 @@ AUDIO_TITLE = re.compile(r"official\s*audio|[(\[]audio[)\]]|音频|音訊|音源
 NOT_WANTED = re.compile(r"lyric|\blive\b|concert|performance|rehearsal|cover|vinyl|visuali[sz]er|teaser|trailer|"
                         r"behind|making|karaoke|ktv|interview|reaction|demo|practice|choreograph|highlight|medley|"
                         r"special video|track video|#shorts|\bshorts\b|relay|challenge|fancam|extra cut|sketch|"
-                        r"m/?v\s+bts\b|"
+                        r"m/?v\s+bts\b|\bep\.?\s*\d|self-?cam|\bvlog\b|현장|"
                         r"歌词|歌詞|现场|現場|演唱会|演唱會|花絮|预告|預告|伴奏|翻唱|티저|비하인드|메이킹|직캠|안무|연습", re.I)
 _titles = {}
 LIVE = re.compile(r"\blive\b|现场|現場|演唱会|演唱會", re.I)
@@ -239,3 +239,46 @@ def artist(channel_id, log, progress=lambda done, total, text: None):
     mvs = list({v: (v, title) for v, title in mvs}.values())
     log(f"视频列表 {len(tracks)} 个，其中 MV {len(mvs)} 个（歌词视频、现场、翻唱等不要）")
     return {"name": owner["name"], "songs": songs, "mvs": mvs}
+
+
+_HANGUL = re.compile(r"[가-힣]")
+
+
+def _latin_name(text):
+    return bool(text) and re.search(r"[A-Za-z]", text) and not _HANGUL.search(text)
+
+
+def mv_artist(title):
+    """从 MV 标题认艺人（公司频道里的韩团 MV 等）。按常见写法依次试：
+      「한승우(HAN SEUNGWOO) …」「케이윌(K.will) - …」     韩文名(英文名) → 括号里的英文名
+      「IVE 아이브 'LOVE DIVE' MV」「BTS (방탄소년단) ‘…’」 歌名引号或分隔符（ - 、_、【）之前，去掉韩文 → IVE、BTS
+      「IVE, David Guetta - …」「소유(SOYOU) X Francis」  合作的取第一位（MONSTA X、&TEAM、(G)I-DLE 这种名字不拆）
+      「[MV] 정세운 - Say yes (JEONG SEWOON)」              只写了韩文名：用标题里全大写的英文括号
+    认不出（只有韩文、OST 合辑等）返回空。"""
+    import unicodedata
+    t = unicodedata.normalize("NFKC", title or "")   # 𝗧𝗛𝗘 𝟴 这种花体字当成普通字母
+    t = re.sub(r"^\s*(?:[\[【][^\]】]*[\]】]\s*)+", "", t).strip()   # 开头的 [MV]、【官方】
+    m = re.match(r"^[\uac00-\ud7a3][\uac00-\ud7a3 ]*?\s*[(（]([^)）]*)[)）]", t)
+    if m and _latin_name(m.group(1)):
+        return m.group(1).strip()
+    # 艺人在歌名（开引号）或分隔符之前；撇号（Can't）不算引号；_ 只在括号、韩文后面或前后有空格时算分隔（fromis_9 不拆）
+    m = re.search(r"(?:^|\s)[\"'‘’‛“「『]|【|\s[-–—|]\s|\s[-–—|](?=\S)|(?<=[)\uac00-\ud7a3\s])_|_(?=\s)", t)
+    head = t[:m.start()] if m else t
+    head = re.split(r"\s*,\s*|\s+&\s+|\s+[xX×]\s+(?=[^\s가-힣])|(?<=[)\uac00-\ud7a3])[xX×](?=[(\uac00-\ud7a3])|\s+(?:feat\.?|ft\.?|with)\s+",
+                    head, flags=re.I)[0]
+    m = re.search(r"[\uac00-\ud7a3]\s*[(（]([^)）]*)[)）]", head)
+    if m and _latin_name(m.group(1)):
+        return m.group(1).strip()
+    if head.lstrip().startswith(("(", "（")):   # (G)I-DLE：括号是名字的一部分
+        name = head
+    else:
+        name = re.sub(r"[(（][^)）]*[)）]", " ", head)
+    name = " ".join(w for w in name.split() if not _HANGUL.search(w))
+    name = re.sub(MV_TITLE.pattern + r"|\bofficial\b|\bHD\b", " ", name, flags=re.I)
+    name = " ".join(name.split()).strip(" -–—|_,.")
+    if name in ("X", "x", "×", "&") or re.search(r"\bOST\b", name, re.I):
+        name = ""
+    if not name:   # 只写了韩文名：用标题里全大写的英文括号（JEONG SEWOON）
+        name = next((p.strip() for p in re.findall(r"[(（]([^)）]*)[)）]", t)
+                     if _latin_name(p.strip()) and p.strip() == p.strip().upper()), "")
+    return name

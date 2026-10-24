@@ -227,36 +227,3 @@ def pick(url, cookies, rule, top, done_ids, progress, log):
         log(f"   {len(unscored)} 个没有分数（{'Last.fm 查不到或听众太少' if rule == 'replay' else '列表里没有播放量'}），不参与排名：" +
             "；".join(e["title"][:30] for e in unscored[:10]) + ("…" if len(unscored) > 10 else ""))
     return title, chosen, rule
-
-
-def fill_views(entries, cookies, progress, log):
-    """列表页上没有播放量的（多是最新上传的）逐个打开视频页补上，每个约 3 秒。"""
-    missing = [e for e in entries if e.get("views") is None]
-    if not missing:
-        return
-    log(f"   {len(missing)} 个在列表页上没有播放量，逐个打开视频页补上")
-    with YoutubeDL(ydl_opts(cookies, {})) as ydl:
-        for n, e in enumerate(missing, 1):
-            progress(n - 1, len(missing), f"补播放量 {n}/{len(missing)}：{e['title'][:40]}")
-            try:
-                info = ydl.extract_info(e["url"], download=False, process=False) or {}
-                e["views"] = info.get("view_count")
-            except Exception as err:
-                log(f"   补不上：{e['title'][:40]}（{err}）")
-
-
-def candidates(url, cookies, rule, done_ids, keep, progress, log):
-    """视频方案：读一次列表页 → 去掉已下载的、keep(条目) 返回不要的原因的 → 按规则排序（views 播放量，缺的补上；none 按列表顺序）。
-    返回 (列表名, 候选（排好序）, 不要的 [{条目…, reason}], 已下载过的数量)。"""
-    title, entries, _ = extract_list(url, cookies, 0)
-    log(f"== {title or url}：列表里 {len(entries)} 个")
-    fresh = [e for e in entries if e["id"] not in done_ids]
-    dropped, kept = [], []
-    for e in fresh:
-        reason = keep(e) if keep else None
-        (dropped if reason else kept).append({**e, "reason": reason} if reason else e)
-    log(f"   已下载过 {len(entries) - len(fresh)} 个；不要的 {len(dropped)} 个；候选 {len(kept)} 个")
-    if rule == "views":
-        fill_views(kept, cookies, progress, log)
-        kept.sort(key=lambda e: e.get("views") if e.get("views") is not None else -1, reverse=True)
-    return title, kept, dropped, len(entries) - len(fresh)

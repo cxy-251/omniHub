@@ -4,10 +4,9 @@ import QtQuick.Layouts
 import QtCore
 
 // 下载方案页（音乐、YouTube、B 站、X、其他链接）：按服务端给的方案说明生成。
-//   去向 → 链接（一行一个）→ 选项 →（列表类方案）怎么挑 → 开始。设好就不用管，进度在「任务」里。
-// 视频方案可按播放量取每个链接前 N 个（只读一次列表页）；音乐全部下载不筛选，数据写进标签。
-// 音乐先「读取列表」：服务端按下载时同样的规则（换纯音轨版、查专辑、挑 MV）列出会下什么、不下什么，
-// 去掉不要的勾，再按这份列表下载。
+//   去向 → 链接（一行一个）→（YouTube）模式 → 读取列表 → 勾选 → 开始。进度在「任务」里。
+// 列表类方案先「读取列表」：服务端按下载时同样的规则列出会下什么、不下什么（音乐：换纯音轨版、查专辑、挑 MV；
+// YouTube：按模式挑 MV 并按艺人分组 / 有声书按集 / 普通视频按播放量），去掉不要的勾，再按这份列表一个一个下。
 ColumnLayout {
     id: panel
     required property var kind
@@ -17,30 +16,28 @@ ColumnLayout {
     spacing: 8
 
     ApiClient { id: api }
-    readonly property var scheme: Object.assign({steps: [], destination: "", input: "", placeholder: "", ranked: false}, kind.scheme || {})
-    readonly property var rankFields: ["rank", "top"]
+    readonly property var scheme: Object.assign({steps: [], destination: "", input: "", placeholder: ""}, kind.scheme || {})
     property var values: ({})
     property string input: ""
     property bool showHelp: false
     property var analysis: ({items: []})
 
-    // show_if：{字段: 值}，值以 ! 开头表示「不等于」（如「专辑名」只在「要什么 = 只要音频」时显示）
-    function shown(f) {
-        var cond = f.show_if || {}
-        return Object.keys(cond).every(function (k) {
-            var want = cond[k], have = String(values[k] === undefined ? "" : values[k])
-            return want.charAt(0) === "!" ? have !== want.slice(1) : have === want
-        })
-    }
     function field(name) { return kind.fields.find(function (f) { return f.name === name }) || null }
-    function set(name, value) { var v = Object.assign({}, values); v[name] = value; values = v }
+    function set(name, value) {
+        var v = Object.assign({}, values); v[name] = value; values = v
+        if (name === "mode") { save({mode: value}); if (plan || planJob) clearPlan() }   // 换了模式，读出的列表就不对了
+    }
     function optionLabel(name) { var f = field(name); var o = f ? f.options.find(function (x) { return x.value === values[name] }) : null; return o ? o.label : "" }
     function reset() {
         var v = {}
         kind.fields.forEach(function (f) { if (f.default !== undefined) v[f.name] = f.default })
         values = v; input = ""; analysis = {items: []}
         plan = null; planJob = null; planToken = ""; excluded = {}
-        if (kind.scheme && kind.scheme.listable) restoreList()   // 不用 listable：换方案时这个绑定可能还没更新
+        if (kind.scheme && kind.scheme.listable) {   // 不用 listable：换方案时这个绑定可能还没更新
+            var mode = saved().mode   // 上次用的模式
+            if (mode && field("mode")) { var v2 = Object.assign({}, values); v2.mode = mode; values = v2 }
+            restoreList()
+        }
     }
     onKindChanged: reset()
     Component.onCompleted: reset()
@@ -61,6 +58,7 @@ ColumnLayout {
     property var planJob: null     // 读取列表的任务（/api/downloads/jobs 里的一项）
     property var plan: null        // 读出来的列表：songs、mvs、videos、skipped、done、other
     property var excluded: ({})    // 去掉勾的视频 ID
+    property string bookName: ""   // 有声书模式的书名（读出列表时填播放列表名，可以改）
     readonly property bool listing: !!planJob && planJob.running
     readonly property bool listFailed: !!planJob && !planJob.running && planJob.exit_code !== 0
     // 读取在服务端后台跑：切到别的标签页、关掉下载页再回来，按存下的令牌和任务接着看（每个方案一份）
@@ -72,7 +70,7 @@ ColumnLayout {
         all[kind.id] = Object.assign(all[kind.id] || {}, fields)
         listPrefs.state = JSON.stringify(all)
     }
-    function clearPlan() { planToken = ""; planJob = null; plan = null; excluded = {}; save({token: "", job: "", excluded: {}, picked: false}) }
+    function clearPlan() { planToken = ""; planJob = null; plan = null; excluded = {}; save({token: "", job: "", excluded: {}, picked: ""}) }
     function readList() {
         clearPlan()
         planToken = Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
@@ -92,13 +90,14 @@ ColumnLayout {
     }
     function planLoaded(r) {
         // 视频方案：排名在前 N 之后的默认不勾（只在第一次取到列表时；之后按用户改过的）
-        if (!saved().picked) {
+        if (saved().picked !== planToken) {
             var m = Object.assign({}, excluded)
             ;(r.videos || []).forEach(function (v) { if (!v.picked) m[v.id] = true })
             excluded = m
-            save({picked: true})
+            save({picked: planToken})
         }
         plan = r
+        bookName = r.book || ""
     }
     function pollList() {
         api.getJSON("/api/downloads/jobs", function (list) {
@@ -112,12 +111,22 @@ ColumnLayout {
     Timer { interval: 1500; repeat: true; running: panel.listing; onTriggered: panel.pollList() }
     function toggle(id, on) { var m = Object.assign({}, excluded); if (on) delete m[id]; else m[id] = true; excluded = m }
     onExcludedChanged: if (planToken) save({excluded: excluded})
-    function setAll(type, on) {
+    function setAll(group, on) {
         var m = Object.assign({}, excluded)
-        rows.forEach(function (r) { if (r.type === type) { if (on) delete m[r.id]; else m[r.id] = true } })
+        var ids = group.indexOf("a:") === 0
+            ? (plan.videos || []).filter(function (v) { return "a:" + v.group === group }).map(function (v) { return v.id })
+            : group === "video" ? (plan.videos || []).map(function (v) { return v.id })
+            : rows.filter(function (r) { return r.grp === group }).map(function (r) { return r.id })
+        ids.forEach(function (id) { if (on) delete m[id]; else m[id] = true })
         excluded = m
     }
-    function count(type) { return rows.filter(function (r) { return r.type === type && !panel.excluded[r.id] }).length }
+    function count(type) {
+        if (type === "video")   // 按全部视频算（MV 模式收起的组不在 rows 里）
+            return plan ? (plan.videos || []).filter(function (v) { return !panel.excluded[v.id] }).length : 0
+        return rows.filter(function (r) { return r.type === type && !panel.excluded[r.id] }).length
+    }
+    property var expanded: ({})   // MV 模式展开了哪些艺人
+    function expand(group) { var m = Object.assign({}, expanded); if (m[group]) delete m[group]; else m[group] = true; expanded = m }
     function views(n) { return n === null || n === undefined ? "播放量不明" : n >= 1e8 ? (n / 1e8).toFixed(1) + " 亿次" : n >= 1e4 ? Math.round(n / 1e4) + " 万次" : n + " 次" }
     // 列表的每一行：分组标题、要下的歌、MV、视频、其他网站链接、不下的、已下载过的
     readonly property var rows: {
@@ -126,17 +135,38 @@ ColumnLayout {
         var who = function (x) { return (x.artists && x.artists.length ? x.artists.join(" / ") + " - " : "") + (x.title || x.id) }
         var songs = (plan.songs || []).slice().sort(function (a, b) { return a.path.localeCompare(b.path, undefined, {numeric: true}) })
         if (songs.length) out.push({type: "head", group: "song", text: "要下的歌 " + songs.length + " 首（放到 音声/音乐/ 下的位置）"})
-        songs.forEach(function (x) { out.push({type: "song", id: x.id, text: x.path, note: x.source === "纯音轨" ? "" : x.source}) })
+        songs.forEach(function (x) { out.push({type: "song", grp: "song", id: x.id, text: x.path, note: x.source === "纯音轨" ? "" : x.source}) })
         var mvs = (plan.mvs || []).filter(function (m) { return !m.done })
         if (mvs.length) out.push({type: "head", group: "mv", text: "MV " + mvs.length + " 个（下成视频，放到 短视频/MV/<歌手>/）"})
-        mvs.forEach(function (m) { out.push({type: "mv", id: m.id, text: m.title, note: m.artist}) })
+        mvs.forEach(function (m) { out.push({type: "mv", grp: "mv", id: m.id, text: m.title, note: m.artist}) })
         var videos = plan.videos || []
-        if (videos.length) out.push({type: "head", group: "video", text: "候选视频 " + videos.length + " 个（按播放量排，前 " + (values.top || "N") + " 个默认勾上；放到 " + scheme.destination + "）"})
-        videos.forEach(function (v) { out.push({type: "video", id: v.id, text: v.title, note: views(v.views) + " · " + v.channel}) })
+        if (plan.mode === "mv") {   // 一个艺人一行（勾选整组），点「展开」看这个艺人的每支 MV
+            var last = null
+            videos.forEach(function (v) {
+                var key = "a:" + v.group
+                if (v.group !== last) {
+                    last = v.group
+                    var mine = videos.filter(function (x) { return x.group === v.group })
+                    var on = mine.filter(function (x) { return !panel.excluded[x.id] }).length
+                    out.push({type: "artist", group: key, picked: on, total: mine.length,
+                              text: v.group + "　" + (on ? on + " / " : "") + mine.length + " 个", note: "放到 " + v.channel + " / " + v.group})
+                }
+                if (panel.expanded[key])
+                    out.push({type: "video", grp: key, id: v.id, text: "　　" + v.title, note: views(v.views)})
+            })
+        } else if (videos.length) {
+            out.push({type: "head", group: "video", text: (plan.mode === "audio" ? "共 " + videos.length + " 集，按列表顺序" : "视频 " + videos.length + " 个，按播放量排")
+                      + (plan.pick_note ? "；" + plan.pick_note : "")})
+            videos.forEach(function (v) {
+                out.push({type: "video", grp: "video", id: v.id, text: (plan.mode === "audio" ? v.index + ". " : "") + v.title,
+                          note: plan.mode === "audio" ? "" : views(v.views) + " · " + v.channel})
+            })
+        }
+        if (plan.mode === "mv" && plan.pick_note) out.splice(0, 0, {type: "head", text: "共 " + videos.length + " 个 MV；" + plan.pick_note})
+        if (plan.other_count) out.push({type: "head", text: "其他视频 " + plan.other_count + " 个（不是 MV，不列出）"})
         if ((plan.other || []).length) out.push({type: "head", text: "其他网站的链接 " + plan.other.length + " 个（不查纯音轨版，按原视频下音频）"})
         ;(plan.other || []).forEach(function (u) { out.push({type: "other", text: u}) })
-        if (plan.off_topic) out.push({type: "head", text: "标题里没有要的团名 " + plan.off_topic + " 个（频道里别的艺人，不列出）"})
-        if (plan.skipped.length) out.push({type: "head", text: "不下 " + plan.skipped.length + " 个"})
+        if (plan.skipped.length) out.push({type: "head", text: (plan.mode === "mv" ? "带 MV 字样但不是正式 MV（预告、练习室等），不下 " : "不下 ") + plan.skipped.length + " 个"})
         plan.skipped.forEach(function (x) { out.push({type: "skip", text: who(x), note: x.reason || ""}) })
         var done = (plan.done || []).map(who).concat(mvs.length < (plan.mvs || []).length ? plan.mvs.filter(function (m) { return m.done }).map(function (m) { return "MV：" + m.title }) : [])
         var doneCount = done.length + (plan.done_count || 0)
@@ -148,11 +178,11 @@ ColumnLayout {
         var parts = []
         if (count("song")) parts.push("歌 " + count("song") + " 首")
         if (count("mv")) parts.push("MV " + count("mv") + " 个")
-        if (count("video")) parts.push("视频 " + count("video") + " 个")
+        if (count("video")) parts.push((plan && plan.mode === "mv" ? "MV " : plan && plan.mode === "audio" ? "音频 " : "视频 ") + count("video") + " 个")
         return parts.join("、") || "没有勾选"
     }
     function startPlan() {
-        var p = Object.assign({}, values, {plan: planToken, urls: lines.join("\n"), library: stagingLibrary || values.library || "", exclude: Object.keys(excluded).join(",")})
+        var p = Object.assign({}, values, {album: bookName, plan: planToken, urls: lines.join("\n"), library: stagingLibrary || values.library || "", exclude: Object.keys(excluded).join(",")})
         panel.run(p)
         clearPlan()
     }
@@ -163,7 +193,7 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: 6
         Label { text: "放到"; color: "#8b949e"; font.pixelSize: 12 }
-        Label { text: panel.values.want === "audio" && panel.scheme.audio_destination ? panel.scheme.audio_destination : panel.scheme.destination; color: "#3fb950"; font.pixelSize: 14; font.bold: true }
+        Label { text: (panel.scheme.mode_destinations || {})[panel.values.mode] || panel.scheme.destination; color: "#3fb950"; font.pixelSize: 14; font.bold: true }
         Label { text: "（先进暂存区，确认后再移入）"; color: "#6e7681"; font.pixelSize: 12 }
         Item { Layout.fillWidth: true }
         Chip { text: panel.showHelp ? "收起说明" : "怎么用？"; selected: panel.showHelp; onClicked: panel.showHelp = !panel.showHelp }
@@ -187,17 +217,25 @@ ColumnLayout {
         }
     }
 
-    // 选项（放不下自动换行）：怎么挑的两项放在最前面
+    // 选项（放不下自动换行）。「模式」是一排按钮，选中的模式下面一行说明它会怎么做
     Flow {
         Layout.fillWidth: true
         spacing: 8
         Repeater {
-            model: panel.kind.fields.filter(function (f) { return f.name !== "urls" && f.name !== "library" && panel.shown(f) && (f.name !== "top" || panel.values.rank !== "none") })
-                                    .sort(function (a, b) { return (panel.rankFields.indexOf(b.name) >= 0) - (panel.rankFields.indexOf(a.name) >= 0) })
+            model: panel.kind.fields.filter(function (f) { return f.name !== "urls" && f.name !== "library" })
             delegate: Row {
                 required property var modelData
                 spacing: 4
                 Label { text: modelData.label; color: "#8b949e"; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+                Repeater {
+                    model: modelData.type === "modes" ? modelData.options : []
+                    delegate: Chip {
+                        required property var modelData
+                        text: modelData.label.split("：")[0]
+                        selected: panel.values.mode === modelData.value
+                        onClicked: panel.set("mode", modelData.value)
+                    }
+                }
                 ComboBox {
                     visible: modelData.type === "choice"
                     implicitHeight: 30; width: modelData.name === "rank" ? 150 : 120; font.pixelSize: 12
@@ -215,6 +253,13 @@ ColumnLayout {
                 }
             }
         }
+    }
+
+    Label {
+        readonly property var option: { var f = panel.field("mode"); return f ? (f.options || []).find(function (o) { return o.value === panel.values.mode }) : null }
+        visible: !!option
+        text: option ? option.label.split("：").slice(1).join("：") : ""
+        color: "#6e7681"; font.pixelSize: 12
     }
 
     // 其他链接：每个链接认成什么平台
@@ -239,6 +284,12 @@ ColumnLayout {
                               + ((panel.planJob.tail || []).length ? "\n最近：" + panel.planJob.tail[panel.planJob.tail.length - 1] : "")
             : "读取完成，正在取列表…"
     }
+    RowLayout {
+        visible: panel.listable && !!panel.plan && panel.plan.mode === "audio"
+        spacing: 6
+        Label { text: "书名（音声里的专辑名）"; color: "#8b949e"; font.pixelSize: 12 }
+        TextField { implicitHeight: 30; Layout.preferredWidth: 360; font.pixelSize: 12; text: panel.bookName; onTextEdited: panel.bookName = text }
+    }
     Rectangle {
         visible: panel.listable && !!panel.plan
         Layout.fillWidth: true
@@ -254,6 +305,7 @@ ColumnLayout {
             delegate: RowLayout {
                 required property var modelData
                 readonly property bool pickable: modelData.type === "song" || modelData.type === "mv" || modelData.type === "video"
+                readonly property bool artist: modelData.type === "artist"
                 width: planList.width - 12
                 spacing: 6
                 CheckBox {
@@ -262,12 +314,20 @@ ColumnLayout {
                     onToggled: panel.toggle(modelData.id, checked)
                     padding: 0; implicitHeight: 24
                 }
+                CheckBox {   // 艺人：勾上 / 去掉整组（部分勾选时显示半选）
+                    visible: parent.artist
+                    tristate: true
+                    checkState: !parent.artist ? Qt.Unchecked : modelData.picked === 0 ? Qt.Unchecked : modelData.picked === modelData.total ? Qt.Checked : Qt.PartiallyChecked
+                    nextCheckState: function () { return checkState === Qt.Checked ? Qt.Unchecked : Qt.Checked }
+                    onClicked: panel.setAll(modelData.group, checkState === Qt.Checked)
+                    padding: 0; implicitHeight: 24
+                }
                 Label {
                     Layout.fillWidth: true; elide: Text.ElideMiddle
                     topPadding: modelData.type === "head" ? 8 : 2; bottomPadding: 2
                     text: modelData.text
                     font.pixelSize: modelData.type === "head" ? 13 : 12; font.bold: modelData.type === "head"
-                    color: modelData.type === "head" ? "#e6edf3" : modelData.type === "skip" || modelData.type === "done" ? "#6e7681"
+                    color: modelData.type === "head" || modelData.type === "artist" ? "#e6edf3" : modelData.type === "skip" || modelData.type === "done" ? "#6e7681"
                          : panel.excluded[modelData.id] ? "#6e7681" : "#c9d1d9"
                 }
                 Label {
@@ -276,6 +336,7 @@ ColumnLayout {
                     text: modelData.note || ""
                     font.pixelSize: 11; color: modelData.type === "skip" ? "#d29922" : "#8b949e"
                 }
+                Chip { visible: modelData.type === "artist"; text: panel.expanded[modelData.group] ? "收起" : "展开"; onClicked: panel.expand(modelData.group) }
                 Chip { visible: modelData.type === "head" && !!modelData.group; text: "全选"; onClicked: panel.setAll(modelData.group, true) }
                 Chip { visible: modelData.type === "head" && !!modelData.group; text: "全不选"; onClicked: panel.setAll(modelData.group, false) }
             }
@@ -292,14 +353,9 @@ ColumnLayout {
                 : panel.listable && panel.plan ? "按上面的列表一个一个下：" + panel.pickedText()
                   + ((panel.plan.other || []).length ? "，其他网站链接 " + panel.plan.other.length + " 个" : "") + "。去掉勾的不下；改了链接或选项要重新读取。"
                 : panel.listable ? panel.lines.length + " 个链接。先「读取列表」看会下哪些、哪些不下，再开始下载；也可以不看直接下。"
-                : panel.lines.length + " 个链接"
-                  + (!panel.scheme.ranked ? "" : panel.values.rank === "none" ? "，每个全部下载"
-                     : "，每个读一次列表页、按" + panel.optionLabel("rank") + "取" + panel.optionLabel("top") + "（排名表写进任务日志）"
-                       + (panel.kind.id === "music" ? "；完整专辑整张下" : ""))
-                  + "，排成一个任务在后台下完，下过的自动跳过。"
-                  + (panel.kind.id === "music" ? "全部下载不筛选；每首的播放数、点赞、发布日期、下载日期和 Last.fm 信息（风格、听众、重播率）写进文件，播放时显示。" : "")
+                : panel.lines.length + " 个链接，排成一个任务在后台下完，下过的自动跳过。"
         }
-        Chip { visible: panel.listable && !panel.plan; text: "不看列表，直接下载"; enabled: panel.ready && !panel.listing; onClicked: panel.start() }
+        Chip { visible: panel.isMusic && !panel.plan; text: "不看列表，直接下载"; enabled: panel.ready && !panel.listing; onClicked: panel.start() }
         Chip { visible: panel.listable && !!panel.plan; text: "重新读取"; enabled: panel.ready; onClicked: panel.readList() }
         PrimaryButton {
             visible: panel.listable

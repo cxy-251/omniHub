@@ -46,8 +46,6 @@ type dlField struct {
 	Advanced    bool       `json:"advanced,omitempty"` // 收在「更多选项」里
 	Default     any        `json:"default,omitempty"`
 	Options     []dlOption `json:"options,omitempty"`
-	// ShowIf：只在其他字段取这些值时显示（如「专辑名」只在「要什么 = 只要音频」时）；值以 ! 开头表示「不等于」
-	ShowIf map[string]string `json:"show_if,omitempty"`
 }
 
 type dlKind struct {
