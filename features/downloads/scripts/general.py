@@ -53,8 +53,13 @@ def cookie_file(pid):
     return path if path and os.path.isfile(path) else ""
 
 
+# 文件名里不能用的字符换成样子相近的全角字符（「Song: Part 2」「bad idea right?」看着还是原样）
+UNSAFE = str.maketrans({"\\": "＼", "/": "／", ":": "：", "*": "＊", "?": "？", '"': "＂", "<": "＜", ">": "＞", "|": "｜",
+                        "\r": " ", "\n": " ", "\t": " "})
+
+
 def safe(name):
-    name = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", name).strip(" .")
+    name = name.translate(UNSAFE).strip(" .")
     return name[:100] or "未分类"
 
 
