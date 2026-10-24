@@ -433,7 +433,7 @@ def move_music(batch, f, artist, album, number, track, video_id):
     return dest
 
 
-def write_tags(path, fields, genre="", lyrics="", std=None):
+def write_tags(path, fields, genre="", lyrics="", std=None, keep_genre=False):
     """把自定义字段写进音频文件：风格写标准 GENRE 字段（多个用 ; 分隔），歌词写标准歌词字段
     （Vorbis LYRICS、MP4 ©lyr、ID3 USLT；带时间轴的就是 LRC 文本），std 是标准的歌手、曲名、专辑、曲序、年份，其余按格式写
     MP4 自由格式（----:com.apple.iTunes:键）、ID3 TXXX、Vorbis 注释（Opus、FLAC）。"""
@@ -446,9 +446,11 @@ def write_tags(path, fields, genre="", lyrics="", std=None):
     std = {k: v for k, v in (std or {}).items() if v}
     # 风格只用 Last.fm 的标签；yt-dlp 写进去的是 YouTube 分类（Music、Entertainment），不是风格，没有就清掉
     if isinstance(f, MP4):
+        if f.tags is None:   # yt-dlp 下的视频没有嵌标签
+            f.add_tags()
         if genre:
             f["\xa9gen"] = [genre]
-        else:
+        elif not keep_genre:
             f.pop("\xa9gen", None)
         if lyrics:
             f["\xa9lyr"] = [lyrics]
@@ -462,7 +464,7 @@ def write_tags(path, fields, genre="", lyrics="", std=None):
     elif isinstance(f.tags, ID3):
         if genre:
             f.tags.add(TCON(encoding=3, text=[genre]))
-        else:
+        elif not keep_genre:
             f.tags.delall("TCON")
         if lyrics:
             f.tags.delall("USLT")
@@ -477,7 +479,7 @@ def write_tags(path, fields, genre="", lyrics="", std=None):
             f.add_tags()
         if genre:
             f.tags["GENRE"] = genre
-        elif "GENRE" in f.tags:
+        elif "GENRE" in f.tags and not keep_genre:
             del f.tags["GENRE"]
         if lyrics:
             f.tags["LYRICS"] = lyrics
@@ -559,9 +561,20 @@ def enrich_music(files, known, batch, album_of, music_info):
         if lyr["match"]:
             fields["LYRICS_MATCH"] = lyr["match"]
         counts[lyr["status"]] += 1
+        rec = {}
+        if meta:   # 完整的下载记录（精简过）也写进文件：SOURCE_INFO 标签，JSON
+            rec = {k: v for k, v in meta.items() if k not in META_DROP}
+            if info:
+                rec["lastfm"] = {k: info.get(k) for k in ("listeners", "playcount", "lastfm_album", "tags", "lastfm_name")}
+            rec["lyrics_status"], rec["lyrics_match"] = lyr["status"], lyr["match"]
+            if ytm:
+                rec["youtube_music"] = ytm
+            fields[INFO_TAG] = json.dumps(rec, ensure_ascii=False)
+        embedded = False
         try:
             if write_tags(f, fields, "; ".join((info or {}).get("tags") or []), lyr["text"], std):
                 tagged += 1
+                embedded = True
         except Exception as e:
             log(f"写入标签失败 {os.path.basename(f)}：{e}")
         try:
@@ -569,14 +582,8 @@ def enrich_music(files, known, batch, album_of, music_info):
             placed += 1
         except OSError as e:
             log(f"归档失败 {os.path.basename(f)}：{e}")
-        if meta:
-            rec = {k: v for k, v in meta.items() if k not in META_DROP}
+        if rec and not embedded:   # 写不进文件的才留在批次的元数据文件里
             rec["omnihub_file"] = os.path.relpath(f, batch)
-            if info:
-                rec["lastfm"] = {k: info.get(k) for k in ("listeners", "playcount", "lastfm_album", "tags", "lastfm_name")}
-            rec["lyrics_status"], rec["lyrics_match"] = lyr["status"], lyr["match"]
-            if ytm:
-                rec["youtube_music"] = ytm
             records.append(rec)
         if os.path.isfile(meta_path):
             os.remove(meta_path)
@@ -626,9 +633,25 @@ def ranked(a):
     return files, skipped, errors
 
 
+# 完整下载记录写进媒体文件的标签名（JSON）：Opus/FLAC 的 Vorbis 注释、MP3 的 TXXX、MP4/M4A 的自由格式
+INFO_TAG = "SOURCE_INFO"
+EMBEDDABLE = (".mp4", ".m4a", ".m4b", ".mov", ".opus", ".ogg", ".flac", ".mp3")
+
+
+def embed_info(path, rec):
+    """把下载记录写进媒体文件自己的标签；文件格式不支持（webm、mkv、图片）或写失败时返回 False。"""
+    if not path.lower().endswith(EMBEDDABLE):
+        return False
+    try:
+        return write_tags(path, {INFO_TAG: json.dumps(rec, ensure_ascii=False)}, keep_genre=True)
+    except Exception as e:
+        log(f"下载记录写不进 {os.path.basename(path)}：{e}")
+        return False
+
+
 def collect_sidecars(batch):
-    """批次里每个文件旁边的元数据（yt-dlp 的 <名字>.info.json、gallery-dl 的 <文件>.json）：精简后返回，单个的删掉。
-    每条加 omnihub_file：对应的媒体文件在批次里的路径。"""
+    """批次里每个文件旁边的元数据（yt-dlp 的 <名字>.info.json、gallery-dl 的 <文件>.json）：精简后写进对应的媒体文件
+    （embed_info）；写不进的返回，由 main 合成批次的一个元数据文件（每条加 omnihub_file）。单个的 .json 都删掉。"""
     records = []
     for folder, _, names in os.walk(batch):
         for name in names:
@@ -644,8 +667,9 @@ def collect_sidecars(batch):
             rec = {k: v for k, v in meta.items() if k not in META_DROP} if isinstance(meta, dict) else {"value": meta}
             stem = name[:-len(".info.json")] if name.endswith(".info.json") else name[:-len(".json")]
             media = next((os.path.join(folder, n) for n in names if n != name and (n == stem or os.path.splitext(n)[0] == stem)), path)
-            rec["omnihub_file"] = os.path.relpath(media, batch)
-            records.append(rec)
+            if media == path or not embed_info(media, rec):
+                rec["omnihub_file"] = os.path.relpath(media, batch)
+                records.append(rec)
             os.remove(path)
     return records
 
