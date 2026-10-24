@@ -423,6 +423,14 @@ func (r *Router) handleDownloads(w http.ResponseWriter, req *http.Request) {
 				}
 			}
 			writeJSON(w, http.StatusOK, out)
+		case "plan": // 音乐「读取列表」的结果（任务结束后才有）
+			path, ok := r.planPath(req.URL.Query().Get("token"))
+			if !ok {
+				http.Error(w, "invalid token", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			http.ServeFile(w, req, path)
 		case "settings":
 			r.downloads.mu.Lock()
 			s := r.downloads.settings

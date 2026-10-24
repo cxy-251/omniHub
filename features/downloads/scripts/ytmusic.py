@@ -170,7 +170,9 @@ def resolve(video_id):
             info = {"title": title, "artists": artists, "kind": kind}
             if kind == "OMV" and is_official_audio(youtube_title(video_id)):
                 return video_id, info, f"没找到纯音轨版，原视频是官方音频（{youtube_title(video_id)}），按它下"
-            return None, info, f"没找到纯音轨版，原视频不是官方音频（{youtube_title(video_id)}），没下"
+            # 列表里显示 YouTube 原标题，看得出是 MV、现场还是歌词视频
+            info = {"title": youtube_title(video_id), "artists": [], "kind": kind}
+            return None, info, "没有纯音轨版，原视频也不是官方音频" if kind == "OMV" else "没有纯音轨版，原视频是用户上传"
     info = {"title": track.get("title") or title, "artists": [x["name"] for x in track.get("artists") or []] or artists, "kind": kind}
     browse_id = (track.get("album") or {}).get("id")
     if browse_id:

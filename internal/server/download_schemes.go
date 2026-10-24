@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"omnihub/internal/staging"
 )
@@ -47,7 +49,7 @@ func (r *Router) schemeKinds() []*dlKind {
 	return []*dlKind{
 		{
 			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑、单曲或歌手页（YouTube、YouTube Music、B 站等），全部下载，不筛选。YouTube 的歌换成 YouTube Music 上的纯音轨版（MV 有片头片尾，不下它的音频）；找不到纯音轨版时只收官方音频（Official Audio），MV、歌词视频、现场、翻唱都不下。按歌手归档：属于专辑、EP 的歌放进歌手下的专辑文件夹，单曲放在歌手文件夹里。歌手页（YouTube Music 歌手页或歌手的官方频道）下全部专辑、EP、单曲，同一首只留最早发行的那版，MV（标题写着 Music Video、Official Video、MV 的，歌词视频、现场不算）下成视频放进短视频的 MV/<歌手>。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
-			Scheme: &dlScheme{Steps: []string{"粘贴歌单/专辑链接（一行一个）", "全部下载到暂存区（下过的跳过）", "播放数、点赞、日期、Last.fm 信息写进标签", "在「暂存区」试听、删掉不要的", "移入资源库"}, Destination: "音声 / 音乐 / <歌手>/（整张专辑放 <歌手>/<专辑>/）",
+			Scheme: &dlScheme{Steps: []string{"粘贴歌单/专辑/歌手链接（一行一个）", "读取列表：看会下哪些歌和 MV、哪些不下，去掉不要的勾", "下载到暂存区（下过的跳过）", "播放数、点赞、日期、Last.fm 信息写进标签", "在「暂存区」试听、删掉不要的", "移入资源库"}, Destination: "音声 / 音乐 / <歌手>/（整张专辑放 <歌手>/<专辑>/）",
 				Input: "歌单、专辑、单曲或歌手页链接，一行一个", Placeholder: "https://music.youtube.com/playlist?list=LM（赞过的歌）\nhttps://music.youtube.com/channel/…（歌手）\nhttps://www.youtube.com/watch?v=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
 			Fields: []dlField{urls, library},
@@ -91,6 +93,46 @@ func (r *Router) schemeKinds() []*dlKind {
 	}
 }
 
+var (
+	planToken = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
+	videoIDs  = regexp.MustCompile(`^[A-Za-z0-9_,-]*$`)
+)
+
+// planPath 是音乐「读取列表」写出的列表文件（界面生成的令牌对应一个文件）。
+func (r *Router) planPath(token string) (string, bool) {
+	if !planToken.MatchString(token) {
+		return "", false
+	}
+	return filepath.Join(r.cacheDir, "download-plans", token+".json"), true
+}
+
+// buildMusicList 是音乐的「读取列表」：脚本只展开链接、换纯音轨版、查专辑，把会下什么写进列表文件，不下载、不建暂存批次。
+func (r *Router) buildMusicList(p dlParams, urls []string) (dlPlan, error) {
+	path, ok := r.planPath(p.text("plan_token"))
+	if !ok {
+		return dlPlan{}, errors.New("缺少列表令牌")
+	}
+	lib, err := r.writableLibrary(p.text("library"))
+	if err != nil {
+		return dlPlan{}, err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return dlPlan{}, err
+	}
+	// 一周前的列表删掉
+	if old, err := os.ReadDir(dir); err == nil {
+		for _, e := range old {
+			if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > 7*24*time.Hour {
+				_ = os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	args := append([]string{"scripts/general.py"}, urls...)
+	args = append(args, "--batch", dir, "--scheme", "music", "--archive", archivePath(lib.RootPath, "music"), "--plan-out", path)
+	return dlPlan{title: fmt.Sprintf("音乐 读取列表 %d 个链接", len(urls)), args: args, resource: strings.TrimSuffix(path, ".json"), lib: lib}, nil
+}
+
 // buildScheme 建暂存批次并组好下载脚本的参数。
 func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 	urls := p.lines("urls")
@@ -101,6 +143,9 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 		if scheme != "x" && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 			return dlPlan{}, fmt.Errorf("不是网址：%s", u)
 		}
+	}
+	if scheme == "music" && p.text("step") == "list" {
+		return r.buildMusicList(p, urls)
 	}
 	lib, err := r.writableLibrary(p.text("library"))
 	if err != nil {
@@ -132,6 +177,16 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 	}
 	if a := p.text("album"); a != "" {
 		args = append(args, "--album", a)
+	}
+	if token := p.text("plan"); scheme == "music" && token != "" { // 按读取好的列表下，去掉没勾的
+		path, ok := r.planPath(token)
+		if !ok || !videoIDs.MatchString(p.text("exclude")) {
+			return dlPlan{}, errors.New("列表参数不对")
+		}
+		if _, err := os.Stat(path); err != nil {
+			return dlPlan{}, errors.New("列表已过期，请重新读取")
+		}
+		args = append(args, "--plan", path, "--exclude", p.text("exclude"))
 	}
 	if p.text("mode") == "direct" {
 		if rank := p.text("rank"); rank != "" {

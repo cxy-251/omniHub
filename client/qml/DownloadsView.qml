@@ -238,7 +238,7 @@ Item {
                                     Layout.fillWidth: true
                                     spacing: 6
                                     Chip { text: "去收听"; visible: !!(card.job.open && card.job.open.type === "audio"); onClicked: view.openAudioAlbum(card.job.open.album) }
-                                    Chip { text: "去暂存区"; visible: ["music", "youtube", "bilibili", "x", "other"].indexOf(card.job.kind) >= 0 && !card.job.running; onClicked: prefs.tab = "staging" }
+                                    Chip { text: "去暂存区"; visible: ["music", "youtube", "bilibili", "x", "other"].indexOf(card.job.kind) >= 0 && !card.job.running && !(card.job.result && card.job.result.plan); onClicked: prefs.tab = "staging" }
                                     Chip { text: "打开文件夹"; visible: !!(card.job.result && card.job.result.path); onClicked: Qt.openUrlExternally("file://" + card.job.result.path) }
                                     Chip { text: "停止"; visible: card.job.running; onClicked: api.send("POST", "/api/downloads/stop", {id: card.job.id}, function () { view.refreshJobs() }) }
                                     Chip { text: card.showLog ? "收起日志" : "日志"; selected: card.showLog; onClicked: { card.showLog = !card.showLog; if (card.showLog) card.loadLog() } }
