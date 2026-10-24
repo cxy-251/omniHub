@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtCore
 
 // 下载方案页（音乐、YouTube、B 站、X、其他链接）：按服务端给的方案说明生成。
 //   去向 → 链接（一行一个）→ 选项 →（列表类方案）怎么挑 → 开始。设好就不用管，进度在「任务」里。
@@ -10,6 +11,7 @@ import QtQuick.Layouts
 ColumnLayout {
     id: panel
     required property var kind
+    property string stagingLibrary: ""   // 暂存到哪个资源库：下载页顶部统一选
     signal run(var params)
     signal openTab(string tab)
     spacing: 8
@@ -29,7 +31,8 @@ ColumnLayout {
         var v = {}
         kind.fields.forEach(function (f) { if (f.default !== undefined) v[f.name] = f.default })
         values = v; input = ""; analysis = {items: []}
-        clearPlan()
+        plan = null; planJob = null; planToken = ""; excluded = {}
+        if (kind.id === "music") restoreList()   // 不用 isMusic：换方案时这个绑定可能还没更新
     }
     onKindChanged: reset()
     Component.onCompleted: reset()
@@ -39,6 +42,7 @@ ColumnLayout {
         var p = Object.assign({}, values)
         p.mode = "direct"
         p.urls = lines.join("\n")
+        if (stagingLibrary) p.library = stagingLibrary
         panel.run(p)
     }
 
@@ -50,24 +54,37 @@ ColumnLayout {
     property var excluded: ({})    // 去掉勾的视频 ID
     readonly property bool listing: !!planJob && planJob.running
     readonly property bool listFailed: !!planJob && !planJob.running && planJob.exit_code !== 0
-    function clearPlan() { planToken = ""; planJob = null; plan = null; excluded = {} }
+    // 读取在服务端后台跑：切到别的标签页、关掉下载页再回来，按存下的令牌和任务接着看
+    Settings { id: listPrefs; category: "musicList"; property string input: ""; property string token: ""; property string job: ""; property string excluded: "" }
+    function clearPlan() { planToken = ""; planJob = null; plan = null; excluded = {}; listPrefs.token = ""; listPrefs.job = ""; listPrefs.excluded = "" }
     function readList() {
         clearPlan()
         planToken = Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
-        var params = {step: "list", plan_token: planToken, urls: lines.join("\n"), library: values.library || ""}
-        api.send("POST", "/api/downloads/run", {kind: "music", params: params}, function (job) { panel.planJob = job })
+        var params = {step: "list", plan_token: planToken, urls: lines.join("\n"), library: stagingLibrary || values.library || ""}
+        api.send("POST", "/api/downloads/run", {kind: "music", params: params}, listStarted)
     }
-    Timer {
-        interval: 1500; repeat: true; running: panel.listing
-        onTriggered: api.getJSON("/api/downloads/jobs", function (list) {
+    function listStarted(job) { planJob = job; listPrefs.token = planToken; listPrefs.job = job.id }
+    onInputChanged: if (kind.id === "music") listPrefs.input = input
+    function restoreList() {
+        input = listPrefs.input
+        if (!listPrefs.token) return
+        planToken = listPrefs.token
+        excluded = listPrefs.excluded ? JSON.parse(listPrefs.excluded) : {}
+        planJob = {id: listPrefs.job, running: true, done: 0, total: 0, step: "", tail: []}
+        pollList()
+    }
+    function pollList() {
+        api.getJSON("/api/downloads/jobs", function (list) {
             var job = list.find(function (j) { return panel.planJob && j.id === panel.planJob.id })
-            if (!job) return
-            panel.planJob = job
-            if (!job.running && job.exit_code === 0)
-                api.getJSON("/api/downloads/plan?token=" + panel.planToken, function (r) { panel.plan = r })
+            if (job) panel.planJob = job
+            if (!job || (!job.running && job.exit_code === 0))   // 任务不在了（服务端重启过）就直接取列表文件，取不到就作废
+                api.send("GET", "/api/downloads/plan?token=" + panel.planToken, null, function (r) { panel.plan = r },
+                         function () { panel.clearPlan() })
         })
     }
+    Timer { interval: 1500; repeat: true; running: panel.listing; onTriggered: panel.pollList() }
     function toggle(id, on) { var m = Object.assign({}, excluded); if (on) delete m[id]; else m[id] = true; excluded = m }
+    onExcludedChanged: if (planToken) listPrefs.excluded = JSON.stringify(excluded)
     function setAll(type, on) {
         var m = Object.assign({}, excluded)
         rows.forEach(function (r) { if (r.type === type) { if (on) delete m[r.id]; else m[r.id] = true } })
@@ -95,7 +112,7 @@ ColumnLayout {
         return out
     }
     function startPlan() {
-        var p = {plan: planToken, urls: lines.join("\n"), library: values.library || "", exclude: Object.keys(excluded).join(",")}
+        var p = {plan: planToken, urls: lines.join("\n"), library: stagingLibrary || values.library || "", exclude: Object.keys(excluded).join(",")}
         panel.run(p)
         clearPlan()
     }
@@ -125,7 +142,7 @@ ColumnLayout {
             placeholderText: panel.scheme.input + "\n" + panel.scheme.placeholder
             text: panel.input
             wrapMode: TextEdit.WrapAnywhere; font.pixelSize: 13
-            onTextChanged: if (text !== panel.input) { panel.input = text; analyzeTimer.restart(); panel.clearPlan() }
+            onTextChanged: if (text !== panel.input) { panel.input = text; analyzeTimer.restart(); if (panel.kind.id === "music") panel.clearPlan() }
             background: Rectangle { color: "#0d1117"; border.color: parent.activeFocus ? "#58a6ff" : "#30363d"; radius: 4 }
         }
     }
@@ -135,7 +152,7 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: 8
         Repeater {
-            model: panel.kind.fields.filter(function (f) { return f.name !== "urls" && (f.name !== "top" || panel.values.rank !== "none") })
+            model: panel.kind.fields.filter(function (f) { return f.name !== "urls" && f.name !== "library" && (f.name !== "top" || panel.values.rank !== "none") })
                                     .sort(function (a, b) { return (panel.rankFields.indexOf(b.name) >= 0) - (panel.rankFields.indexOf(a.name) >= 0) })
             delegate: Row {
                 required property var modelData
@@ -177,8 +194,9 @@ ColumnLayout {
         Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
         color: panel.listFailed ? "#f85149" : "#58a6ff"
         text: !panel.planJob ? "" : panel.listFailed ? "读取失败：" + (panel.planJob.tail || []).join(" ") + "（完整日志在「任务」里）"
-            : panel.listing ? "正在读取列表（歌手页要逐张读专辑，可能要一两分钟）… "
-                              + (panel.planJob.total > 0 ? panel.planJob.done + "/" + panel.planJob.total + " · " : "") + (panel.planJob.step || "")
+            : panel.listing ? "正在读取列表（只查不下载；歌手页要逐张读专辑，几十张要两三分钟，可以先去别的页面，回来接着看）\n"
+                              + (panel.planJob.step || "准备中（第一次要安装依赖）…")
+                              + ((panel.planJob.tail || []).length ? "\n最近：" + panel.planJob.tail[panel.planJob.tail.length - 1] : "")
             : "读取完成，正在取列表…"
     }
     Rectangle {

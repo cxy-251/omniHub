@@ -5,14 +5,18 @@ QtObject {
     id: api
     property string error: ""
 
-    // method 为 GET 时 body 传 null；done(结果, xhr) 只在 2xx 时调用。
-    function send(method, path, body, done) {
+    // method 为 GET 时 body 传 null；done(结果, xhr) 只在 2xx 时调用；给了 failed(xhr) 时出错交给它，不设 error。
+    function send(method, path, body, done, failed) {
         var url = backendApi.apiUrl(path)
         if (!url) { api.error = "无法连接 omniHub 服务"; return }
         var xhr = new XMLHttpRequest()
         xhr.onreadystatechange = function () {
             if (xhr.readyState !== XMLHttpRequest.DONE || !api) return   // 所属页面已销毁
-            if (xhr.status < 200 || xhr.status >= 300) { api.error = "请求失败（" + xhr.status + "）：" + xhr.responseText; return }
+            if (xhr.status < 200 || xhr.status >= 300) {
+                if (failed) failed(xhr)
+                else api.error = "请求失败（" + xhr.status + "）：" + xhr.responseText
+                return
+            }
             api.error = ""
             if (done) done(xhr.responseText ? JSON.parse(xhr.responseText) : null, xhr)
         }

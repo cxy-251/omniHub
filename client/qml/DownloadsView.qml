@@ -19,7 +19,16 @@ Item {
     readonly property int runningJobs: jobs.filter(function (j) { return j.running }).length
     readonly property var currentKind: kinds.find(function (k) { return k.id === prefs.tab }) || null
 
-    Settings { id: prefs; category: "downloads"; property string tab: "mega" }
+    Settings { id: prefs; category: "downloads"; property string tab: "mega"; property string library: "" }
+    // 暂存到哪个资源库：各下载方案共用一个选择（选项来自服务端方案里的 library 字段）
+    readonly property var libraryField: {
+        for (var i = 0; i < kinds.length; i++) {
+            var f = kinds[i].scheme && (kinds[i].fields || []).find(function (x) { return x.name === "library" })
+            if (f) return f
+        }
+        return null
+    }
+    readonly property string stagingLibrary: !libraryField ? "" : libraryField.options.some(function (o) { return o.value === prefs.library }) ? prefs.library : (libraryField.default || "")
     ApiClient { id: api; onErrorChanged: if (error) view.say(error, true) }
 
     function say(text, isError) { message = text; messageIsError = !!isError }
@@ -64,6 +73,17 @@ Item {
             Divider { Layout.leftMargin: 2; Layout.rightMargin: 2 }
             Chip { text: "MEGA"; selected: prefs.tab === "mega"; onClicked: prefs.tab = "mega" }
             Item { Layout.fillWidth: true }
+            Label { visible: stagingBox.visible; text: "暂存到"; color: "#8b949e"; font.pixelSize: 12 }
+            ComboBox {
+                id: stagingBox
+                visible: !!view.libraryField && !!view.currentKind && !!view.currentKind.scheme
+                implicitHeight: 28; implicitWidth: 130; font.pixelSize: 12
+                textRole: "label"; valueRole: "value"
+                model: view.libraryField ? view.libraryField.options : []
+                currentIndex: Math.max(0, model.findIndex(function (o) { return o.value === view.stagingLibrary }))
+                onActivated: prefs.library = currentValue
+                ToolTip.visible: hovered; ToolTip.text: "下载先放进这个资源库的暂存区；移入时同一块盘上只是改名"
+            }
             Chip { text: "网络设置"; visible: prefs.tab === "audiobook"; selected: netBox.visible; onClicked: netBox.visible = !netBox.visible }
             Chip {
                 text: "任务" + (view.runningJobs ? "（" + view.runningJobs + " 个进行中）" : view.jobs.length ? "（" + view.jobs.length + "）" : "")
@@ -131,6 +151,7 @@ Item {
                     width: parent.width
                     visible: !!(view.currentKind && view.currentKind.scheme)
                     kind: view.currentKind && view.currentKind.scheme ? view.currentKind : {id: "", fields: [], description: "", scheme: {steps: [], destination: ""}}
+                    stagingLibrary: view.stagingLibrary
                     onRun: function (params) { view.run(view.currentKind.id, params) }
                     onOpenTab: function (tab) { prefs.tab = tab }
                 }

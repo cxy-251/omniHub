@@ -180,7 +180,7 @@ def resolve(video_id):
     return target, info, note
 
 
-def artist(channel_id, log):
+def artist(channel_id, log, progress=lambda done, total, text: None):
     """歌手页（YouTube Music 歌手 ID，或歌手的官方 YouTube 频道 ID）。不是歌手页时返回 None；网络出错时抛出异常。
     返回 {name, songs: [(视频 ID, 信息)], mvs: [(视频 ID, 标题)]}：
     songs 是全部专辑、EP、单曲里的歌，按发行年份从早到晚，同一首（去掉括号说明后曲名相同）只留最早那版；
@@ -200,15 +200,17 @@ def artist(channel_id, log):
         items = call("get_artist_albums", sec["browseId"], sec["params"], limit=None) if sec.get("params") else sec.get("results") or []
         releases += [r for r in items if r.get("browseId")]
     releases.sort(key=lambda r: str(r.get("year") or "9999"))   # 稳定排序：同一年里专辑在单曲前
+    log(f"歌手 {page.get('name')}：{len(releases)} 张专辑、EP、单曲，逐张读曲目")
     songs, seen, names = [], set(), []
     for n, r in enumerate(releases, 1):
-        log(f"读发行 {n}/{len(releases)}：{r.get('title')}（{r.get('year') or '年份不详'}）")
+        progress(n - 1, len(releases), f"读 {page.get('name')} 的专辑和单曲 {n}/{len(releases)}：{r.get('title')}（{r.get('year') or '年份不详'}）")
         a = album(r["browseId"])
         names += [x["name"] for x in a.get("artists") or []][:1]
         got = album_songs(a, r["browseId"], log, seen)
         songs += got
         if not got:
             log("  没有新的歌（前面的发行里都有了，或只有 MV），整张跳过")
+    progress(len(releases), len(releases), f"读 {page.get('name')} 的视频列表，挑出 MV")
     mvs, tracks = [], []
     vids = page.get("videos") or {}
     if str(vids.get("browseId") or "").startswith("VL"):   # 视频列表在 YouTube 上是个播放列表，从那里拿原标题

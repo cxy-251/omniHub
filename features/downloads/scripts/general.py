@@ -170,11 +170,11 @@ def music_targets(urls, a, cookies):
     if os.environ.get("OMNIHUB_YTDLP_PROXY"):
         opts["proxy"] = os.environ["OMNIHUB_YTDLP_PROXY"]
     for i, url in enumerate(urls):
-        progress(i, len(urls), "展开链接 " + url)
+        progress(i, len(urls), f"读第 {i + 1}/{len(urls)} 个链接：{url}")
         m = re.search(r"[?&]list=(OLAK5uy_[\w-]+)", url)
         try:
             cid = channel_id(url, opts)
-            page = ytmusic.artist(cid, log) if cid else None
+            page = ytmusic.artist(cid, log, progress) if cid else None
             if cid and not page:
                 log(f"{url} 不是 YouTube Music 上的歌手，按普通频道展开")
             if page:
@@ -206,7 +206,7 @@ def music_targets(urls, a, cookies):
             skipped += 1
             a.music_done.append({"id": vid, **{k: preset.get(vid, {}).get(k) for k in ("title", "artists")}})
             continue
-        progress(n, len(ids), f"找纯音轨版与专辑 {vid}")
+        progress(n, len(ids), f"确认第 {n + 1}/{len(ids)} 首：" + (preset[vid].get("title") if vid in preset else f"{vid}（找纯音轨版和专辑）"))
         try:
             target, info, note = (vid, preset[vid], "") if vid in preset else ytmusic.resolve(vid)
         except Exception as e:
