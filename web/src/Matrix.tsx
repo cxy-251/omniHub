@@ -9,7 +9,7 @@ import { chip, explain, notify, select, store, stored } from './ui';
 //   shortvideo：视频（只取本浏览器能解码的编码），播完换下一条；可焦点出声、静音
 //   gallery：图片，按设定秒数自动轮播
 // 每屏独立频道；顶栏操作焦点屏（点屏或 1/2/3 选屏）。点赞、回收站、伴听（全局音声，伴听时视频静音）、记住每屏位置。
-type Item = { id: string; library_id: string; liked?: boolean; creator_id?: string; title?: string; published?: string };
+type Item = { id: string; library_id: string; collection?: string; liked?: boolean; creator_id?: string; title?: string; published?: string };
 type Slot = { channel: string; shuffle: boolean; muted: boolean; seed: number; index: number; itemId: string; pos: number };
 type Prefs = { screens: number; focusAudio: boolean; slideSeconds: number; slots: Slot[] };
 type Album = { id: string; title: string };
@@ -102,7 +102,7 @@ function Screen({ domain, slot, index, focused, playing, audible, slideSeconds, 
 
   const caption = !item ? (error || '加载中…') : isVideo
     ? `${item.creator_id?.split('/').slice(1).join(' / ')} · ${item.published} · ${item.title}（${slot.index + 1}/${total}）` : `${slot.index + 1} / ${total}`;
-  const original = item ? `/api/media/gallery/original?${new URLSearchParams({ library_id: item.library_id, id: item.id })}` : '';
+  const original = item ? `/api/media/gallery/original?${new URLSearchParams({ library_id: item.library_id, id: item.id, ...(item.collection ? { collection: item.collection } : {}) })}` : '';
   return <div className={`relative min-w-0 flex-1 overflow-hidden rounded border-2 bg-black ${focused ? 'border-primary' : 'border-transparent'}`} onClick={onFocus}>
     {isVideo
       ? <video ref={video} muted={!audible} playsInline preload="metadata" className="h-full w-full object-contain" onEnded={() => { sendEvent(domain, live.current.item?.id, 'complete'); step(1, true); }} />

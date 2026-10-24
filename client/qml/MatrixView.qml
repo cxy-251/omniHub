@@ -377,7 +377,8 @@ FocusScope {
                             fillMode: Image.PreserveAspectFit
                             asynchronous: true
                             sourceSize: Qt.size(width, height)
-                            source: slot.post ? backendApi.apiUrl("/api/media/gallery/original?library_id=" + encodeURIComponent(slot.post.library_id) + "&id=" + encodeURIComponent(slot.post.id)) : ""
+                            source: slot.post ? backendApi.apiUrl("/api/media/gallery/original?library_id=" + encodeURIComponent(slot.post.library_id) + "&id=" + encodeURIComponent(slot.post.id)
+                                                              + (slot.post.collection ? "&collection=" + encodeURIComponent(slot.post.collection) : "")) : ""
                             BusyIndicator { anchors.centerIn: parent; running: parent.status === Image.Loading }
                         }
                     }

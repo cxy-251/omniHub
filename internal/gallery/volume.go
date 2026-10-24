@@ -230,4 +230,5 @@ func ReadOriginalDirect(originalsDir, volumeName, id string) (data []byte, resul
 	return blob, nil
 }
 
-var volumeNamePattern = regexp.MustCompile(`^originals_vol[0-9]+\.db$`)
+// 原图分卷名：omniHub 自己写的 originals_volNN.db，以及外部建的 originals_part_NNN.db、单个 originals.db
+var volumeNamePattern = regexp.MustCompile(`^originals(?:_vol[0-9]+|_part_[0-9]+)?\.db$`)

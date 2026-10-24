@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,36 +17,7 @@ type photoItem struct {
 	LibraryID   string `json:"library_id"`
 	LibraryName string `json:"library_name"`
 	ReadOnly    bool   `json:"read_only"`
-}
-
-// galleryDBs 返回各在线库的相册热库（没有 gallery.db 的库跳过）。
-func (r *Router) galleryDBs(w http.ResponseWriter, req *http.Request) ([]*library.Library, []*gallery.MetaDB, bool) {
-	libraries, ok := r.queryLibraries(w, req)
-	if !ok {
-		return nil, nil, false
-	}
-	var libs []*library.Library
-	var dbs []*gallery.MetaDB
-	for _, lib := range libraries {
-		dir, err := r.moduleDirectory(lib.RootPath, "media_library/gallery", "gallery.db")
-		if err != nil {
-			http.Error(w, "gallery storage boundary invalid", 503)
-			return nil, nil, false
-		}
-		if _, err := os.Stat(filepath.Join(dir, "gallery.db")); errors.Is(err, os.ErrNotExist) {
-			continue
-		} else if err != nil {
-			http.Error(w, "gallery index unavailable", 503)
-			return nil, nil, false
-		}
-		db, err := r.getMetaDB(lib.RootPath)
-		if err != nil {
-			http.Error(w, "gallery index unavailable", 503)
-			return nil, nil, false
-		}
-		libs, dbs = append(libs, lib), append(dbs, db)
-	}
-	return libs, dbs, true
+	Collection  string `json:"collection"` // 图库（空是根目录的相册）；取缩略图、原图时带上
 }
 
 // listGalleryLibraries 跨库分页列出照片，X-Total-Count 给出总数，客户端可直接跳到任意页。
@@ -61,13 +31,14 @@ func (r *Router) listGalleryLibraries(w http.ResponseWriter, req *http.Request) 
 	if !ok {
 		return
 	}
-	libs, dbs, ok := r.galleryDBs(w, req)
+	entries, ok := r.galleryEntries(w, req)
 	if !ok {
 		return
 	}
 	total := 0
 	items := make([]photoItem, 0, limit)
-	for i, db := range dbs {
+	for _, e := range entries {
+		db := e.db
 		count, err := db.CountPhotos(filter)
 		if err != nil {
 			http.Error(w, "gallery count unavailable", 503)
@@ -85,7 +56,7 @@ func (r *Router) listGalleryLibraries(w http.ResponseWriter, req *http.Request) 
 		}
 		offset = 0
 		for _, photo := range photos {
-			items = append(items, photoItem{Photo: photo, LibraryID: libs[i].ID, LibraryName: libs[i].Name, ReadOnly: true})
+			items = append(items, photoItem{Photo: photo, LibraryID: e.lib.ID, LibraryName: e.lib.Name, ReadOnly: true, Collection: e.coll.Key})
 		}
 	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
@@ -99,16 +70,15 @@ func (r *Router) handleGalleryRatios(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
-	libs, dbs, ok := r.galleryDBs(w, req)
+	entries, ok := r.galleryEntries(w, req)
 	if !ok {
 		return
 	}
 	key := strconv.Itoa(filter.Color)
-	for _, lib := range libs {
-		dir, _ := r.moduleDirectory(lib.RootPath, "media_library/gallery", "gallery.db")
-		key += "|" + lib.ID
+	for _, e := range entries {
+		key += "|" + e.lib.ID + "/" + e.coll.Key
 		for _, name := range []string{"gallery.db", "gallery.db-wal"} {
-			if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			if info, err := os.Stat(filepath.Join(e.coll.Dir, name)); err == nil {
 				key += ":" + strconv.FormatInt(info.ModTime().UnixNano(), 36) + "/" + strconv.FormatInt(info.Size(), 36)
 			}
 		}
@@ -119,8 +89,8 @@ func (r *Router) handleGalleryRatios(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	ratios := []int{}
-	for _, db := range dbs {
-		part, err := db.Ratios(filter)
+	for _, e := range entries {
+		part, err := e.db.Ratios(filter)
 		if err != nil {
 			http.Error(w, "gallery index unavailable", 503)
 			return
@@ -179,13 +149,13 @@ func galleryFilter(w http.ResponseWriter, req *http.Request) (gallery.PhotoFilte
 
 // handleGalleryColors 返回各色系照片数（跨库合并），用于筛选。
 func (r *Router) handleGalleryColors(w http.ResponseWriter, req *http.Request) {
-	_, dbs, ok := r.galleryDBs(w, req)
+	entries, ok := r.galleryEntries(w, req)
 	if !ok {
 		return
 	}
 	merged := make(map[int]int)
-	for _, db := range dbs {
-		counts, err := db.ColorCounts()
+	for _, e := range entries {
+		counts, err := e.db.ColorCounts()
 		if err != nil {
 			http.Error(w, "gallery index unavailable", 503)
 			return

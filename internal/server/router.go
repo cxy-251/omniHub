@@ -71,14 +71,15 @@ type Router struct {
 	mediaReads     chan struct{}
 
 	// 专区数据库连接复用缓存（第 12.2 节避免高频请求重复 Open 与 Migrate）
-	dbMu      sync.RWMutex
-	runtimeMu sync.RWMutex
-	closed    bool
-	metaDB    map[string]*gallery.MetaDB
-	svStores  map[string]*shortvideo.Store
-	gameArt   map[string]*games.ArtStore
-	svJobs    *svWorker
-	mangaDB   map[string]*manga.DB
+	dbMu         sync.RWMutex
+	runtimeMu    sync.RWMutex
+	closed       bool
+	metaDB       map[string]*gallery.MetaDB // 按图库目录
+	galleryIndex galleryIndexer
+	svStores     map[string]*shortvideo.Store
+	gameArt      map[string]*games.ArtStore
+	svJobs       *svWorker
+	mangaDB      map[string]*manga.DB
 }
 
 // NewRouter 创建路由分发器实例。
@@ -148,30 +149,17 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 	}
 	r.registerRoutes()
 	go r.runShortVideoWorker()
+	r.startGalleryIndex() // 只放了原图分卷的图库：后台建索引
 	return r, nil
 }
 
+// getMetaDB 返回资源库根目录相册（原来的相册）的 gallery.db。
 func (r *Router) getMetaDB(root string) (*gallery.MetaDB, error) {
-	r.dbMu.Lock()
-	defer r.dbMu.Unlock()
-	if r.closed {
-		return nil, errors.New("router is closed")
-	}
-	// 相册目前全部只读：缩略图库的变化应由原图库变化触发，而原图库暂不允许写入。
-	key := root
-	if db := r.metaDB[key]; db != nil {
-		return db, nil
-	}
 	galleryDir, err := r.moduleDirectory(root, "media_library/gallery", "gallery.db")
 	if err != nil {
 		return nil, err
 	}
-	metaDB, err := gallery.OpenMetaDBReadOnly(galleryDir)
-	if err != nil {
-		return nil, err
-	}
-	r.metaDB[key] = metaDB
-	return metaDB, nil
+	return r.getMetaDBAt(galleryDir)
 }
 
 func (r *Router) getMangaDB(root string) (*manga.DB, error) {
@@ -275,6 +263,7 @@ func (r *Router) registerRoutes() {
 
 	// 画廊接口
 	r.mux.HandleFunc("/api/media/gallery/list", r.handleGalleryList)
+	r.mux.HandleFunc("/api/media/gallery/collections", r.handleGalleryCollections)
 	r.mux.HandleFunc("/api/media/gallery/colors", r.handleGalleryColors)
 	r.mux.HandleFunc("/api/media/gallery/ratios", r.handleGalleryRatios)
 	r.mux.HandleFunc("/api/media/gallery/thumbnail", r.handleGalleryThumbnail)
@@ -550,7 +539,12 @@ func (r *Router) handleGalleryThumbnail(w http.ResponseWriter, req *http.Request
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	metaDB, err := r.getMetaDB(primary.RootPath)
+	collDir, err := r.galleryCollectionDir(primary, req.URL.Query().Get("collection"))
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	metaDB, err := r.getMetaDBAt(collDir)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -583,7 +577,13 @@ func (r *Router) handleGalleryOriginal(w http.ResponseWriter, req *http.Request)
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	metaDB, err := r.getMetaDB(primary.RootPath)
+	key := req.URL.Query().Get("collection")
+	collDir, err := r.galleryCollectionDir(primary, key)
+	if err != nil {
+		http.Error(w, "gallery index unavailable", 503)
+		return
+	}
+	metaDB, err := r.getMetaDBAt(collDir)
 	if err != nil {
 		http.Error(w, "gallery index unavailable", 503)
 		return
@@ -598,12 +598,15 @@ func (r *Router) handleGalleryOriginal(w http.ResponseWriter, req *http.Request)
 		http.Error(w, "incorrect photo volume", 400)
 		return
 	}
-	dir, err := r.moduleDirectory(primary.RootPath, "media_library/gallery", "originals/"+photo.Volume)
-	if err != nil {
+	sub := "originals/" + photo.Volume
+	if key != "" {
+		sub = key + "/" + sub
+	}
+	if _, err := r.moduleDirectory(primary.RootPath, "media_library/gallery", sub); err != nil {
 		http.Error(w, "original storage boundary invalid", 503)
 		return
 	}
-	data, err := gallery.ReadOriginalDirect(filepath.Join(dir, "originals"), photo.Volume, photoID)
+	data, err := gallery.ReadOriginalDirect(filepath.Join(collDir, "originals"), photo.Volume, photoID)
 	if errors.Is(err, gallery.ErrImageCapacity) {
 		http.Error(w, "original exceeds read capacity", 413)
 		return

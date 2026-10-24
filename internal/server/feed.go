@@ -147,8 +147,24 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 	videoTag := cat.Lookup("kind:video")
 	scopeTag := cat.Lookup(strings.TrimPrefix(q.scope, "tag:"))
 	inScope := func(it *feed.Item) bool { return q.scope == "" || cat.HasTag(it, scopeTag) }
+	group, byGroup := strings.CutPrefix(q.channel, "group:")
+	tag, byTag := strings.CutPrefix(q.channel, "tag:")
+	if strings.HasPrefix(group, "coll:") { // 相册的图库频道：按图库标签筛（照片的分组是色系）
+		tag, byTag, byGroup = group, true, false
+	}
+	groupID, tagID := cat.Lookup(group), cat.Lookup(tag)
+	// NSFW 图库的照片（分组为 nsfw:<图库>）只在选中它自己的频道时出现
+	nsfwGroups := map[int32]bool{}
+	for i, name := range cat.Names {
+		if strings.HasPrefix(name, "nsfw:") {
+			nsfwGroups[int32(i)] = true
+		}
+	}
 	keep := func(it *feed.Item) bool {
 		if !inScope(it) {
+			return false
+		}
+		if nsfwGroups[it.Group] && !(byGroup && it.Group == groupID) {
 			return false
 		}
 		// 编码过滤只针对视频（图集没有编码）；未探测编码的视频也排除。
@@ -193,9 +209,6 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 		}
 		sort.Slice(order, func(a, b int) bool { return pos[cat.Items[order[a]].ID] < pos[cat.Items[order[b]].ID] })
 	default:
-		group, byGroup := strings.CutPrefix(q.channel, "group:")
-		tag, byTag := strings.CutPrefix(q.channel, "tag:")
-		groupID, tagID := cat.Lookup(group), cat.Lookup(tag)
 		for i := range cat.Items {
 			it := &cat.Items[i]
 			if _, h := hidden[it.ID]; h || !keep(it) {
@@ -642,11 +655,9 @@ func (g galleryFeed) snapshotKey(req *http.Request) (string, error) {
 	}
 	key := ""
 	for _, lib := range libs {
-		dir, err := g.r.moduleDirectory(lib.RootPath, "media_library/gallery", "gallery.db")
-		if err != nil {
-			continue
+		for _, c := range g.r.galleryCollections(lib) {
+			key += lib.ID + "/" + c.Key + ":" + fmt.Sprint(c.NSFW) + fileStamp(filepath.Join(c.Dir, "gallery.db")) + fileStamp(filepath.Join(c.Dir, "gallery.db-wal")) + "|"
 		}
-		key += lib.ID + ":" + fileStamp(filepath.Join(dir, "gallery.db")) + fileStamp(filepath.Join(dir, "gallery.db-wal")) + "|"
 	}
 	return key, nil
 }
@@ -679,6 +690,8 @@ func hexTags(hex string) []string {
 	return []string{fmt.Sprintf("hue:%d", int(h/30)%12), light}
 }
 
+// items 列出各资源库各图库的照片。根目录相册的照片分组是色系；其他图库多一个 coll:<图库> 标签；
+// NSFW 图库的照片分组为 nsfw:<图库>（只在它自己的频道出现，见 feedOrderFor）。
 func (g galleryFeed) items(req *http.Request) (*feed.Catalog, error) {
 	libs, err := g.r.onlineLibraries()
 	if err != nil {
@@ -686,37 +699,43 @@ func (g galleryFeed) items(req *http.Request) (*feed.Catalog, error) {
 	}
 	cat := &feed.Catalog{}
 	for _, lib := range libs {
-		dir, err := g.r.moduleDirectory(lib.RootPath, "media_library/gallery", "gallery.db")
-		if err != nil {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(dir, "gallery.db")); err != nil {
-			continue
-		}
-		db, err := g.r.getMetaDB(lib.RootPath)
-		if err != nil {
-			return nil, err
-		}
-		rows, err := db.FeedRows()
-		if err != nil {
-			return nil, err
-		}
-		if cat.Items == nil {
-			cat.Items = make([]feed.Item, 0, len(rows))
-		}
-		for _, p := range rows {
-			ratio := 1000
-			if p.Width > 0 && p.Height > 0 {
-				ratio = p.Height * 1000 / p.Width
+		for _, c := range g.r.galleryCollections(lib) {
+			if !c.Indexed {
+				continue
 			}
-			shape := "shape:square"
-			if ratio > 1100 {
-				shape = "shape:portrait"
-			} else if ratio < 900 {
-				shape = "shape:landscape"
+			db, err := g.r.getMetaDBAt(c.Dir)
+			if err != nil {
+				return nil, err
 			}
-			color := fmt.Sprintf("color:%d", p.ColorFamily)
-			cat.Add(p.ID, lib.ID, color, append([]string{color, shape}, hexTags(p.ColorHex)...), 0, ratio)
+			rows, err := db.FeedRows()
+			if err != nil {
+				return nil, err
+			}
+			if cat.Items == nil {
+				cat.Items = make([]feed.Item, 0, len(rows))
+			}
+			for _, p := range rows {
+				ratio := 1000
+				if p.Width > 0 && p.Height > 0 {
+					ratio = p.Height * 1000 / p.Width
+				}
+				shape := "shape:square"
+				if ratio > 1100 {
+					shape = "shape:portrait"
+				} else if ratio < 900 {
+					shape = "shape:landscape"
+				}
+				color := fmt.Sprintf("color:%d", p.ColorFamily)
+				tags := append([]string{color, shape}, hexTags(p.ColorHex)...)
+				group := color
+				switch {
+				case c.NSFW:
+					group = "nsfw:" + c.Key
+				case c.Key != "":
+					tags = append(tags, "coll:"+c.Key)
+				}
+				cat.Add(p.ID, lib.ID, group, tags, 0, ratio)
+			}
 		}
 	}
 	return cat, nil
@@ -742,16 +761,23 @@ func (g galleryFeed) render(req *http.Request, items []feed.Item, liked map[stri
 		if len(ids) == 0 {
 			continue
 		}
-		db, err := g.r.getMetaDB(lib.RootPath)
-		if err != nil {
-			return nil, err
-		}
-		photos, err := db.PhotosByID(ids)
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range photos {
-			byID[p.ID] = likedPhoto{photoItem{Photo: p, LibraryID: lib.ID, LibraryName: lib.Name, ReadOnly: true}, liked[p.ID]}
+		for _, c := range g.r.galleryCollections(lib) {
+			if !c.Indexed {
+				continue
+			}
+			db, err := g.r.getMetaDBAt(c.Dir)
+			if err != nil {
+				return nil, err
+			}
+			photos, err := db.PhotosByID(ids)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range photos {
+				if _, seen := byID[p.ID]; !seen {
+					byID[p.ID] = likedPhoto{photoItem{Photo: p, LibraryID: lib.ID, LibraryName: lib.Name, ReadOnly: true, Collection: c.Key}, liked[p.ID]}
+				}
+			}
 		}
 	}
 	out := make([]any, 0, len(items))
@@ -786,6 +812,40 @@ func (g galleryFeed) groups(req *http.Request, cat *feed.Catalog) any {
 		if n > 0 {
 			out = append(out, group{ID: fmt.Sprintf("color:%d", c), Label: colorNames[c], Count: n})
 		}
+	}
+	// 图库频道（根目录的相册不单列）：普通图库按 coll: 标签数，NSFW 图库按 nsfw: 分组数
+	names := map[string]string{}
+	if libs, err := g.r.onlineLibraries(); err == nil {
+		for _, lib := range libs {
+			for _, c := range g.r.galleryCollections(lib) {
+				names[c.Key] = c.Name
+			}
+		}
+	}
+	colls := map[string]int{}
+	for i := range cat.Items {
+		it := &cat.Items[i]
+		if key, ok := strings.CutPrefix(cat.Names[it.Group], "nsfw:"); ok {
+			colls["nsfw:"+key]++
+		}
+		for _, t := range it.Tags {
+			if t >= 0 && strings.HasPrefix(cat.Names[t], "coll:") {
+				colls[cat.Names[t]]++
+			}
+		}
+	}
+	keys := make([]string, 0, len(colls))
+	for k := range colls {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		key := k[strings.Index(k, ":")+1:]
+		label := "图库 · " + names[key]
+		if strings.HasPrefix(k, "nsfw:") {
+			label += "（NSFW）"
+		}
+		out = append(out, group{ID: k, Label: label, Count: colls[k]})
 	}
 	return out
 }

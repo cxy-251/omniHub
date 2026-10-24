@@ -258,8 +258,9 @@ func (s *stagingWorker) status() map[string]any {
 		"last_job": s.last, "last_note": s.lastNote, "last_error": s.lastErr, "finished": s.finished}
 }
 
-// stagingGallery 把批次 gallery/ 里的图片并进资源库的相册（gallery.db，按内容去重），
-// 没有出错时删掉已入库（或相册里本来就有）的图片；其余（视频等不支持的）留在批次里。
+// stagingGallery 把批次 gallery/ 里的图片并进资源库的相册（gallery.db，按内容去重）：
+// gallery/<图库名>/ 下的进同名图库（没有时新建；批次里带了 collection.json 的照抄，如 X 标了 NSFW），
+// 直接放在 gallery/ 下的进根目录的相册。没有出错时删掉已入库（或相册里本来就有）的图片；其余（视频等不支持的）留在批次里。
 func (r *Router) stagingGallery(ctx context.Context, lib *library.Library, dir string) (string, error) {
 	galleryDir, err := r.moduleDirectory(lib.RootPath, "media_library/gallery", "gallery.db")
 	if err != nil {
@@ -268,22 +269,91 @@ func (r *Router) stagingGallery(ctx context.Context, lib *library.Library, dir s
 	if err := os.MkdirAll(galleryDir, 0o755); err != nil {
 		return "", err
 	}
-	res, err := gallery.ImportDirectory(ctx, galleryDir, dir, nil)
-	if err != nil {
-		return "", err
+	type part struct{ src, target, name string }
+	var parts []part
+	entries, _ := os.ReadDir(dir)
+	loose := false
+	for _, e := range entries {
+		switch {
+		case e.IsDir() && gallery.ValidKey(e.Name()):
+			src := filepath.Join(dir, e.Name())
+			nsfw := false
+			if data, err := os.ReadFile(filepath.Join(src, gallery.CollectionFile)); err == nil {
+				var info struct {
+					NSFW bool `json:"nsfw"`
+				}
+				_ = json.Unmarshal(data, &info)
+				nsfw = info.NSFW
+			}
+			target, err := ensureCollectionDir(galleryDir, e.Name(), nsfw)
+			if err != nil {
+				return "", err
+			}
+			_ = os.Remove(filepath.Join(src, gallery.CollectionFile))
+			r.dropMetaDB(target)
+			parts = append(parts, part{src, target, e.Name()})
+		case e.Type().IsRegular():
+			loose = true
+		}
 	}
-	note := fmt.Sprintf("新增 %d 张，相册里已有 %d 张", res.Added, res.Duplicates)
+	notes := []string{}
+	for _, p := range parts {
+		res, err := gallery.ImportDirectory(ctx, p.target, p.src, nil)
+		r.dropMetaDB(p.target)
+		if err != nil {
+			return strings.Join(notes, "；"), err
+		}
+		notes = append(notes, p.name+" "+galleryImportNote(res))
+		if len(res.Errors) == 0 {
+			removeImportedImages(p.src)
+		}
+	}
+	if loose { // 直接放在 gallery/ 下的（不含子文件夹）
+		tmp := filepath.Join(dir, ".loose")
+		if err := os.MkdirAll(tmp, 0o755); err != nil {
+			return "", err
+		}
+		for _, e := range entries {
+			if e.Type().IsRegular() {
+				_ = os.Rename(filepath.Join(dir, e.Name()), filepath.Join(tmp, e.Name()))
+			}
+		}
+		res, err := gallery.ImportDirectory(ctx, galleryDir, tmp, nil)
+		r.dropMetaDB(galleryDir)
+		for _, e := range entries { // 放回原处（剩下的留在批次里）
+			if e.Type().IsRegular() {
+				_ = os.Rename(filepath.Join(tmp, e.Name()), filepath.Join(dir, e.Name()))
+			}
+		}
+		_ = os.Remove(tmp)
+		if err != nil {
+			return strings.Join(notes, "；"), err
+		}
+		notes = append(notes, "相册 "+galleryImportNote(res))
+		if len(res.Errors) == 0 {
+			removeImportedImages(dir)
+		}
+	}
+	return strings.Join(notes, "；"), nil
+}
+
+func galleryImportNote(res gallery.ImportProgress) string {
+	note := fmt.Sprintf("新增 %d 张，已有 %d 张", res.Added, res.Duplicates)
 	if res.Unsupported > 0 {
 		note += fmt.Sprintf("，%d 个不是图片（留在暂存区）", res.Unsupported)
 	}
 	if len(res.Errors) > 0 {
-		return note + fmt.Sprintf("，%d 张出错（图片都留在暂存区）：%s", len(res.Errors), res.Errors[0]), nil
+		note += fmt.Sprintf("，%d 张出错（图片都留在暂存区）：%s", len(res.Errors), res.Errors[0])
 	}
+	return note
+}
+
+// removeImportedImages 删掉目录里已入库的图片（HEIC、AVIF 相册不收，留着）。
+func removeImportedImages(dir string) {
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err == nil && d.Type().IsRegular() && staging.Kind(p) == "image" && !strings.EqualFold(filepath.Ext(p), ".heic") && !strings.EqualFold(filepath.Ext(p), ".avif") {
 			_ = os.Remove(p)
 		}
 		return nil
 	})
-	return note, nil
 }

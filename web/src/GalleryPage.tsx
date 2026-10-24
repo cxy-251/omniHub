@@ -8,8 +8,9 @@ import { button, chip, divider, iconButton, store, stored } from './ui';
 
 const Matrix = lazy(() => import('./Matrix'));
 
-type Photo = { id: string; filename: string; width: number; height: number; color_hex: string; library_id: string; liked?: boolean };
-const query = (p: Photo) => new URLSearchParams({ library_id: p.library_id, id: p.id }).toString();
+type Photo = { id: string; filename: string; width: number; height: number; color_hex: string; library_id: string; collection?: string; liked?: boolean };
+// 图库（空是原来的相册）也要带上，缩略图和原图在各自图库里
+const query = (p: Photo) => new URLSearchParams({ library_id: p.library_id, id: p.id, ...(p.collection ? { collection: p.collection } : {}) }).toString();
 
 // 相册（只读）：频道（推荐 | 我的点赞 | 色系 | 回收站）的瀑布流 + 原图查看 + 多联放映（图片自动轮播）。
 // 回收站只在 omniHub 里隐藏，不改原图库。与桌面端共用 /api/feed/gallery。

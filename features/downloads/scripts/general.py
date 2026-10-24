@@ -7,7 +7,7 @@
             或 …/<歌手>/<专辑>/<曲序 曲名>（属于 Album、EP 的歌，单独下的也归进专辑）
   youtube   yt-dlp 视频 → media_library/shortvideo/YouTube/<频道>/<日期>_<标题>_<id>
   bilibili  yt-dlp 视频 → media_library/shortvideo/B站/<UP主>/…
-  x         gallery-dl → 短视频/X/<作者>/：视频一个文件，图片一条帖子一个图集（见 SOCIAL）
+  x         gallery-dl → 只要作者本人的原图，进相册里单独的图库「X」（NSFW），文件名带作者（见 SOCIAL）
   other     按链接域名认平台（平台表见 OMNIHUB_PLATFORMS），视频 → media_library/shortvideo/<平台>/<作者>/
 元数据（yt-dlp 的 .info.json、gallery-dl 的 .json）下完后精简、合成批次里的一个 download-meta-<时间>.json，
 单个的删掉，不留一堆零碎文件；移入资源库时追加进 .omni_data/download-meta.jsonl，留给以后打分。
@@ -482,15 +482,16 @@ LOGIN_HINTS = {
 hints = set()
 
 
-# 图文平台（gallery-dl）：每个作者一个 gallery-dl 进程，先下到批次的 .incoming/<平台>/，再按帖子整理进短视频：
+# 图文平台（gallery-dl）：每个作者一个 gallery-dl 进程，先下到批次的 .incoming/<平台>/，再按帖子整理：
+#   图片 → 相册里这个平台单独的图库（批次的 gallery/<平台>/<作者>/<日期>_<正文>_<帖子编号>_NN.jpg；
+#          移入资源库时进图库「<平台>」，可标 NSFW，见 internal/gallery/collections.go）
 #   视频 → 短视频/<平台>/<作者>/<日期>_<正文>_<帖子编号>.mp4
-#   图片 → 短视频/<平台>/<作者>/<日期>_<正文>_<帖子编号>/01.jpg …（一条帖子一个图集，和抖音、小红书的图文一样）
 # 增量：下载名单里有的跳过。一个作者完整下完过一次（gallery-dl 正常结束）才记下来，之后再下这个作者，
 # 连续 20 个都下过就停、只补新帖子；没完整下完过的（第一次中断了）每次都翻到底，下过的跳过，直到补全。
 SOCIAL = {
     # X：只要作者本人发的图片（原图）；作者主页链接一律读「媒体」页（主页时间线里可能混着转发）。
     #    作者在自己推文下面接着回复补图（一条发不下）的也要（replies=self），整理时按会话合成一个图集
-    "x": {"dir": "X", "cookie": "x", "user_url": "https://x.com/{}/media",
+    "x": {"dir": "X", "cookie": "x", "user_url": "https://x.com/{}/media", "nsfw": True,
           "profile": r"^https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})(?:/(?:media|with_replies|photo)?)?/?(?:\?.*)?$",
           "filter": "type == 'photo' and not retweet_id",
           "options": ["retweets=false", "quoted=false", "replies=self", "size=orig"]},
@@ -609,15 +610,21 @@ def gallerydl(urls, a, scheme="x"):
             if not embed_info(dest, rec, {"OMNIHUB_MODE": "social"}, {"artist": author, "title": text}):
                 a.meta_records.append({**rec, "omnihub_file": os.path.relpath(dest, a.batch)})
             files.append(dest)
-        if images:   # 一条帖子的图片放一个图集文件夹，帖子的记录收进批次元数据（图片写不进标签）
-            album = os.path.join(folder, base)
-            os.makedirs(album, exist_ok=True)
+        if images:   # 进这个平台的图库：<作者>/<日期>_<正文>_<编号>_NN.jpg；帖子的记录收进批次元数据（图片写不进标签）
+            gallery_dir = os.path.join(a.batch, "gallery", conf["dir"])
+            author_dir = os.path.join(gallery_dir, safe(author))
+            os.makedirs(author_dir, exist_ok=True)
+            if not os.path.isfile(os.path.join(gallery_dir, "collection.json")):
+                with open(os.path.join(gallery_dir, "collection.json"), "w", encoding="utf-8") as f:
+                    json.dump({"name": conf["dir"], "nsfw": bool(conf.get("nsfw"))}, f, ensure_ascii=False)
+            names = []
             for k, (path, meta) in enumerate(images, 1):
-                dest = os.path.join(album, f"{k:02d}{os.path.splitext(path)[1].lower()}")
+                dest = os.path.join(author_dir, f"{base}_{k:02d}{os.path.splitext(path)[1].lower()}")
                 shutil.move(path, dest)
                 files.append(dest)
+                names.append(os.path.relpath(dest, gallery_dir))
             rec = {kk: v for kk, v in images[0][1].items() if kk not in META_DROP and kk not in ("num", "filename", "extension", "width", "height")}
-            a.meta_records.append({**rec, "omnihub_file": os.path.relpath(album, a.batch), "images": len(images)})
+            a.meta_records.append({**rec, "omnihub_files": names, "omnihub_gallery": conf["dir"]})
     shutil.rmtree(incoming, ignore_errors=True)
     return files, skipped, errors
 
@@ -915,7 +922,7 @@ def collect_sidecars(batch, extra=None):
     records = []
     for folder, _, names in os.walk(batch):
         for name in names:
-            if not name.endswith(".json") or folder == batch:   # 批次根目录的 batch.json、download-meta 不动
+            if not name.endswith(".json") or folder == batch or name == "collection.json":   # batch.json、download-meta、图库说明不动
                 continue
             path = os.path.join(folder, name)
             try:

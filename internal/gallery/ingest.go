@@ -84,7 +84,9 @@ func ImportDirectory(ctx context.Context, galleryDir, srcDir string, onProgress 
 		if err := ctx.Err(); err != nil {
 			return progress, err
 		}
-		added, err := importOne(meta, volumes, path)
+		// 文件名记相对导入目录的路径（X/<作者>/… 的作者留在名字里）
+		name, _ := filepath.Rel(srcDir, path)
+		added, err := importOne(meta, volumes, path, filepath.ToSlash(name))
 		switch {
 		case errors.Is(err, errDuplicate):
 			progress.Duplicates++
@@ -108,7 +110,7 @@ var (
 	errUnsupported = errors.New("unsupported")
 )
 
-func importOne(meta *MetaDB, volumes *VolumeManager, path string) (bool, error) {
+func importOne(meta *MetaDB, volumes *VolumeManager, path, name string) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return false, err
@@ -123,12 +125,6 @@ func importOne(meta *MetaDB, volumes *VolumeManager, path string) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	mime := http.DetectContentType(data)
-	switch mime {
-	case "image/jpeg", "image/png", "image/gif", "image/webp":
-	default:
-		return false, errUnsupported
-	}
 	sum := sha256.Sum256(data)
 	id := hex.EncodeToString(sum[:])
 	var exists int
@@ -138,42 +134,74 @@ func importOne(meta *MetaDB, volumes *VolumeManager, path string) (bool, error) 
 	if exists > 0 {
 		return false, errDuplicate
 	}
-	img, _, err := image.Decode(bytes.NewReader(data))
+	d, err := describe(data)
 	if err != nil {
-		return false, errUnsupported
-	}
-	bounds := img.Bounds()
-	if bounds.Dx() <= 0 || bounds.Dy() <= 0 {
-		return false, errUnsupported
-	}
-	thumbHeight := max(1, int(math.Round(float64(bounds.Dy())*thumbnailWidth/float64(bounds.Dx()))))
-	thumb := image.NewRGBA(image.Rect(0, 0, thumbnailWidth, thumbHeight))
-	xdraw.BiLinear.Scale(thumb, thumb.Bounds(), img, bounds, xdraw.Over, nil)
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: thumbnailQuality}); err != nil {
 		return false, err
 	}
-	family, colorHex := dominantColor(thumb)
-
 	volume, err := volumes.WriteOriginal(id, data)
 	if err != nil {
 		return false, err
 	}
+	return true, insertPhoto(meta, id, name, volume, len(data), d, info.ModTime())
+}
+
+// described 是从原图算出的照片信息与缩略图。
+type described struct {
+	mime          string
+	width, height int
+	thumb         []byte
+	thumbHeight   int
+	family        int
+	colorHex      string
+}
+
+// describe 从原图字节算出格式、尺寸、480 宽缩略图与主色；不是支持的图片时返回 errUnsupported。
+func describe(data []byte) (described, error) {
+	var d described
+	d.mime = http.DetectContentType(data)
+	switch d.mime {
+	case "image/jpeg", "image/png", "image/gif", "image/webp":
+	default:
+		return d, errUnsupported
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return d, errUnsupported
+	}
+	bounds := img.Bounds()
+	if bounds.Dx() <= 0 || bounds.Dy() <= 0 {
+		return d, errUnsupported
+	}
+	d.width, d.height = bounds.Dx(), bounds.Dy()
+	d.thumbHeight = max(1, int(math.Round(float64(bounds.Dy())*thumbnailWidth/float64(bounds.Dx()))))
+	thumb := image.NewRGBA(image.Rect(0, 0, thumbnailWidth, d.thumbHeight))
+	xdraw.BiLinear.Scale(thumb, thumb.Bounds(), img, bounds, xdraw.Over, nil)
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: thumbnailQuality}); err != nil {
+		return d, err
+	}
+	d.thumb = buf.Bytes()
+	d.family, d.colorHex = dominantColor(thumb)
+	return d, nil
+}
+
+// insertPhoto 在一个事务里写照片记录与缩略图。
+func insertPhoto(meta *MetaDB, id, name, volume string, size int, d described, created time.Time) error {
 	tx, err := meta.db.Begin()
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(`INSERT INTO photos (id, filename, size_bytes, mime_type, width, height, volume, color_family, color_hex, is_favorite, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-		id, filepath.Base(path), len(data), mime, bounds.Dx(), bounds.Dy(), volume, family, colorHex, info.ModTime().Format(createdAtLayout)); err != nil {
-		return false, err
+		id, name, size, d.mime, d.width, d.height, volume, d.family, d.colorHex, created.Format(createdAtLayout)); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(`INSERT OR REPLACE INTO thumbnails (photo_id, size_type, width, height, data) VALUES (?, 'm', ?, ?, ?)`,
-		id, thumbnailWidth, thumbHeight, buf.Bytes()); err != nil {
-		return false, err
+		id, thumbnailWidth, d.thumbHeight, d.thumb); err != nil {
+		return err
 	}
-	return true, tx.Commit()
+	return tx.Commit()
 }
 
 // dominantColor 与 gallery 项目的 ExtractDominantColor 相同：16×16 格网抽样，按 10 个色系计数，

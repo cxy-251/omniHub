@@ -31,7 +31,8 @@ Item {
     function ratiosUrl() { return backendApi.apiUrl(feed.path("ratios") + "?channel=" + encodeURIComponent(view.channel) + "&seed=" + feed.seed) }
 
     function apiQuery(path, photo) {
-        return backendApi.apiUrl(path + "?library_id=" + encodeURIComponent(photo.library_id) + "&id=" + encodeURIComponent(photo.id))
+        return backendApi.apiUrl(path + "?library_id=" + encodeURIComponent(photo.library_id) + "&id=" + encodeURIComponent(photo.id)
+                                 + (photo.collection ? "&collection=" + encodeURIComponent(photo.collection) : ""))   // 图库（空是原来的相册）
     }
 
     PagedModel {
@@ -165,7 +166,8 @@ Item {
         fileMode: FileDialog.SaveFile
         currentFolder: StandardPaths.writableLocation(StandardPaths.DownloadLocation)
         onAccepted: if (photo) backendApi.download("/api/media/gallery/original?library_id=" + encodeURIComponent(photo.library_id)
-                                                   + "&id=" + encodeURIComponent(photo.id), selectedFile)
+                                                   + "&id=" + encodeURIComponent(photo.id)
+                                                   + (photo.collection ? "&collection=" + encodeURIComponent(photo.collection) : ""), selectedFile)
     }
 
     Loader {
