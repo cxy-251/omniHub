@@ -140,20 +140,25 @@ ColumnLayout {
         if (mvs.length) out.push({type: "head", group: "mv", text: "音乐 MV " + mvs.length + " 个（下成视频，放到 短视频/MV/<歌手>/）"})
         mvs.forEach(function (m) { out.push({type: "mv", grp: "mv", id: m.id, text: m.title, note: m.artist}) })
         var videos = plan.videos || []
-        if (plan.mode === "girls") {   // 一个团一行（勾选整组），点「展开」看每支 MV；女团在前，查不出的在「不确定」下面
-            var last = null, unsure = false
+        if (plan.mode === "girls" || plan.mode === "girlvideo") {
+            // 一个艺人一行（勾选整组），点「展开」看每个视频；女团和女团成员在前，其余艺人收在「其他艺人」里（默认不勾）
+            var last = null, inOthers = false
+            var otherVideos = videos.filter(function (v) { return v.kind !== "girl" })
             videos.forEach(function (v) {
                 var key = "a:" + v.group
-                if (v.kind !== "girl" && !unsure) {
-                    unsure = true
-                    out.push({type: "head", text: "不确定是不是女团（Wikidata 查不出，默认不勾，要的自己勾）"})
+                if (v.kind !== "girl" && !inOthers) {
+                    inOthers = true
+                    var nOther = Object.keys(otherVideos.reduce(function (m, x) { m[x.group] = 1; return m }, {})).length
+                    out.push({type: "others", group: "others", text: "其他艺人 " + nOther + " 个、" + otherVideos.length + " 个视频（男团、其他歌手、Wikidata 查不到的，默认不勾）"})
                 }
+                if (inOthers && !panel.expanded["others"]) return
                 if (v.group !== last) {
                     last = v.group
                     var mine = videos.filter(function (x) { return x.group === v.group })
                     var on = mine.filter(function (x) { return !panel.excluded[x.id] }).length
                     out.push({type: "artist", group: key, picked: on, total: mine.length,
-                              text: v.group + "　" + (on ? on + " / " : "") + mine.length + " 个", note: "放到 " + v.channel + " / " + v.group})
+                              text: v.group + "　" + (on ? on + " / " : "") + mine.length + " 个",
+                              note: "放到 " + v.channel + (plan.mode === "girls" ? " / " + v.group : "")})
                 }
                 if (panel.expanded[key])
                     out.push({type: "video", grp: key, id: v.id, text: "　　" + v.title, note: views(v.views)})
@@ -166,12 +171,10 @@ ColumnLayout {
                           note: plan.mode === "audio" ? "" : views(v.views) + " · " + v.channel})
             })
         }
-        if (plan.mode === "girls") {
+        if (plan.mode === "girls" || plan.mode === "girlvideo") {
             var girls = videos.filter(function (v) { return v.kind === "girl" })
-            out.splice(0, 0, {type: "head", text: "女团 " + Object.keys(girls.reduce(function (m, v) { m[v.group] = 1; return m }, {})).length + " 个、正式 MV " + girls.length + " 支（默认全勾）"})
-            var others = plan.other_artists || []
-            if (others.length) out.push({type: "head", text: "不是女团（男团、个人歌手），不下：" + others.length + " 个艺人，" + others.reduce(function (n, x) { return n + x[1] }, 0) + " 支"})
-            if (others.length) out.push({type: "skip", text: others.map(function (x) { return x[0] + "（" + x[1] + "）" }).join("、")})
+            out.splice(0, 0, {type: "head", text: "女团和女团成员 " + Object.keys(girls.reduce(function (m, v) { m[v.group] = 1; return m }, {})).length + " 个、"
+                              + (plan.mode === "girls" ? "正式 MV " : "视频 ") + girls.length + " 个（默认全勾）"})
         }
         if (plan.other_count) out.push({type: "head", text: "其他视频 " + plan.other_count + " 个（不是 MV，不列出）"})
         if ((plan.other || []).length) out.push({type: "head", text: "其他网站的链接 " + plan.other.length + " 个（不查纯音轨版，按原视频下音频）"})
@@ -188,7 +191,7 @@ ColumnLayout {
         var parts = []
         if (count("song")) parts.push("歌 " + count("song") + " 首")
         if (count("mv")) parts.push("音乐 MV " + count("mv") + " 个")
-        if (count("video")) parts.push((plan && plan.mode === "girls" ? "女团 MV " : plan && plan.mode === "audio" ? "音频 " : "视频 ") + count("video") + " 个")
+        if (count("video")) parts.push((plan && plan.mode === "girls" ? "女团 MV " : plan && plan.mode === "girlvideo" ? "女团相关视频 " : plan && plan.mode === "audio" ? "音频 " : "视频 ") + count("video") + " 个")
         return parts.join("、") || "没有勾选"
     }
     function startPlan() {
@@ -336,8 +339,8 @@ ColumnLayout {
                     Layout.fillWidth: true; elide: Text.ElideMiddle
                     topPadding: modelData.type === "head" ? 8 : 2; bottomPadding: 2
                     text: modelData.text
-                    font.pixelSize: modelData.type === "head" ? 13 : 12; font.bold: modelData.type === "head"
-                    color: modelData.type === "head" || modelData.type === "artist" ? "#e6edf3" : modelData.type === "skip" || modelData.type === "done" ? "#6e7681"
+                    font.pixelSize: modelData.type === "head" || modelData.type === "others" ? 13 : 12; font.bold: modelData.type === "head" || modelData.type === "others"
+                    color: modelData.type === "head" || modelData.type === "artist" || modelData.type === "others" ? "#e6edf3" : modelData.type === "skip" || modelData.type === "done" ? "#6e7681"
                          : panel.excluded[modelData.id] ? "#6e7681" : "#c9d1d9"
                 }
                 Label {
@@ -346,7 +349,7 @@ ColumnLayout {
                     text: modelData.note || ""
                     font.pixelSize: 11; color: modelData.type === "skip" ? "#d29922" : "#8b949e"
                 }
-                Chip { visible: modelData.type === "artist"; text: panel.expanded[modelData.group] ? "收起" : "展开"; onClicked: panel.expand(modelData.group) }
+                Chip { visible: modelData.type === "artist" || modelData.type === "others"; text: panel.expanded[modelData.group] ? "收起" : "展开"; onClicked: panel.expand(modelData.group) }
                 Chip { visible: modelData.type === "head" && !!modelData.group; text: "全选"; onClicked: panel.setAll(modelData.group, true) }
                 Chip { visible: modelData.type === "head" && !!modelData.group; text: "全不选"; onClicked: panel.setAll(modelData.group, false) }
             }

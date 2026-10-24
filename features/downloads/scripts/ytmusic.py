@@ -257,13 +257,15 @@ def mv_artist(title):
     认不出（只有韩文、OST 合辑等）返回空。"""
     import unicodedata
     t = unicodedata.normalize("NFKC", title or "")   # 𝗧𝗛𝗘 𝟴 这种花体字当成普通字母
+    t = "".join(ch for ch in t if not unicodedata.category(ch).startswith("S") or ch in "&+'’")   # 去掉 💖🎊 这类表情符号
     t = re.sub(r"^\s*(?:[\[【][^\]】]*[\]】]\s*)+", "", t).strip()   # 开头的 [MV]、【官方】
     m = re.match(r"^[\uac00-\ud7a3][\uac00-\ud7a3 ]*?\s*[(（]([^)）]*)[)）]", t)
     if m and _latin_name(m.group(1)):
         return m.group(1).strip()
     # 艺人在歌名（开引号）或分隔符之前；撇号（Can't）不算引号；_ 只在括号、韩文后面或前后有空格时算分隔（fromis_9 不拆）
-    m = re.search(r"(?:^|\s)[\"'‘’‛“「『]|【|\s[-–—|]\s|\s[-–—|](?=\S)|(?<=[)\uac00-\ud7a3\s])_|_(?=\s)", t)
+    m = re.search(r"(?:^|\s)[\"'‘’‛“「『]|【|\s[-–—|]\s|\s[-–—|](?=\S)|(?<=[)\uac00-\ud7a3\s])_|_(?=\s)|[ᅵㅣ｜|]|\s[Il]\s|ー", t)   # dingo 等频道还用 ᅵ ㅣ ｜ 「 I 」「 l 」 ー 当竖线
     head = t[:m.start()] if m else t
+    before = head   # 分隔符之前的整段（下面会拆合作、去括号）
     head = re.split(r"\s*,\s*|\s+&\s+|\s+[xX×]\s+(?=[^\s가-힣])|(?<=[)\uac00-\ud7a3])[xX×](?=[(\uac00-\ud7a3])|\s+(?:feat\.?|ft\.?|with)\s+",
                     head, flags=re.I)[0]
     m = re.search(r"[\uac00-\ud7a3]\s*[(（]([^)）]*)[)）]", head)
@@ -281,4 +283,8 @@ def mv_artist(title):
     if not name:   # 只写了韩文名：用标题里全大写的英文括号（JEONG SEWOON）
         name = next((p.strip() for p in re.findall(r"[(（]([^)）]*)[)）]", t)
                      if _latin_name(p.strip()) and p.strip() == p.strip().upper()), "")
+    if not name:   # 还是没有：用韩文名（「선우정아 - 욕심」；「한영애 X 정인」取第一位）
+        first = re.split(r"\s*(?:,|&|-|–|\s[xX×]\s|(?<=[\uac00-\ud7a3])[xX×](?=[\uac00-\ud7a3]))\s*", before)[0]
+        words = re.sub(r"[(（][^)）]*[)）]", " ", first).split()
+        name = " ".join(words) if words and all(_HANGUL.search(w) for w in words) and len(words) <= 3 else ""
     return name
