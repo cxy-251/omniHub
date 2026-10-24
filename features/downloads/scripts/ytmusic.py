@@ -1,8 +1,9 @@
 """音乐下载前，用 YouTube Music（ytmusicapi，不用登录）把要下的歌换成纯音轨版并查出所属专辑。由 general.py 调用。
 
-YouTube 上同一首歌有几种视频：
+YouTube 上同一首歌有几种视频（YouTube Music 的分类）：
   ATV  纯音轨（「Provided to YouTube by …」，封面是专辑图）——要的就是这种
-  OMV  官方 MV、官方 Audio 上传等，常有片头片尾——不下它的音频，换成同名的 ATV
+  OMV  官方上传：MV、官方音频、歌词视频、官方现场都算——先换成同名的 ATV；找不到时，
+       标题看得出是 MV 的不下（有片头片尾），其余（官方音频、歌词视频、现场等）按原视频下
   UGC  普通用户上传（现场、翻唱、剪辑）——能找到同名 ATV 就换，找不到就按原视频下
 ATV 在 YouTube Music 上都属于一张发行：Album、EP 或 Single。Album、EP 归进 <歌手>/<专辑>/，Single 算单曲。
 """
@@ -68,7 +69,7 @@ def album_tracks(playlist_id, log):
 
 def album_songs(a, browse_id, log, seen=None):
     """一张发行里的歌：[(纯音轨版视频 ID, 信息)]，信息里是这张发行的名字、类型、曲序。
-    曲目表里有 MV 的歌给的常是 MV，换成纯音轨版（优先同一张专辑里的）；找不到就不收。
+    曲目表里有 MV 的歌给的常是 MV，换成纯音轨版（优先同一张专辑里的）；找不到时是 MV 就不收，官方音频等按原视频收。
     seen 是已收过的曲名（去掉括号说明），给了就跳过已收过的、并把这次收的加进去。"""
     songs = []
     for t in a.get("tracks") or []:
@@ -80,10 +81,14 @@ def album_songs(a, browse_id, log, seen=None):
         vid = t["videoId"]
         if (t.get("videoType") or "").removeprefix("MUSIC_VIDEO_TYPE_") not in ("ATV", ""):
             found = audio_version(info["title"], info["artists"], browse_id)
-            if not found:
-                log(f"  {info['title']}：只有 MV，没找到纯音轨版，不下")
+            if found:
+                vid = found["videoId"]
+            elif MV_TITLE.search(youtube_title(vid)):
+                log(f"  {info['title']}：只有 MV（{youtube_title(vid)}），没找到纯音轨版，不下")
                 continue
-            vid = found["videoId"]
+            else:
+                info["kind"] = "OMV"
+                log(f"  {info['title']}：没找到纯音轨版，官方上传（{youtube_title(vid)}）不是 MV，按原视频下")
         if seen is not None:
             seen.add(key)
         info.update(place_of(a, t["videoId"], info["title"]))
@@ -109,6 +114,26 @@ def audio_version(title, artists, album_id=""):
     return next((s for s in found if (s.get("album") or {}).get("id") == album_id), found[0] if found else None)
 
 
+# YouTube 标题里看得出是 MV 的：Music Video、Official Video、MV、M/V
+MV_TITLE = re.compile(r"music\s*video|official\s*video|(?<![a-z])m/?v(?![a-z])", re.I)
+_titles = {}
+
+
+def youtube_title(video_id):
+    """YouTube 上的原标题（YouTube Music 给的标题去掉了「(Official Video)」这类说明，看不出是不是 MV）。"""
+    if video_id not in _titles:
+        import yt_dlp
+        opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+        cookies = os.path.join(os.environ.get("OMNIHUB_COOKIES_DIR", ""), "youtube.txt")
+        if os.path.isfile(cookies):
+            opts["cookiefile"] = cookies
+        if os.environ.get("OMNIHUB_YTDLP_PROXY"):
+            opts["proxy"] = os.environ["OMNIHUB_YTDLP_PROXY"]
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            _titles[video_id] = ydl.extract_info("https://www.youtube.com/watch?v=" + video_id, download=False, process=False).get("title") or ""
+    return _titles[video_id]
+
+
 def resolve(video_id):
     """一个视频 → 要下的纯音轨版。返回 (视频 ID 或 None, 信息, 说明)。
     信息：{title, artists, album, album_type, number, year, album_artists, kind}，kind 是原视频的类型（ATV/OMV/UGC）。"""
@@ -124,9 +149,10 @@ def resolve(video_id):
             target, track = found["videoId"], found
             note = f"{kind} 换成纯音轨版 {target}"
         if not target:
-            if kind == "OMV":
-                return None, {"title": title, "artists": artists, "kind": kind}, "是 MV / 官方上传，YouTube Music 上没找到同名的纯音轨版，没下"
-            return video_id, {"title": title, "artists": artists, "kind": kind}, "没找到纯音轨版，按原视频下"
+            info = {"title": title, "artists": artists, "kind": kind}
+            if kind == "OMV" and MV_TITLE.search(youtube_title(video_id)):
+                return None, info, f"是 MV（{youtube_title(video_id)}），YouTube Music 上没找到纯音轨版，没下"
+            return video_id, info, ("官方上传（不是 MV）" if kind == "OMV" else "普通用户上传") + "，没找到纯音轨版，按原视频下"
     info = {"title": track.get("title") or title, "artists": [x["name"] for x in track.get("artists") or []] or artists, "kind": kind}
     browse_id = (track.get("album") or {}).get("id")
     if browse_id:
