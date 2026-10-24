@@ -9,8 +9,9 @@
   bilibili  yt-dlp 视频 → media_library/shortvideo/B站/<UP主>/…
   x         gallery-dl → 图片 gallery/X/<用户>/（移入资源库时并进相册），视频 media_library/shortvideo/X/<用户>/
   other     按链接域名认平台（平台表见 OMNIHUB_PLATFORMS），视频 → media_library/shortvideo/<平台>/<作者>/
-每个文件旁边保存元数据（.info.json / .json），移入资源库时收进 .omni_data/download-meta，留给以后打分。
-音乐例外：封面、歌词、各项数据都写进音频文件，元数据合成批次里的一个 download-meta-<时间>.json。
+元数据（yt-dlp 的 .info.json、gallery-dl 的 .json）下完后精简、合成批次里的一个 download-meta-<时间>.json，
+单个的删掉，不留一堆零碎文件；移入资源库时追加进 .omni_data/download-meta.jsonl，留给以后打分。
+音乐另外把封面、歌词、各项数据写进音频文件。
 --archive 是这个资源库的「已下载」名单：下过的（包括在暂存区删掉的）不再下。
 Cookie 从 OMNIHUB_COOKIES_DIR/<平台>.txt 读，代理从 OMNIHUB_YTDLP_PROXY 读。
 进度与结果以 OMNIHUB_PROGRESS <完成> <总数> <说明>、OMNIHUB_RESULT <json> 行输出。
@@ -499,7 +500,7 @@ def enrich_music(files, known, batch, album_of, music_info):
       来源网站的播放数、点赞数、发布日期、下载日期、原链接；
       Last.fm 的风格、听众、总播放、重播率、专辑（按 .info.json 里的标题、艺人、频道查；排名时查过的直接用；没有 key 跳过）；
       歌词（LRCLIB，优先带时间轴）和歌词状态 LYRICS_STATUS。
-    封面 yt-dlp 已嵌进文件。每首的 .info.json 精简后合成批次里的一个 download-meta-<时间>.json，单个的删掉，不留一堆小文件。"""
+    封面 yt-dlp 已嵌进文件。返回每首精简后的元数据（由 main 合成批次里的一个 download-meta 文件），单个的 .info.json 删掉。"""
     import lyrics
     import rank
     key = os.environ.get("OMNIHUB_LASTFM_KEY", "")
@@ -581,18 +582,16 @@ def enrich_music(files, known, batch, album_of, music_info):
             os.remove(meta_path)
     if placed == len(audio):
         shutil.rmtree(os.path.join(batch, ".incoming"), ignore_errors=True)
-    if records:
-        with open(os.path.join(batch, time.strftime("download-meta-%Y%m%d-%H%M%S.json")), "w", encoding="utf-8") as fh:
-            json.dump(records, fh, ensure_ascii=False)
     log(f"标签已写进 {tagged}/{len(audio)} 首（播放、点赞、发布日期、下载日期）；其中 {with_lastfm} 首有 Last.fm 信息"
         + ("" if key else "（没有 Last.fm API key，跳过）"))
     log(f"歌词：带时间轴 {counts['synced']}，只有纯文本 {counts['plain']}，纯音乐 {counts['instrumental']}，"
         f"查不到 {counts['none']}，查询失败 {counts['error']}（状态写在标签 LYRICS_STATUS 里，可在音声里筛出来）")
+    return records
 
 
 def ranked(a):
     """按质量挑：每个链接依次 读列表页 →（音乐）查 Last.fm 重播率 → 排名取前 N → 下载这些单个视频。
-    排名表写进日志，也存进批次的 ranking-<时间>.json（移入资源库时收进下载元数据）。"""
+    排名表写进日志，也记进批次的下载元数据（a.meta_records）。"""
     import rank
     done = set()
     if a.archive and os.path.isfile(a.archive):
@@ -623,10 +622,38 @@ def ranked(a):
         f, s, e = ytdlp([c["url"] for c in chosen], sub, platform)
         files, skipped, errors = files + f, skipped + s, errors + e
     if report:
-        name = os.path.join(a.batch, time.strftime("ranking-%Y%m%d-%H%M%S.json"))
-        with open(name, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=1)
+        a.meta_records.append({"omnihub_ranking": report})
     return files, skipped, errors
+
+
+def collect_sidecars(batch):
+    """批次里每个文件旁边的元数据（yt-dlp 的 <名字>.info.json、gallery-dl 的 <文件>.json）：精简后返回，单个的删掉。
+    每条加 omnihub_file：对应的媒体文件在批次里的路径。"""
+    records = []
+    for folder, _, names in os.walk(batch):
+        for name in names:
+            if not name.endswith(".json") or folder == batch:   # 批次根目录的 batch.json、download-meta 不动
+                continue
+            path = os.path.join(folder, name)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    meta = json.load(fh)
+            except (OSError, ValueError) as e:
+                log(f"元数据读不了，留着：{os.path.relpath(path, batch)}（{e}）")
+                continue
+            rec = {k: v for k, v in meta.items() if k not in META_DROP} if isinstance(meta, dict) else {"value": meta}
+            stem = name[:-len(".info.json")] if name.endswith(".info.json") else name[:-len(".json")]
+            media = next((os.path.join(folder, n) for n in names if n != name and (n == stem or os.path.splitext(n)[0] == stem)), path)
+            rec["omnihub_file"] = os.path.relpath(media, batch)
+            records.append(rec)
+            os.remove(path)
+    return records
+
+
+def write_meta(batch, records):
+    if records:
+        with open(os.path.join(batch, time.strftime("download-meta-%Y%m%d-%H%M%S.json")), "w", encoding="utf-8") as fh:
+            json.dump(records, fh, ensure_ascii=False)
 
 
 def main():
@@ -653,6 +680,7 @@ def main():
     a.music_info = {}     # 视频 ID → YouTube Music 上的曲名、歌手、专辑、曲序：music_targets() 查到的
     a.mv_jobs = []        # [(歌手, [(MV 视频 ID, 标题)])]：给的是歌手页时由 music_targets() 记下，或从列表读
     a.mv_artist = ""      # 正在下谁的 MV（download_mvs 设）
+    a.meta_records = []   # 批次的下载元数据：音乐每首、排名表；最后连同其他文件旁边的 .json 合成一个文件
     a.music_skipped = []  # 不下的歌及原因、已下载过的：读取列表时列出来
     a.music_done = []
 
@@ -686,10 +714,11 @@ def main():
             (p for p in PLATFORMS if p["id"] == SCHEME_PLATFORM[a.scheme]), platform_of(a.urls[0]))
         files, skipped, errors = ytdlp(a.urls, a, platform)
     if a.scheme == "music":
-        enrich_music(files, a.lastfm_known, a.batch, a.album_of, a.music_info)
+        a.meta_records += enrich_music(files, a.lastfm_known, a.batch, a.album_of, a.music_info) or []
         if a.mv_jobs:
             f, s, e = download_mvs(a, next((p for p in PLATFORMS if p["id"] == "youtube"), platform_of(a.urls[0])))
             files, skipped, errors = files + f, skipped + s, errors + e
+    write_meta(a.batch, a.meta_records + collect_sidecars(a.batch))
     progress(len(a.urls), len(a.urls), f"完成：新下载 {len(files)} 个文件，跳过已下载 {skipped} 个，出错 {errors} 个")
     for h in sorted(hints):
         log("提示：" + h)

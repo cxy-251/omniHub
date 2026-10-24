@@ -193,22 +193,76 @@ func Files(root, batch, kind string, offset, limit int) ([]File, int, error) {
 // ImportResult 是移入资源库的结果。
 type ImportResult struct {
 	Moved    int      `json:"moved"`
-	Meta     int      `json:"meta"`    // 下载元数据（.json），收进 .omni_data/download-meta
-	Gallery  string   `json:"gallery"` // 批次里 gallery/ 部分并进相册的结果说明
+	Meta     int      `json:"meta"`     // 下载元数据（.json）的条数，追加进 .omni_data/download-meta.jsonl
+	Gallery  string   `json:"gallery"`  // 批次里 gallery/ 部分并进相册的结果说明
 	Existing int      `json:"existing"` // 资源库里已有同名文件，留在批次里
 	Refused  int      `json:"refused"`  // 不在 media_library/ 下，不移动
 	Areas    []string `json:"areas"`    // 涉及的分类目录（如 media_library/shortvideo），用来触发扫描
 	Errors   []string `json:"errors,omitempty"`
 }
 
-// MetaDir 是下载元数据在资源库里的位置（按原来的库内路径摆放）。
+// MetaLog 是资源库里的下载元数据：每个资源库一个 JSON Lines 文件，一行一条（一首歌、一个视频、一张图），
+// 不留一堆零碎的 .json。每行在原来的内容上加 omnihub_batch（来自哪个批次）、omnihub_imported（移入时间）。
+const MetaLog = ".omni_data/download-meta.jsonl"
+
+// MetaDir 是以前的做法（按原来的库内路径摆放单个 .json）；解析不了的 .json 仍放这里，不丢。
 const MetaDir = ".omni_data/download-meta"
+
+// appendMeta 把批次里一个 .json 的内容追加进 MetaLog：数组的每一项一行，对象一行。解析不了时返回错误，由调用方另放。
+func appendMeta(root, batch, src string) (int, error) {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return 0, err
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(data, &items); err != nil {
+		var one json.RawMessage
+		if err := json.Unmarshal(data, &one); err != nil {
+			return 0, err
+		}
+		items = []json.RawMessage{one}
+	}
+	now := time.Now().Format(time.RFC3339)
+	var buf []byte
+	for _, item := range items {
+		var obj map[string]any
+		if json.Unmarshal(item, &obj) != nil {
+			obj = map[string]any{"value": item}
+		}
+		obj["omnihub_batch"], obj["omnihub_imported"] = batch, now
+		line, err := json.Marshal(obj)
+		if err != nil {
+			return 0, err
+		}
+		buf = append(append(buf, line...), '\n')
+	}
+	dst := filepath.Join(root, filepath.FromSlash(MetaLog))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return 0, err
+	}
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := f.Write(buf); err != nil {
+		f.Close()
+		return 0, err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return 0, err
+	}
+	if err := f.Close(); err != nil {
+		return 0, err
+	}
+	return len(items), os.Remove(src)
+}
 
 // GalleryImporter 把批次里 gallery/ 目录的图片并进资源库的相册，返回结果说明；由调用方提供（相册是数据库）。
 type GalleryImporter func(ctx context.Context, dir string) (string, error)
 
 // Import 把批次并进资源库根目录：media_library/ 下的文件移到同一路径（同名已存在时不覆盖、留在批次里）；
-// .json 元数据收进 MetaDir；gallery/ 交给 importGallery（为 nil 时留在批次里）。批次移空后删除批次目录。
+// .json 元数据追加进 MetaLog（解析不了的放 MetaDir）；gallery/ 交给 importGallery（为 nil 时留在批次里）。批次移空后删除批次目录。
 // progress(已处理, 总数) 每个文件调用一次。
 func Import(ctx context.Context, root, batch string, importGallery GalleryImporter, progress func(done, total int)) (ImportResult, error) {
 	var res ImportResult
@@ -236,8 +290,10 @@ func Import(ctx context.Context, root, batch string, importGallery GalleryImport
 		}
 		parts := strings.SplitN(rel, "/", 3)
 		if strings.HasSuffix(rel, ".json") {
-			dst := filepath.Join(root, filepath.FromSlash(MetaDir), filepath.FromSlash(rel))
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err == nil && moveFile(filepath.Join(dir, filepath.FromSlash(rel)), dst) == nil {
+			src := filepath.Join(dir, filepath.FromSlash(rel))
+			if n, err := appendMeta(root, batch, src); err == nil {
+				res.Meta += n
+			} else if dst := filepath.Join(root, filepath.FromSlash(MetaDir), filepath.FromSlash(rel)); os.MkdirAll(filepath.Dir(dst), 0o755) == nil && moveFile(src, dst) == nil {
 				res.Meta++
 			}
 		} else if len(parts) < 3 || parts[0] != "media_library" {
