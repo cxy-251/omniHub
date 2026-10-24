@@ -410,7 +410,7 @@ def music_place(meta, info, guess, album_hint, ytm=None):
         if ytm.get("album_type") != "Single":
             album, number = ytm["album"], ytm.get("number")
             artist = (ytm.get("album_artists") or [artist])[0]
-        return artist, album, number, track
+        return ytm.get("owner") or artist, album, number, track   # 下歌手页时都放在这位歌手名下
     elif str(meta.get("playlist_id") or "").startswith("OLAK5uy_"):
         album = meta.get("album") or re.sub(r"^Album - ", "", meta.get("playlist_title") or "")
         number = meta.get("playlist_index")

@@ -67,14 +67,14 @@ def album_tracks(playlist_id, log):
     return a, album_songs(a, browse_id, log)
 
 
-def album_songs(a, browse_id, log, seen=None):
+def album_songs(a, browse_id, log, seen=None, keep=None):
     """一张发行里的歌：[(纯音轨版视频 ID, 信息)]，信息里是这张发行的名字、类型、曲序。
     曲目表里有 MV 的歌给的常是 MV，换成纯音轨版（优先同一张专辑里的）；找不到时只收官方音频，其余不收。
-    seen 是已收过的曲名（去掉括号说明），给了就跳过已收过的、并把这次收的加进去。"""
+    seen 是已收过的曲名（去掉括号说明），给了就跳过已收过的、并把这次收的加进去；keep(曲目, 发行) 为假的不收。"""
     songs = []
     for t in a.get("tracks") or []:
         key = _core(t.get("title"))
-        if not t.get("videoId") or not key or (seen is not None and key in seen):
+        if not t.get("videoId") or not key or (seen is not None and key in seen) or (keep and not keep(t, a)):
             continue
         info = {"title": t.get("title") or "", "kind": "ATV",
                 "artists": [x["name"] for x in t.get("artists") or a.get("artists") or []]}
@@ -123,6 +123,7 @@ AUDIO_TITLE = re.compile(r"official\s*audio|[(\[]audio[)\]]|音频|音訊|音源
 NOT_WANTED = re.compile(r"lyric|\blive\b|concert|performance|rehearsal|cover|vinyl|visuali[sz]er|teaser|trailer|"
                         r"behind|making|karaoke|ktv|interview|reaction|demo|歌词|歌詞|现场|現場|演唱会|演唱會|花絮|预告|預告|伴奏|翻唱", re.I)
 _titles = {}
+LIVE = re.compile(r"\blive\b|现场|現場|演唱会|演唱會", re.I)
 
 
 def ydl_opts(**extra):
@@ -201,15 +202,30 @@ def artist(channel_id, log, progress=lambda done, total, text: None):
         releases += [r for r in items if r.get("browseId")]
     releases.sort(key=lambda r: str(r.get("year") or "9999"))   # 稳定排序：同一年里专辑在单曲前
     log(f"歌手 {page.get('name')}：{len(releases)} 张专辑、EP、单曲，逐张读曲目")
-    songs, seen, names = [], set(), []
+    albums = []
     for n, r in enumerate(releases, 1):
         progress(n - 1, len(releases), f"读 {page.get('name')} 的专辑和单曲 {n}/{len(releases)}：{r.get('title')}（{r.get('year') or '年份不详'}）")
-        a = album(r["browseId"])
-        names += [x["name"] for x in a.get("artists") or []][:1]
-        got = album_songs(a, r["browseId"], log, seen)
+        albums.append((r, album(r["browseId"])))
+    # 这位歌手在曲目里的身份：各张发行第一位专辑歌手里出现最多的那个（歌手页名字可能是英文，曲目里是中文名）
+    firsts = [x for _, a in albums for x in (a.get("artists") or [])[:1] if x.get("id")]
+    owner = max(firsts, key=lambda x: sum(y["id"] == x["id"] for y in firsts)) if firsts else {"id": channel_id, "name": page.get("name") or ""}
+    names = {_norm(owner["name"]), _norm(page.get("name"))}
+
+    def keep(t, a):
+        """只收这位歌手参与的（合辑、原声带里别人唱的不收），现场版不收。"""
+        who = t.get("artists") or a.get("artists") or []
+        return any(x.get("id") == owner["id"] or _norm(x.get("name")) in names for x in who) and not LIVE.search(t.get("title") or "")
+    songs, seen = [], set()
+    for r, a in albums:
+        if LIVE.search(r.get("title") or ""):
+            log(f"  {r.get('title')}：现场专辑，跳过")
+            continue
+        got = album_songs(a, r["browseId"], log, seen, keep)
         songs += got
         if not got:
-            log("  没有新的歌（前面的发行里都有了，或只有 MV），整张跳过")
+            log(f"  {r.get('title')}：没有新的歌（前面的发行里都有了、不是这位歌手唱的、现场版或只有 MV），整张跳过")
+    for _, info in songs:   # 都放在这位歌手名下：合唱的单曲、合辑里的歌不散到别的歌手文件夹
+        info["owner"] = owner["name"]
     progress(len(releases), len(releases), f"读 {page.get('name')} 的视频列表，挑出 MV")
     mvs, tracks = [], []
     vids = page.get("videos") or {}
@@ -220,5 +236,4 @@ def artist(channel_id, log, progress=lambda done, total, text: None):
     mvs = [(t["id"], t.get("title") or "") for t in tracks if t.get("id") and is_mv(t.get("title") or "")]
     mvs = list({v: (v, title) for v, title in mvs}.values())
     log(f"视频列表 {len(tracks)} 个，其中 MV {len(mvs)} 个（歌词视频、现场、翻唱等不要）")
-    name = max(set(names), key=names.count) if names else page.get("name") or ""
-    return {"name": name, "songs": songs, "mvs": mvs}
+    return {"name": owner["name"], "songs": songs, "mvs": mvs}
