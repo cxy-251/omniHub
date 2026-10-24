@@ -532,36 +532,117 @@ def post_info(meta):
     return str(author), str(pid), day, text
 
 
-def gallerydl(urls, a, scheme="x"):
-    """图文平台下载（见 SOCIAL）。返回 (整理好的文件, 已下载过跳过的数量, 出错的数量)。"""
+def social_url(url, conf):
+    """用户名或作者主页链接 → 要读的页面（X 是「媒体」页）；其他链接原样。"""
+    url = url.strip()
+    m = re.match(conf.get("profile") or r"^$", url)
+    if "://" not in url or m:
+        return conf["user_url"].format(m.group(1) if m else url.lstrip("@"))
+    return url
+
+
+def gallerydl_base(a, conf, filt=None):
+    """gallery-dl 的公共参数：平台的过滤与选项、Cookie、代理、下载名单。filt 是额外的过滤条件（按月份）。"""
+    cmd = [sys.executable, "-m", "gallery_dl"]
+    conds = [c for c in (conf.get("filter"), filt) if c]
+    if conds:
+        cmd += ["--filter", " and ".join(f"({c})" for c in conds)]
+    for opt in conf.get("options") or []:
+        cmd += ["-o", opt]
+    if a.archive:
+        cmd += ["--download-archive", a.archive + ".gallery-dl.sqlite3"]
+    cookies = cookie_file(conf["cookie"])
+    if cookies:
+        cmd += ["--cookies", cookies]
+    if os.environ.get("OMNIHUB_YTDLP_PROXY"):
+        cmd += ["--proxy", os.environ["OMNIHUB_YTDLP_PROXY"]]
+    return cmd
+
+
+def month_filter(months):
+    """只要这些月份（YYYY-MM）的帖子；翻到比最早那个月更老的就停（不再往下翻，买来的号几万条老帖子不用读）。"""
+    first = min(months)
+    y, m = int(first[:4]), int(first[5:7])
+    return f"date.strftime('%Y-%m') in {set(months)!r} or (date < datetime({y}, {m}, 1) and abort())"
+
+
+def write_social_plan(a, scheme):
+    """图文平台读取列表：每个作者按月份列出帖子数、图片数、已下载过的张数和几条正文样例，给用户按月勾选（只读不下载）。"""
+    conf = SOCIAL[scheme]
+    done = set()
+    db = a.archive + ".gallery-dl.sqlite3" if a.archive else ""
+    if db and os.path.isfile(db):
+        import sqlite3
+        with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as con:
+            done = {r[0] for r in con.execute("SELECT entry FROM archive")}
+    months, errors = [], 0
+    for i, url in enumerate(a.urls):
+        url = social_url(url, conf)
+        progress(i, len(a.urls), f"读 {url}")
+        proc = subprocess.run(gallerydl_base(a, conf) + ["--simulate", "-j", url], capture_output=True, text=True)
+        try:
+            rows = [x[-1] for x in json.loads(proc.stdout or "[]") if isinstance(x, list) and len(x) >= 3 and isinstance(x[-1], dict)]
+        except ValueError:
+            rows = []
+        if proc.returncode != 0 and not rows:
+            log(f"ERROR: 读取失败 {url}：{(proc.stderr or '').strip()[-300:]}")
+            errors += 1
+            continue
+        by_month = {}
+        for meta in rows:
+            author, pid, day, text = post_info(meta)
+            mo = by_month.setdefault(day[:7], {"posts": set(), "images": 0, "done": 0, "samples": [], "author": author})
+            mo["posts"].add(pid)
+            mo["images"] += 1
+            if f"{meta.get('category', scheme)}{meta.get('tweet_id')}_{meta.get('retweet_id') or 0}_{meta.get('num')}" in done:
+                mo["done"] += 1
+            if text not in mo["samples"] and len(mo["samples"]) < 3:
+                mo["samples"].append(text)
+        log(f"{url}：{len(rows)} 张，{len(by_month)} 个月")
+        for month in sorted(by_month, reverse=True):
+            mo = by_month[month]
+            months.append({"id": f"{url}|{month}", "url": url, "author": mo["author"], "month": month, "posts": len(mo["posts"]),
+                           "images": mo["images"], "done": mo["done"], "samples": mo["samples"], "picked": True})
+    plan = {"urls": a.urls, "mode": "social", "months": months, "songs": [], "mvs": [], "videos": [], "skipped": [],
+            "done": [], "other": [], "errors": errors}
+    save_plan(a, plan)
+    log(f"列表：{len(months)} 个月，共 {sum(m['images'] for m in months)} 张（已下载过 {sum(m['done'] for m in months)} 张）")
+
+
+def gallerydl_plan(a, scheme):
+    """按读好的列表下：每个作者只下勾了的月份（去掉 --exclude 里的）。"""
+    with open(a.plan, encoding="utf-8") as f:
+        plan = json.load(f)
+    skip = set(filter(None, a.exclude.split(",")))
+    picked = {}
+    for m in plan.get("months") or []:
+        if m["id"] not in skip:
+            picked.setdefault(m["url"], []).append(m["month"])
+    if not picked:
+        return [], 0, 0
+    return gallerydl(list(picked), a, scheme, {u: month_filter(ms) for u, ms in picked.items()})
+
+
+def gallerydl(urls, a, scheme="x", url_filters=None):
+    """图文平台下载（见 SOCIAL）。url_filters：按读好的列表下时，每个链接只要哪些月份。
+    返回 (整理好的文件, 已下载过跳过的数量, 出错的数量)。"""
     conf = SOCIAL[scheme]
     files, skipped, errors = [], 0, 0
     incoming = os.path.join(a.batch, ".incoming", conf["dir"])
     for i, url in enumerate(urls):
-        url = url.strip()
-        m = re.match(conf.get("profile") or r"^$", url)
-        if "://" not in url or m:   # 只写了用户名，或作者主页链接
-            url = conf["user_url"].format(m.group(1) if m else url.lstrip("@"))
+        url = social_url(url, conf)
         progress(i, len(urls), f"{conf['dir']} · {url}")
         os.makedirs(incoming, exist_ok=True)
         complete = load_complete(a)
         key = f"{scheme}:{url.lower()}"
-        cmd = [sys.executable, "-m", "gallery_dl", "--write-metadata", "-D", incoming]
-        if complete.get(key):
+        filt = (url_filters or {}).get(url)
+        cmd = gallerydl_base(a, conf, filt) + ["--write-metadata", "-D", incoming]
+        if filt:
+            log(f"{url}：只下勾了的月份")
+        elif complete.get(key):
             cmd += ["-A", "20"]   # 完整下过：只补新帖子
         else:
             log(f"{url}：还没完整下完过，这次翻到最早，下过的跳过")
-        if conf.get("filter"):
-            cmd += ["--filter", conf["filter"]]
-        for opt in conf.get("options") or []:
-            cmd += ["-o", opt]
-        if a.archive:
-            cmd += ["--download-archive", a.archive + ".gallery-dl.sqlite3"]
-        cookies = cookie_file(conf["cookie"])
-        if cookies:
-            cmd += ["--cookies", cookies]
-        if os.environ.get("OMNIHUB_YTDLP_PROXY"):
-            cmd += ["--proxy", os.environ["OMNIHUB_YTDLP_PROXY"]]
         if a.x_limit > 0:   # 测试用：只取前 N 个
             cmd += ["--range", f"1-{a.x_limit}"]
         proc = subprocess.Popen(cmd + [url], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -571,12 +652,12 @@ def gallerydl(urls, a, scheme="x"):
                 skipped += 1
             elif "[error]" in line:
                 errors += 1
-                for key, hint in LOGIN_HINTS.items():
-                    if key.lower() in line.lower():
+                for word, hint in LOGIN_HINTS.items():
+                    if word.lower() in line.lower():
                         hints.add(hint.format(conf["dir"]))
             log(line)
         proc.wait()
-        if proc.returncode == 0 and a.x_limit <= 0 and not complete.get(key):   # 正常结束、没限数量：记为完整下完
+        if proc.returncode == 0 and a.x_limit <= 0 and not filt and not complete.get(key):   # 正常结束、没限数量：记为完整下完
             complete[key] = time.strftime("%Y-%m-%d")
             save_complete(a, complete)
             log(f"{url}：已完整下完，以后再下只补新帖子")
@@ -994,6 +1075,10 @@ def main():
         if not a.urls:
             print("OMNIHUB_RESULT " + json.dumps({"files": 0, "skipped": 0, "errors": len(dropped), "path": a.batch, "hints": []}, ensure_ascii=False), flush=True)
             sys.exit(1)
+    if a.plan_out and a.scheme in SOCIAL:
+        write_social_plan(a, a.scheme)
+        print("OMNIHUB_RESULT " + json.dumps({"plan": a.plan_out}, ensure_ascii=False), flush=True)
+        return
     if a.plan_out and a.scheme in ("youtube", "bilibili"):
         write_video_plan(a)
         print("OMNIHUB_RESULT " + json.dumps({"plan": a.plan_out}, ensure_ascii=False), flush=True)
@@ -1003,8 +1088,8 @@ def main():
         print("OMNIHUB_RESULT " + json.dumps({"plan": a.plan_out}, ensure_ascii=False), flush=True)
         return
 
-    if a.scheme == "x":
-        files, skipped, errors = gallerydl(a.urls, a, "x")
+    if a.scheme in SOCIAL:
+        files, skipped, errors = gallerydl_plan(a, a.scheme) if a.plan else gallerydl(a.urls, a, a.scheme)
     elif a.scheme == "other":
         files, skipped, errors = [], 0, 0
         groups = {}

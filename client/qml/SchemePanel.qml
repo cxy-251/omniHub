@@ -177,6 +177,12 @@ ColumnLayout {
                               + (plan.mode === "girls" ? "正式 MV " : "视频 ") + girls.length + " 个（默认全勾）"})
         }
         if (plan.other_count) out.push({type: "head", text: "其他视频 " + plan.other_count + " 个（不是 MV，不列出）"})
+        var months = plan.months || []   // 图文平台（X）：一行一个月，勾掉不要的月份
+        if (months.length) out.push({type: "head", group: "month", text: "按月份（新的在上面；去掉买号前、刷量的月份）"})
+        months.forEach(function (m) {
+            out.push({type: "month", grp: "month", id: m.id, text: m.author + "　" + m.month + "　" + m.posts + " 条 · " + m.images + " 张" + (m.done ? "（已下 " + m.done + "）" : ""),
+                      note: m.samples.join(" / ")})
+        })
         if ((plan.other || []).length) out.push({type: "head", text: "其他网站的链接 " + plan.other.length + " 个（不查纯音轨版，按原视频下音频）"})
         ;(plan.other || []).forEach(function (u) { out.push({type: "other", text: u}) })
         if (plan.skipped.length) out.push({type: "head", text: (plan.mode === "girls" ? "带 MV 字样但不是正式 MV（预告、练习室等），不下 " : "不下 ") + plan.skipped.length + " 个"})
@@ -191,6 +197,7 @@ ColumnLayout {
         var parts = []
         if (count("song")) parts.push("歌 " + count("song") + " 首")
         if (count("mv")) parts.push("音乐 MV " + count("mv") + " 个")
+        if (count("month")) parts.push(count("month") + " 个月")
         if (count("video")) parts.push((plan && plan.mode === "girls" ? "女团 MV " : plan && plan.mode === "girlvideo" ? "女团相关视频 " : plan && plan.mode === "audio" ? "音频 " : "视频 ") + count("video") + " 个")
         return parts.join("、") || "没有勾选"
     }
@@ -317,7 +324,7 @@ ColumnLayout {
             ScrollBar.vertical: ScrollBar {}
             delegate: RowLayout {
                 required property var modelData
-                readonly property bool pickable: modelData.type === "song" || modelData.type === "mv" || modelData.type === "video"
+                readonly property bool pickable: modelData.type === "song" || modelData.type === "mv" || modelData.type === "video" || modelData.type === "month"
                 readonly property bool artist: modelData.type === "artist"
                 width: planList.width - 12
                 spacing: 6
@@ -373,7 +380,7 @@ ColumnLayout {
         PrimaryButton {
             visible: panel.listable
             text: panel.plan ? "开始下载（" + panel.pickedText() + "）" : panel.listing ? "读取中…" : "读取列表"
-            enabled: panel.ready && !panel.listing && (!panel.plan || panel.count("song") + panel.count("mv") + panel.count("video") + (panel.plan.other || []).length > 0)
+            enabled: panel.ready && !panel.listing && (!panel.plan || panel.count("song") + panel.count("mv") + panel.count("video") + panel.count("month") + (panel.plan.other || []).length > 0)
             onClicked: panel.plan ? panel.startPlan() : panel.readList()
         }
         PrimaryButton { visible: !panel.listable; text: panel.lines.length ? "开始下载 " + panel.lines.length + " 个链接" : "开始下载"; enabled: panel.ready; onClicked: panel.start() }

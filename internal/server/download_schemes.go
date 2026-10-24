@@ -76,8 +76,8 @@ func (r *Router) schemeKinds() []*dlKind {
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("bilibili", p) },
 		},
 		{
-			ID: "x", Title: "X", Description: "下载作者本人发的图片（原图；不要视频、转发和引用；作者在自己推文下面接着回复补的图也要，和原推合成一个图集）。用 gallery-dl，需要在「账号与 Cookie」里读过 X 的登录。图片进相册里单独的图库「X」（标为 NSFW，不出现在推荐等频道，只在「图库 · X」里看），文件名带作者和推文日期、正文、编号；一条推（连同补图）的图挨在一起。一个作者第一次会翻到最早、下完全部历史，中断了下次接着补，下过的跳过；完整下完一次以后再下，只补新帖子。",
-			Scheme: &dlScheme{Steps: []string{"填作者用户名或主页链接（一行一个）", "下载到暂存区（下过的跳过）", "在「暂存区」看图、删掉不要的", "移入资源库"},
+			ID: "x", Title: "X", Description: "下载作者本人发的图片（原图；不要视频、转发和引用；作者在自己推文下面接着回复补的图也要，和原推合成一个图集）。用 gallery-dl，需要在「账号与 Cookie」里读过 X 的登录。图片进相册里单独的图库「X」（标为 NSFW，不出现在推荐等频道，只在「图库 · X」里看），文件名带作者和推文日期、正文、编号；一条推（连同补图）的图挨在一起。先「读取列表」：每个作者按月份列出帖子数、图片数、已下载过几张和几条正文样例，去掉不要的月份（比如买来的号以前刷的帖子），只下勾了的月份，翻到比最早勾的月份更老的帖子就停。下过的自动跳过。",
+			Scheme: &dlScheme{Listable: true, Steps: []string{"填作者用户名或主页链接（一行一个）", "读取列表：按月份看帖子和正文样例，去掉不要的月份（买来的号、刷量的旧帖）", "下载到暂存区（下过的跳过）", "移入资源库"},
 				Destination: "相册 / 图库「X」（NSFW）/ <作者>/", Input: "作者用户名或主页链接，一行一个", Placeholder: "nasa\n@nasa\nhttps://x.com/<作者>/media"},
 			needs:  []string{"uv"},
 			Fields: []dlField{urls, library},
@@ -132,7 +132,7 @@ func (r *Router) buildList(scheme string, p dlParams, urls []string) (dlPlan, er
 	args := append([]string{"scripts/general.py"}, urls...)
 	args = append(args, "--batch", dir, "--scheme", scheme, "--archive", archivePath(lib.RootPath, scheme), "--plan-out", path)
 	args = append(args, videoArgs(p)...)
-	titles := map[string]string{"music": "音乐", "youtube": "YouTube", "bilibili": "B站"}
+	titles := map[string]string{"music": "音乐", "youtube": "YouTube", "bilibili": "B站", "x": "X"}
 	return dlPlan{title: fmt.Sprintf("%s 读取列表 %d 个链接", titles[scheme], len(urls)), args: args, resource: strings.TrimSuffix(path, ".json"), lib: lib}, nil
 }
 
@@ -169,7 +169,7 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 			return dlPlan{}, fmt.Errorf("音乐只从 YouTube / YouTube Music 下：%s", u)
 		}
 	}
-	if p.text("step") == "list" && (scheme == "music" || scheme == "youtube" || scheme == "bilibili") {
+	if p.text("step") == "list" && (scheme == "music" || scheme == "youtube" || scheme == "bilibili" || scheme == "x") {
 		return r.buildList(scheme, p, urls)
 	}
 	lib, err := r.writableLibrary(p.text("library"))
