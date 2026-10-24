@@ -19,8 +19,8 @@ const maxDirEntries = 50000
 
 var imageExtensions = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true}
 
-// 下载插件的命名：2024-12-05_标题_7444881751299657018
-var namePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(.*?)(?:_([0-9a-f]{16,}|\d{10,}))?$`)
+// 下载插件的命名：2024-12-05_标题_7444881751299657018；YouTube 下载：2022-04-05_标题_Y8JFxS1HlDo（11 位视频 ID）
+var namePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(.*?)(?:_([0-9a-f]{16,}|\d{10,}|[A-Za-z0-9_-]{11}))?$`)
 
 // ScanStats 汇总一次扫描的变化。
 type ScanStats struct {
@@ -73,34 +73,18 @@ func (s *Store) Scan(ctx context.Context, dir string) (ScanStats, error) {
 				continue
 			}
 			creatorID := platform.Name() + "/" + creatorDir.Name()
-			posts, err := scanCreator(root, creatorID)
+			if err := s.scanOne(root, creatorID, platform.Name(), creatorDir.Name(), known, seen, creators, &stats); err != nil {
+				return stats, err
+			}
+			// 频道下按团（或系列）分的子文件夹：放的是视频、不是图集，当成「频道 / 团名」一个分类
+			subs, err := videoFolders(root, creatorID)
 			if err != nil {
 				return stats, err
 			}
-			if len(posts) > 0 {
-				creators[creatorID] = Creator{ID: creatorID, Platform: platform.Name(), Name: creatorDir.Name()}
-			}
-			var changed []scannedPost
-			for _, p := range posts {
-				seen[p.ID] = true
-				if p.Kind == KindVideo {
-					stats.Videos++
-				} else {
-					stats.Albums++
+			for _, sub := range subs {
+				if err := s.scanOne(root, creatorID+"/"+sub, platform.Name(), creatorDir.Name()+" / "+sub, known, seen, creators, &stats); err != nil {
+					return stats, err
 				}
-				old, ok := known[p.ID]
-				switch {
-				case !ok:
-					stats.Added++
-				case old.Size != p.Size || old.MTime != p.MTime || old.ImageCount != p.ImageCount || old.Music != p.Music || !old.OnDisk:
-					stats.Updated++
-				default:
-					continue
-				}
-				changed = append(changed, p)
-			}
-			if err := s.writePosts(changed, known); err != nil {
-				return stats, err
 			}
 		}
 	}
@@ -127,6 +111,65 @@ func (s *Store) Scan(ctx context.Context, dir string) (ScanStats, error) {
 	}
 	stats.Removed = len(gone)
 	return stats, s.replaceCreators(creators)
+}
+
+// scanOne 扫一个博主（或「频道 / 团名」子分类）目录，写入新增与变化的作品。
+func (s *Store) scanOne(root *os.Root, creatorID, platformName, name string, known map[string]Post, seen map[string]bool, creators map[string]Creator, stats *ScanStats) error {
+	posts, err := scanCreator(root, creatorID)
+	if err != nil {
+		return err
+	}
+	if len(posts) > 0 {
+		creators[creatorID] = Creator{ID: creatorID, Platform: platformName, Name: name}
+	}
+	var changed []scannedPost
+	for _, p := range posts {
+		seen[p.ID] = true
+		if p.Kind == KindVideo {
+			stats.Videos++
+		} else {
+			stats.Albums++
+		}
+		old, ok := known[p.ID]
+		switch {
+		case !ok:
+			stats.Added++
+		case old.Size != p.Size || old.MTime != p.MTime || old.ImageCount != p.ImageCount || old.Music != p.Music || !old.OnDisk:
+			stats.Updated++
+		default:
+			continue
+		}
+		changed = append(changed, p)
+	}
+	return s.writePosts(changed, known)
+}
+
+// videoFolders 列出博主目录下放视频（.mp4）、没有图片的子文件夹名（有图片的是图集）。
+func videoFolders(root *os.Root, creatorID string) ([]string, error) {
+	entries, err := readDir(root, creatorID)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() || hidden(e.Name()) {
+			continue
+		}
+		files, err := readDir(root, creatorID+"/"+e.Name())
+		if err != nil {
+			return nil, err
+		}
+		videos, images := false, false
+		for _, f := range files {
+			ext := strings.ToLower(path.Ext(f.Name()))
+			videos = videos || f.Type().IsRegular() && ext == ".mp4"
+			images = images || f.Type().IsRegular() && imageExtensions[ext]
+		}
+		if videos && !images {
+			out = append(out, e.Name())
+		}
+	}
+	return out, nil
 }
 
 // scanCreator 列出一个博主目录下的视频与图集。

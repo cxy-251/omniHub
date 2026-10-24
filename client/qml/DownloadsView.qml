@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import QtQuick.Dialogs
 import QtCore
 
-// 下载页：MEGA 与各种脚本任务（有声书、漫画……，由服务端声明，表单自动生成）。
+// 下载页：MEGA 与各种脚本任务（音乐、YouTube、B 站、漫画……，由服务端声明，表单自动生成）。
 // 任务卡片在右侧的悬浮面板里（可收起）：进度、当前步骤、结果，以及「去收听」「打开文件夹」「停止」「日志」。
 Item {
     id: view
@@ -33,7 +33,10 @@ Item {
 
     function say(text, isError) { message = text; messageIsError = !!isError }
     function refresh() {
-        api.getJSON("/api/downloads/kinds", function (list) { view.kinds = list })
+        api.getJSON("/api/downloads/kinds", function (list) {
+            view.kinds = list
+            if (prefs.tab === "audiobook") prefs.tab = "youtube"   // 有声书已并进 YouTube / B 站的「只要音频」
+        })
         api.getJSON("/api/downloads/presets", function (list) { view.presets = list })
         api.getJSON("/api/downloads/settings", function (s) { view.settings = s })
         refreshJobs()
@@ -84,7 +87,7 @@ Item {
                 onActivated: prefs.library = currentValue
                 ToolTip.visible: hovered; ToolTip.text: "下载先放进这个资源库的暂存区；移入时同一块盘上只是改名"
             }
-            Chip { text: "网络设置"; visible: prefs.tab === "audiobook"; selected: netBox.visible; onClicked: netBox.visible = !netBox.visible }
+            Chip { text: "网络设置"; visible: !!view.currentKind && !!view.currentKind.scheme; selected: netBox.visible; onClicked: netBox.visible = !netBox.visible }
             Chip {
                 text: "任务" + (view.runningJobs ? "（" + view.runningJobs + " 个进行中）" : view.jobs.length ? "（" + view.jobs.length + "）" : "")
                 selected: view.showTasks

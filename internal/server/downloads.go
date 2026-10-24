@@ -46,6 +46,8 @@ type dlField struct {
 	Advanced    bool       `json:"advanced,omitempty"` // 收在「更多选项」里
 	Default     any        `json:"default,omitempty"`
 	Options     []dlOption `json:"options,omitempty"`
+	// ShowIf：只在其他字段取这些值时显示（如「专辑名」只在「要什么 = 只要音频」时）；值以 ! 开头表示「不等于」
+	ShowIf map[string]string `json:"show_if,omitempty"`
 }
 
 type dlKind struct {
@@ -178,70 +180,8 @@ func (r *Router) writableLibrary(id string) (*library.Library, error) {
 }
 
 func (r *Router) downloadKinds() []*dlKind {
-	audioLibs, audioDef := r.writableLibraryChoice("media_library/audio")
 	mangaLibs, mangaDef := r.writableLibraryChoice("media_library/manga")
 	kinds := append(r.schemeKinds(), []*dlKind{
-		{
-			ID: "audiobook", Title: "有声书", Description: "从 YouTube、B 站等视频站下载音频，存进音声专辑。粘贴链接即可，专辑名默认用标题。",
-			needs: []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{
-				{Name: "urls", Label: "链接", Type: "lines", Required: true, Placeholder: "粘贴视频、播放列表或 B 站多 P 链接，一行一个", Help: "想指定文件名时写成「链接|文件名」"},
-				{Name: "album", Label: "专辑名", Type: "text", Placeholder: "不填就用播放列表或第一个视频的标题"},
-				{Name: "nsfw", Label: "放进 NSFW 分区", Type: "toggle", Default: false},
-				{Name: "library", Label: "资源库", Type: "choice", Options: audioLibs, Default: audioDef, Advanced: true},
-				{Name: "mode", Label: "保存方式", Type: "choice", Default: "files", Advanced: true, Options: []dlOption{{"files", "每集一个文件"}, {"m4b", "合成一个带章节的 m4b"}}},
-				{Name: "items", Label: "只下这些集", Type: "text", Advanced: true, Placeholder: "如 1-6,9（播放列表或多 P 时有效）"},
-				{Name: "format", Label: "音频格式", Type: "text", Advanced: true, Default: "140/ba[ext=m4a]/ba", Help: "yt-dlp 的 -f 参数"},
-				{Name: "min_mb", Label: "已有文件小于多少 MB 算残缺", Type: "text", Advanced: true, Default: "1"},
-			},
-			build: func(r *Router, p dlParams) (dlPlan, error) {
-				urls := p.lines("urls")
-				if len(urls) == 0 || len(urls) > 200 {
-					return dlPlan{}, errors.New("请粘贴 1–200 个链接")
-				}
-				for _, u := range urls {
-					if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
-						return dlPlan{}, fmt.Errorf("不是网址：%s", u)
-					}
-				}
-				lib, err := r.writableLibrary(p.text("library"))
-				if err != nil {
-					return dlPlan{}, err
-				}
-				sub := "standard"
-				if p.flag("nsfw") {
-					sub = "nsfw"
-				}
-				root := filepath.Join(lib.RootPath, "media_library", "audio", sub)
-				args := append([]string{"scripts/audiobook.py"}, urls...)
-				args = append(args, "--root", root)
-				for _, other := range r.libMgr.ListLibraries() {
-					if other.IsOnline && other.ID != lib.ID {
-						args = append(args, "--existing-root", filepath.Join(other.RootPath, "media_library", "audio", sub))
-					}
-				}
-				if a := p.text("album"); a != "" {
-					args = append(args, "--album", a)
-				}
-				if m := p.text("mode"); m == "m4b" {
-					args = append(args, "--mode", "m4b")
-				}
-				if it := p.text("items"); it != "" {
-					args = append(args, "--items", it)
-				}
-				if f := p.text("format"); f != "" {
-					args = append(args, "--format", f)
-				}
-				if mb, err := strconv.ParseFloat(p.text("min_mb"), 64); err == nil && mb >= 0 {
-					args = append(args, "--min-mb", strconv.FormatFloat(mb, 'f', -1, 64))
-				}
-				title := p.text("album")
-				if title == "" {
-					title = urls[0]
-				}
-				return dlPlan{title: "有声书 · " + title, args: args, resource: root, lib: lib}, nil
-			},
-		},
 		{
 			ID: "manga", Title: "漫画", Description: "按本子网址或 ID 整本下载，封成 CBZ 放进漫画库；已有的会自动检查更新。",
 			needs: []string{"uv"},
@@ -369,7 +309,7 @@ func (r *Router) jobCard(t *tasks.Task) dlJob {
 	if len(job.Tail) > 3 {
 		job.Tail = job.Tail[len(job.Tail)-3:]
 	}
-	if path, _ := job.Result["path"].(string); path != "" && kind == "audiobook" {
+	if path, _ := job.Result["path"].(string); path != "" && kind == "audiobook" { // 旧版有声书任务（已并进 YouTube / B 站的「只要音频」）
 		if logical := r.logicalPath(path); logical != "" {
 			job.Open = map[string]any{"type": "audio", "album": logical}
 		}

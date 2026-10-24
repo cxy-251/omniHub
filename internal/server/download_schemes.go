@@ -27,6 +27,8 @@ type dlScheme struct {
 	Placeholder string   `json:"placeholder"`
 	Ranked      bool     `json:"ranked"`   // 有「按什么挑、每个链接取」（列表类方案）
 	Listable    bool     `json:"listable"` // 可以先「读取列表」看会下什么、勾选后再下
+	// AudioDestination：选「只要音频」时下到哪里
+	AudioDestination string `json:"audio_destination,omitempty"`
 }
 
 func archivePath(root, scheme string) string {
@@ -44,8 +46,15 @@ func (r *Router) schemeKinds() []*dlKind {
 	}
 	videoRank := rankField([]dlOption{{"views", "播放量"}, {"none", "不挑，全下"}}, "views")
 	top := dlField{Name: "top", Label: "每个链接取", Type: "choice", Default: "30", Options: []dlOption{{"10", "前 10 个"}, {"30", "前 30 个"}, {"100", "前 100 个"}}}
-	onlyMV := dlField{Name: "only", Label: "只要", Type: "choice", Default: "mv", Options: []dlOption{{"mv", "正式 MV"}, {"all", "全部视频"}}}
-	keywords := dlField{Name: "keywords", Label: "标题含", Type: "text", Help: "团名，逗号分隔；留空不限"}
+	video := map[string]string{"want": "!audio"} // 只在下视频时显示
+	audio := map[string]string{"want": "audio"}  // 只在「只要音频」时显示
+	want := dlField{Name: "want", Label: "要什么", Type: "choice", Default: "video", Options: []dlOption{{"video", "视频"}, {"audio", "只要音频（有声书）"}}}
+	onlyMV := dlField{Name: "only", Label: "只要", Type: "choice", Default: "mv", Options: []dlOption{{"mv", "正式 MV"}, {"all", "全部视频"}}, ShowIf: video}
+	keywords := dlField{Name: "keywords", Label: "标题含", Type: "text", Help: "团名，逗号分隔；按团分文件夹；留空不限", ShowIf: video}
+	album := dlField{Name: "album", Label: "专辑名", Type: "text", Help: "留空用播放列表名", ShowIf: audio}
+	area := dlField{Name: "audio_area", Label: "放进", Type: "choice", Default: "standard", Options: []dlOption{{"standard", "音声"}, {"nsfw", "音声 NSFW 分区"}}, ShowIf: audio}
+	videoRank.ShowIf, top.ShowIf = video, video
+	height.ShowIf = video
 	height4k := height
 	height4k.Default = "2160"
 	steps := func(first string) []string {
@@ -61,19 +70,19 @@ func (r *Router) schemeKinds() []*dlKind {
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("music", p) },
 		},
 		{
-			ID: "youtube", Title: "YouTube", Description: "一次可以填很多个频道、播放列表或视频（如韩国女团所在公司的频道）。可以只要正式 MV（按标题去掉预告、练习室、舞台、花絮、反应视频），只要标题里有某些团名的；按播放量取每个链接的前 N 个（列表页上没有播放量的逐个补上）。先「读取列表」看会下哪些、去掉不要的，再一个一个下载。下过的自动跳过。",
-			Scheme: &dlScheme{Steps: steps("粘贴频道/播放列表链接（一行一个）"), Destination: "短视频 / YouTube / <频道>/", Ranked: true, Listable: true,
+			ID: "youtube", Title: "YouTube", Description: "一次可以填很多个频道、播放列表或视频（如韩国女团所在公司的频道）。可以只要正式 MV（按标题去掉预告、练习室、舞台、花絮、反应视频），只要标题里有某些团名的；按播放量取每个链接的前 N 个（列表页上没有播放量的逐个补上）。按团分文件夹（<频道>/<团名>/）。也可以「只要音频」当有声书下进音声（按列表顺序全下）。先「读取列表」看会下哪些、去掉不要的，再一个一个下载。下过的自动跳过。",
+			Scheme: &dlScheme{Steps: steps("粘贴频道/播放列表链接（一行一个）"), Destination: "短视频 / YouTube / <频道>/<团名>/", AudioDestination: "音声 / <专辑>/", Ranked: true, Listable: true,
 				Input: "频道、播放列表或视频链接，一行一个", Placeholder: "https://www.youtube.com/@HYBELABELS\nhttps://www.youtube.com/@starshipTV\nhttps://www.youtube.com/playlist?list=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, onlyMV, keywords, videoRank, top, height4k, library},
+			Fields: []dlField{urls, want, onlyMV, keywords, videoRank, top, height4k, album, area, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("youtube", p) },
 		},
 		{
-			ID: "bilibili", Title: "B 站", Description: "一次可以填很多个 UP 主、合集或视频。按播放量取每个链接的前 N 个（或全下），设好就不用管。下过的自动跳过。",
-			Scheme: &dlScheme{Steps: steps("粘贴 UP 主空间/合集链接（一行一个）"), Destination: "短视频 / B站 / <UP主>/", Ranked: true,
+			ID: "bilibili", Title: "B 站", Description: "一次可以填很多个 UP 主、合集或视频。按播放量取每个链接的前 N 个（或全下），设好就不用管。也可以「只要音频」当有声书下进音声（按列表顺序全下）。下过的自动跳过。",
+			Scheme: &dlScheme{Steps: steps("粘贴 UP 主空间/合集链接（一行一个）"), Destination: "短视频 / B站 / <UP主>/", AudioDestination: "音声 / <专辑>/", Ranked: true, Listable: true,
 				Input: "UP 主空间、合集或视频链接，一行一个", Placeholder: "https://space.bilibili.com/<UID>/video\nhttps://www.bilibili.com/video/BV…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, videoRank, top, height, library},
+			Fields: []dlField{urls, want, videoRank, top, height, album, area, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("bilibili", p) },
 		},
 		{
@@ -143,6 +152,13 @@ func (r *Router) buildList(scheme string, p dlParams, urls []string) (dlPlan, er
 // videoFilterArgs 是视频方案的筛选与排名参数（读取列表和直接下载共用）。
 func videoFilterArgs(p dlParams) []string {
 	var args []string
+	if p.text("want") == "audio" {
+		args = append(args, "--want", "audio")
+		if p.text("audio_area") == "nsfw" {
+			args = append(args, "--audio-area", "nsfw")
+		}
+		return args // 有声书：按列表顺序全要，不筛不排
+	}
 	if v := p.text("only"); v == "mv" || v == "all" {
 		args = append(args, "--only", v)
 	}
@@ -213,15 +229,11 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 		}
 		args = append(args, "--plan", path, "--exclude", p.text("exclude"))
 	}
-	if p.text("mode") == "direct" {
+	if scheme == "youtube" || scheme == "bilibili" { // 直接下载与按列表下载都要：只要音频、筛选与排名
+		args = append(args, videoFilterArgs(p)...)
+	} else if p.text("mode") == "direct" {
 		if rank := p.text("rank"); rank != "" {
 			args = append(args, "--rank", rank, "--top", p.text("top"))
-		}
-		if v := p.text("only"); v == "mv" || v == "all" {
-			args = append(args, "--only", v)
-		}
-		if v := p.text("keywords"); v != "" {
-			args = append(args, "--keywords", v)
 		}
 	}
 	if m := p.text("x_media"); m != "" {

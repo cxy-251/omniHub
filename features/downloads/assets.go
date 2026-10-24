@@ -1,4 +1,4 @@
-// Package dlassets 把下载任务脚本（有声书 yt-dlp、漫画 jmcomic、从 Chrome 导出 Cookie）和 uv 项目文件嵌入服务端，
+// Package dlassets 把下载任务脚本（音乐与视频 yt-dlp、漫画 jmcomic、从 Chrome 导出 Cookie）和 uv 项目文件嵌入服务端，
 // 运行时解压到缓存目录，由 uv 按 uv.lock 锁定的版本建虚拟环境（Python 只作按需子进程）。
 package dlassets
 
@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 )
 
-//go:embed pyproject.toml uv.lock scripts/audiobook.py scripts/manga.py scripts/cookies.py scripts/general.py scripts/rank.py scripts/lyrics.py scripts/ytmusic.py
+//go:embed pyproject.toml uv.lock scripts/manga.py scripts/cookies.py scripts/general.py scripts/rank.py scripts/lyrics.py scripts/ytmusic.py
 var files embed.FS
 
-var names = []string{"pyproject.toml", "uv.lock", "scripts/audiobook.py", "scripts/manga.py", "scripts/cookies.py", "scripts/general.py", "scripts/rank.py", "scripts/lyrics.py", "scripts/ytmusic.py"}
+var names = []string{"pyproject.toml", "uv.lock", "scripts/manga.py", "scripts/cookies.py", "scripts/general.py", "scripts/rank.py", "scripts/lyrics.py", "scripts/ytmusic.py"}
 
 // Prepare 把文件写到 dir（内容不变时不重写），返回 dir。
 func Prepare(dir string) (string, error) {

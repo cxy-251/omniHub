@@ -101,11 +101,17 @@ def ytdlp(urls, a, platform):
         cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "best", "--embed-metadata", "--embed-thumbnail",
                 "--convert-thumbnails", "jpg", "--ppa", "ThumbnailsConvertor:-q:v 2 -vf crop=\"'min(iw,ih)':'min(iw,ih)'\"",
                 "-o", os.path.join(a.batch, ".incoming", "%(id)s.%(ext)s")]
+    elif a.want == "audio":   # 只要音频（有声书）：音声/<standard|nsfw>/<专辑>/<标题>，专辑默认用播放列表名
+        album = safe(a.album) if a.album else "%(playlist_title,title)s"
+        cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "best", "--embed-metadata", "--embed-thumbnail",
+                "--convert-thumbnails", "jpg",
+                "-o", os.path.join(a.batch, "media_library", "audio", a.audio_area, album, "%(title).100B.%(ext)s")]
     else:
         h = a.max_height
         fmt = "bv*+ba/b" if h <= 0 else f"bv*[height<={h}]+ba/b[height<={h}]/b"
-        out = os.path.join(a.batch, "media_library", "shortvideo", platform["dir"],
-                           "%(channel,uploader,uploader_id|未知作者)s", "%(upload_date>%Y-%m-%d)s_%(title).80B_%(id)s.%(ext)s")
+        out = os.path.join(a.batch, "media_library", "shortvideo", platform["dir"], "%(channel,uploader,uploader_id|未知作者)s",
+                           *([safe(a.group)] if a.group else []),   # 按团分：<频道>/<团名>/
+                           "%(upload_date>%Y-%m-%d)s_%(title).80B_%(id)s.%(ext)s")
         if a.mv_artist:
             out = os.path.join(a.batch, "media_library", "shortvideo", "MV", safe(a.mv_artist), "%(title).80B [%(id)s].%(ext)s")
         cmd += ["-f", fmt, "--merge-output-format", "mp4", "-o", out]
@@ -249,15 +255,25 @@ def planned_path(info):
 OFF_TOPIC = "标题里没有要的团名"
 
 
+def keyword_list(a):
+    """「标题含」里填的词（团名），保留原写法（用作文件夹名）。"""
+    return [w.strip() for w in re.split(r"[,，\n]", a.keywords) if w.strip()]
+
+
+def matched_group(a, title):
+    """标题里出现的第一个团名（整词，不分大小写），没有返回空。"""
+    t = (title or "").casefold()
+    return next((w for w in keyword_list(a) if re.search(r"(?<![a-z0-9])" + re.escape(w.casefold()) + r"(?![a-z0-9])", t)), "")
+
+
 def video_keep(a):
     """视频方案的筛选：--only mv 只要正式 MV（按标题，见 ytmusic.is_mv）；--keywords 标题里要有其中一个词（如团名，逗号分隔）。
     返回 keep(条目) → 不要的原因或 None。"""
     import ytmusic
-    words = [w.strip().casefold() for w in re.split(r"[,，\n]", a.keywords) if w.strip()]
 
     def keep(e):
         t = e.get("title") or ""
-        if words and not any(re.search(r"(?<![a-z0-9])" + re.escape(w) + r"(?![a-z0-9])", t.casefold()) for w in words):   # 整词：IVE 不算 FIVE
+        if keyword_list(a) and not matched_group(a, t):   # 整词：IVE 不算 FIVE
             return OFF_TOPIC
         if a.only == "mv" and not ytmusic.is_mv(t):
             return "不是正式 MV（预告、练习室、舞台、花絮、反应视频等）" if ytmusic.MV_TITLE.search(t) else "不是 MV"
@@ -282,7 +298,8 @@ def write_video_plan(a):
         ndone += n
         for k, e in enumerate(cands):
             videos.append({"id": e["id"], "url": e["url"], "title": e["title"], "channel": e.get("uploader") or title,
-                           "views": e.get("views"), "list": title, "picked": a.rank == "none" or a.top <= 0 or k < a.top})
+                           "views": e.get("views"), "list": title, "group": matched_group(a, e["title"]),
+                           "picked": a.rank == "none" or a.top <= 0 or k < a.top})
         # 标题里没有团名的（公司频道里别的艺人）只记数量，不列出来
         skipped += [{"id": e["id"], "title": e["title"], "artists": [], "reason": e["reason"]} for e in dropped if e["reason"] != OFF_TOPIC]
         off_topic += sum(e["reason"] == OFF_TOPIC for e in dropped)
@@ -339,11 +356,27 @@ def load_plan(a):
 
 
 def load_video_plan(a):
-    """视频方案按读取好的列表下：去掉 --exclude 的。返回视频链接。"""
+    """视频方案按读取好的列表下：去掉 --exclude 的。返回 [(视频链接, 团名, 列表名)]。"""
     with open(a.plan, encoding="utf-8") as f:
         plan = json.load(f)
     skip = set(filter(None, a.exclude.split(",")))
-    return [v["url"] for v in plan.get("videos") or [] if v["id"] not in skip]
+    return [(v["url"], v.get("group") or "", v.get("list") or "") for v in plan.get("videos") or [] if v["id"] not in skip]
+
+
+def download_grouped(a, items, platform):
+    """按团名（视频）或专辑（只要音频时，没填专辑名就用列表名）分组，每组一个 yt-dlp 进程，一个一个下。
+    items 是 [(链接, 团名, 列表名)]。"""
+    groups = {}
+    for url, group, list_title in items:
+        key = (group, "") if a.want != "audio" else ("", a.album or list_title)
+        groups.setdefault(key, []).append(url)
+    files, skipped, errors = [], 0, 0
+    for (group, album), urls in groups.items():
+        sub = argparse.Namespace(**vars(a))
+        sub.per_list, sub.items, sub.group, sub.album = 0, "", group, album
+        f, s_, e = ytdlp(urls, sub, platform)
+        files, skipped, errors = files + f, skipped + s_, errors + e
+    return files, skipped, errors
 
 
 def channel_id(url, opts):
@@ -679,7 +712,7 @@ def ranked(a):
                 title, chosen, rule = rank.pick(url, cookies, a.rank, a.top, done, progress, log)
             else:   # 视频：先筛（只要 MV、标题含团名），缺播放量的补上，再排名
                 title, cands, _, _ = rank.candidates(url, cookies, a.rank, done, video_keep(a), progress, log)
-                chosen, rule = cands[:a.top] if a.top > 0 else cands, a.rank
+                chosen, rule = cands[:a.top] if a.top > 0 and a.rank != "none" else cands, a.rank
                 for k, c in enumerate(chosen, 1):
                     log(f"   ✓ {k:>3}. 播放 {rank.fmt_count(c.get('views'))}  {c['title'][:70]}")
         except Exception as e:
@@ -691,6 +724,10 @@ def ranked(a):
             if c.get("listeners") is not None:
                 a.lastfm_known[c["id"]] = {k: c.get(k) for k in ("listeners", "playcount", "lastfm_album", "tags", "lastfm_name")}
         if not chosen:
+            continue
+        if a.scheme != "music":
+            f, s, e = download_grouped(a, [(c["url"], matched_group(a, c["title"]), title) for c in chosen], platform)
+            files, skipped, errors = files + f, skipped + s, errors + e
             continue
         sub = argparse.Namespace(**vars(a))
         sub.per_list, sub.items = 0, ""
@@ -769,13 +806,18 @@ def main():
     p.add_argument("--plan", default="", help="音乐：按读取好的列表（--plan-out 写的文件）下载")
     p.add_argument("--exclude", default="", help="按列表下载时不要的视频 ID，逗号分隔")
     p.add_argument("--only", choices=["all", "mv"], default="all", help="视频：mv 只要正式 MV（按标题）")
-    p.add_argument("--keywords", default="", help="视频：标题里要有其中一个词（逗号分隔，如团名）")
+    p.add_argument("--keywords", default="", help="视频：标题里要有其中一个词（逗号分隔，如团名）；视频按团名分文件夹")
+    p.add_argument("--want", choices=["video", "audio"], default="video", help="视频方案：audio 只要音频（有声书），进音声")
+    p.add_argument("--audio-area", choices=["standard", "nsfw"], default="standard", help="只要音频时放进音声的哪个分区")
     a = p.parse_args()
     a.lastfm_known = {}   # 排名时查到的 Last.fm 信息（按视频 ID），下载后写进标签时复用
     a.album_of = {}       # 文件 → (专辑名, 曲序)：指定了专辑时由 ytdlp() 记下
     a.music_info = {}     # 视频 ID → YouTube Music 上的曲名、歌手、专辑、曲序：music_targets() 查到的
     a.mv_jobs = []        # [(歌手, [(MV 视频 ID, 标题)])]：给的是歌手页时由 music_targets() 记下，或从列表读
     a.mv_artist = ""      # 正在下谁的 MV（download_mvs 设）
+    a.group = ""          # 视频按团名分的子文件夹（download_grouped 设）
+    if a.want == "audio":   # 有声书：整个列表按原顺序全要，不挑 MV、不排名
+        a.only, a.rank = "all", "none"
     a.meta_records = []   # 批次的下载元数据：音乐每首、排名表；最后连同其他文件旁边的 .json 合成一个文件
     a.music_skipped = []  # 不下的歌及原因、已下载过的：读取列表时列出来
     a.music_done = []
@@ -801,9 +843,11 @@ def main():
             files, skipped, errors = files + f, skipped + s, errors + e
     elif a.plan and a.scheme in ("youtube", "bilibili"):
         a.per_list, a.items = 0, ""
-        urls = load_video_plan(a)
-        platform = next((p for p in PLATFORMS if p["id"] == SCHEME_PLATFORM[a.scheme]), platform_of(urls[0]) if urls else {})
-        files, skipped, errors = ytdlp(urls, a, platform) if urls else ([], 0, 0)
+        items = load_video_plan(a)
+        platform = next((p for p in PLATFORMS if p["id"] == SCHEME_PLATFORM[a.scheme]), platform_of(items[0][0]) if items else {})
+        files, skipped, errors = download_grouped(a, items, platform) if items else ([], 0, 0)
+    elif a.scheme in ("youtube", "bilibili") and (a.only == "mv" or a.keywords):
+        files, skipped, errors = ranked(a)   # 要筛选时先读列表页（不排名时按列表顺序全要）
     elif a.scheme == "music" and a.plan:
         songs, other = load_plan(a)
         youtube = next((p for p in PLATFORMS if p["id"] == "youtube"), platform_of(songs[0]) if songs else {"id": "youtube", "dir": "YouTube"})

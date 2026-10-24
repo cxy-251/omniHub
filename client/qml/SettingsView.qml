@@ -136,7 +136,7 @@ Item {
                 }
                 Label {
                     Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12; color: "#8b949e"
-                    text: "下载用的代理与 Cookie 在「下载 → 有声书 → 网络设置」里。"
+                    text: "下载用的代理与 Cookie 在「下载 → 任一下载方案 → 网络设置」里。"
                 }
             }
         }

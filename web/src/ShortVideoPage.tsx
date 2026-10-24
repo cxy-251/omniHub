@@ -69,7 +69,7 @@ export default function ShortVideoPage({ active }: { active: boolean }) {
           <span className="absolute right-1 top-1 rounded bg-black/60 px-1.5 text-xs text-white">{post.kind === 'album' ? `图集 ${post.image_count}` : '视频'}</span>
           {liked.isLiked(post) ? <span className="absolute left-1 top-1 text-[#f778ba]">♥</span> : null}
         </div>
-        <div className="h-11 px-1.5 py-1"><p className="truncate text-xs">{post.title}</p><p className="truncate text-xs text-muted">{post.creator_id.split('/')[1]} · {post.published}</p></div>
+        <div className="h-11 px-1.5 py-1"><p className="truncate text-xs">{post.title}</p><p className="truncate text-xs text-muted">{post.creator_id.split('/').slice(1).join(' / ')} · {post.published}</p></div>
       </button>;
     }} />
     {open !== undefined ? <Viewer post={paged.item(open)} liked={liked.isLiked(paged.item(open))} onLike={() => { const p = paged.item(open); if (p) liked.toggle(p); }}
@@ -136,7 +136,7 @@ function Viewer({ post, liked, onLike, onTrash, onClose, onPrev, onNext }: {
   }, []);
   return <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex flex-col bg-black/95 text-white">
     <div className="flex flex-wrap items-center gap-2 p-2">
-      <p className="min-w-0 flex-1 truncate text-sm">{post ? `${post.creator_id.split('/')[1]} · ${post.published} · ${post.title}` : '加载中…'}</p>
+      <p className="min-w-0 flex-1 truncate text-sm">{post ? `${post.creator_id.split('/').slice(1).join(' / ')} · ${post.published} · ${post.title}` : '加载中…'}</p>
       {notice ? <span className={`text-sm ${armed ? 'font-bold text-[#ff7b72]' : 'text-[#3fb950]'}`}>{notice}</span> : null}
       <button className={iconButton} onClick={onLike} title="点赞（Z）">{liked ? <span className="text-[#f778ba]">♥</span> : '♡'}</button>
       <button className={`${iconButton} ${armed ? 'bg-white/20' : ''}`} onClick={doTrash} title="移到系统回收站（Delete 按两次）">🗑</button>

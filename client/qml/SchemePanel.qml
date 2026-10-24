@@ -24,6 +24,14 @@ ColumnLayout {
     property bool showHelp: false
     property var analysis: ({items: []})
 
+    // show_if：{字段: 值}，值以 ! 开头表示「不等于」（如「专辑名」只在「要什么 = 只要音频」时显示）
+    function shown(f) {
+        var cond = f.show_if || {}
+        return Object.keys(cond).every(function (k) {
+            var want = cond[k], have = String(values[k] === undefined ? "" : values[k])
+            return want.charAt(0) === "!" ? have !== want.slice(1) : have === want
+        })
+    }
     function field(name) { return kind.fields.find(function (f) { return f.name === name }) || null }
     function set(name, value) { var v = Object.assign({}, values); v[name] = value; values = v }
     function optionLabel(name) { var f = field(name); var o = f ? f.options.find(function (x) { return x.value === values[name] }) : null; return o ? o.label : "" }
@@ -155,7 +163,7 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: 6
         Label { text: "放到"; color: "#8b949e"; font.pixelSize: 12 }
-        Label { text: panel.scheme.destination; color: "#3fb950"; font.pixelSize: 14; font.bold: true }
+        Label { text: panel.values.want === "audio" && panel.scheme.audio_destination ? panel.scheme.audio_destination : panel.scheme.destination; color: "#3fb950"; font.pixelSize: 14; font.bold: true }
         Label { text: "（先进暂存区，确认后再移入）"; color: "#6e7681"; font.pixelSize: 12 }
         Item { Layout.fillWidth: true }
         Chip { text: panel.showHelp ? "收起说明" : "怎么用？"; selected: panel.showHelp; onClicked: panel.showHelp = !panel.showHelp }
@@ -184,7 +192,7 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: 8
         Repeater {
-            model: panel.kind.fields.filter(function (f) { return f.name !== "urls" && f.name !== "library" && (f.name !== "top" || panel.values.rank !== "none") })
+            model: panel.kind.fields.filter(function (f) { return f.name !== "urls" && f.name !== "library" && panel.shown(f) && (f.name !== "top" || panel.values.rank !== "none") })
                                     .sort(function (a, b) { return (panel.rankFields.indexOf(b.name) >= 0) - (panel.rankFields.indexOf(a.name) >= 0) })
             delegate: Row {
                 required property var modelData

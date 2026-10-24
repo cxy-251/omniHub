@@ -178,7 +178,7 @@ Item {
                     Column {
                         anchors.top: thumb.bottom; anchors.left: parent.left; anchors.right: parent.right; anchors.margins: 4; anchors.topMargin: 3
                         Label { width: parent.width; text: modelData.title; elide: Text.ElideRight; color: "#c9d1d9"; font.pixelSize: 12 }
-                        Label { width: parent.width; text: modelData.creator_id.split("/")[1] + " · " + modelData.published; elide: Text.ElideRight; color: "#8b949e"; font.pixelSize: 11 }
+                        Label { width: parent.width; text: modelData.creator_id.split("/").slice(1).join(" / ") + " · " + modelData.published; elide: Text.ElideRight; color: "#8b949e"; font.pixelSize: 11 }
                     }
                     TapHandler { id: tap; onTapped: if (modelData.id) view.openIndex = index }
                 }
@@ -309,7 +309,7 @@ Item {
                 spacing: 0
                 Label {
                     Layout.fillWidth: true
-                    text: viewer.post ? viewer.post.creator_id.split("/")[1] + " · " + viewer.post.published + " · " + viewer.post.title : "加载中…"
+                    text: viewer.post ? viewer.post.creator_id.split("/").slice(1).join(" / ") + " · " + viewer.post.published + " · " + viewer.post.title : "加载中…"
                     elide: Text.ElideRight; color: "white"; font.pixelSize: 13
                 }
                 SeekBar {

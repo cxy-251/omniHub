@@ -101,7 +101,7 @@ function Screen({ domain, slot, index, focused, playing, audible, slideSeconds, 
   }, [index, item, step, domain, onChange, register]);
 
   const caption = !item ? (error || '加载中…') : isVideo
-    ? `${item.creator_id?.split('/')[1]} · ${item.published} · ${item.title}（${slot.index + 1}/${total}）` : `${slot.index + 1} / ${total}`;
+    ? `${item.creator_id?.split('/').slice(1).join(' / ')} · ${item.published} · ${item.title}（${slot.index + 1}/${total}）` : `${slot.index + 1} / ${total}`;
   const original = item ? `/api/media/gallery/original?${new URLSearchParams({ library_id: item.library_id, id: item.id })}` : '';
   return <div className={`relative min-w-0 flex-1 overflow-hidden rounded border-2 bg-black ${focused ? 'border-primary' : 'border-transparent'}`} onClick={onFocus}>
     {isVideo
