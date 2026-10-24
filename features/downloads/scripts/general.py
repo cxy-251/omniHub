@@ -66,28 +66,30 @@ def normalize(url):
 
 def ytdlp(urls, a, platform):
     """一个 yt-dlp 进程按顺序下全部链接（单个视频或整个列表）；返回 (下完的文件, 已在名单里跳过的数量, 出错的数量)。"""
-    urls = [normalize(u) for u in urls]
+    music = a.scheme == "music" and not a.mv_artist   # 歌手的 MV 也走音乐方案，但下成视频
+    if not (music and platform["id"] == "youtube"):
+        urls = [normalize(u) for u in urls]
     # 进度总数：每个链接取前 N 个时最多 链接数×N；否则按链接数（列表展开后会超过，随下随长）
     expected = len(urls) * a.per_list if a.per_list > 0 else len(urls)
     cmd = [sys.executable, "-m", "yt_dlp", "--newline", "--no-colors", "--ignore-errors", "--windows-filenames",
            "--write-info-json", "--no-write-playlist-metafiles", "--no-simulate",
            "--no-quiet",  # --print 默认会静音；跳过、进度信息要留在日志里
            "--print", "after_move:OMNIHUB_FILE %(filepath)s"]
-    if a.archive:
-        cmd += ["--download-archive", a.archive]
+    if a.archive:   # MV 单独一份名单：MV 的视频 ID 记在音乐名单里，以后再给这个 MV 链接时就不会去换纯音轨版了
+        cmd += ["--download-archive", os.path.splitext(a.archive)[0] + "-mv.txt" if a.mv_artist else a.archive]
     cookies = cookie_file(platform["id"])
     if cookies:
         cmd += ["--cookies", cookies]
     if os.environ.get("OMNIHUB_YTDLP_PROXY"):
         cmd += ["--proxy", os.environ["OMNIHUB_YTDLP_PROXY"]]
-    if a.scheme == "music" and platform["id"] == "youtube":
+    if music and platform["id"] == "youtube":
         urls, skipped0, errors0 = music_targets(urls, a, cookies)   # 已换成纯音轨版的单曲链接，已按每个列表取前 N 个
         expected = len(urls)
     elif a.per_list > 0:
         cmd += ["--playlist-items", f"1:{a.per_list}"]   # 每个列表/频道只取前 N 个（频道、播放列表按新→旧排列）
     elif a.items:
         cmd += ["--playlist-items", a.items]
-    if a.scheme == "music":
+    if music:
         # 先下到批次里的 .incoming/<视频 ID>，写完标签后由 organize_music 按「歌手 / 单曲、歌手 / 专辑 / 歌」归档
         # 纯音轨版的缩略图是专辑封面两边加色块（16:9），裁成中间的正方形再嵌进去
         cmd += ["-f", "bestaudio/best", "-x", "--audio-format", "best", "--embed-metadata", "--embed-thumbnail",
@@ -98,9 +100,11 @@ def ytdlp(urls, a, platform):
         fmt = "bv*+ba/b" if h <= 0 else f"bv*[height<={h}]+ba/b[height<={h}]/b"
         out = os.path.join(a.batch, "media_library", "shortvideo", platform["dir"],
                            "%(channel,uploader,uploader_id|未知作者)s", "%(upload_date>%Y-%m-%d)s_%(title).80B_%(id)s.%(ext)s")
+        if a.mv_artist:
+            out = os.path.join(a.batch, "media_library", "shortvideo", "MV", safe(a.mv_artist), "%(title).80B [%(id)s].%(ext)s")
         cmd += ["-f", fmt, "--merge-output-format", "mp4", "-o", out]
     files, skipped, errors = [], 0, 0
-    if a.scheme == "music" and platform["id"] == "youtube":
+    if music and platform["id"] == "youtube":
         skipped, errors = skipped0, errors0
         if not urls:
             return files, skipped, errors
@@ -153,27 +157,43 @@ def pick_items(entries, a):
 
 def music_targets(urls, a, cookies):
     """YouTube 音乐：展开链接（列表、频道、专辑）→ 每首换成纯音轨版、查出所属专辑与曲序（见 ytmusic.py），
-    信息记进 a.music_info[视频 ID]。MV 找不到纯音轨版的不下。返回 (要下的单曲链接, 已下载过跳过的数量, 出错的数量)。"""
+    信息记进 a.music_info[视频 ID]。MV 找不到纯音轨版的不下。
+    歌手页（YouTube Music 歌手页或歌手的官方频道）：取全部专辑、EP、单曲（同一首只留最早那版），正式 MV 记进 a.mv_jobs 另外下成视频。
+    返回 (要下的单曲链接, 已下载过跳过的数量, 出错的数量)。"""
     import yt_dlp
     import ytmusic
     done = archived(a)
-    ids, errors = [], 0
+    ids, preset, errors = [], {}, 0
+    opts = {"extract_flat": "in_playlist", "quiet": True, "no_warnings": True, "skip_download": True}
+    if cookies:
+        opts["cookiefile"] = cookies
+    if os.environ.get("OMNIHUB_YTDLP_PROXY"):
+        opts["proxy"] = os.environ["OMNIHUB_YTDLP_PROXY"]
     for i, url in enumerate(urls):
         progress(i, len(urls), "展开链接 " + url)
         m = re.search(r"[?&]list=(OLAK5uy_[\w-]+)", url)
         try:
-            if m:   # 整张专辑：直接取 YouTube Music 上的曲目（YouTube 网页版的专辑列表里常混着 MV）
-                album, tracks, _ = ytmusic.album_tracks(m.group(1))
-                log(f"专辑《{album.get('title')}》{len(tracks)} 首")
-                ids += pick_items([vid for vid, _ in tracks], a)
+            cid = channel_id(url, opts)
+            page = ytmusic.artist(cid, log) if cid else None
+            if cid and not page:
+                log(f"{url} 不是 YouTube Music 上的歌手，按普通频道展开")
+            if page:
+                songs, mvs = pick_items(page["songs"], a), pick_items(page["mvs"], a)
+                log(f"歌手 {page['name']}：歌 {len(songs)} 首（同一首只留最早发行的那版），正式 MV {len(mvs)} 个")
+                ids += [vid for vid, _ in songs]
+                preset.update(songs)
+                if mvs:
+                    a.mv_jobs.append((page["name"], [vid for vid, _ in mvs]))
                 continue
-            opts = {"extract_flat": "in_playlist", "quiet": True, "no_warnings": True, "skip_download": True}
-            if cookies:
-                opts["cookiefile"] = cookies
-            if os.environ.get("OMNIHUB_YTDLP_PROXY"):
-                opts["proxy"] = os.environ["OMNIHUB_YTDLP_PROXY"]
+            if m:   # 整张专辑：直接取 YouTube Music 上的曲目（YouTube 网页版的专辑列表里常混着 MV）
+                album, songs = ytmusic.album_tracks(m.group(1), log)
+                songs = pick_items(songs, a)
+                log(f"专辑《{album.get('title')}》{len(album.get('tracks') or [])} 首，要下的纯音轨版 {len(songs)} 首")
+                ids += [vid for vid, _ in songs]
+                preset.update(songs)
+                continue
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+                info = ydl.extract_info(url if "music.youtube.com" in url else normalize(url), download=False)
             entries = info.get("entries")
             ids += pick_items([e["id"] for e in entries if e and e.get("id")], a) if entries is not None else [info["id"]]
         except Exception as e:
@@ -187,7 +207,7 @@ def music_targets(urls, a, cookies):
             continue
         progress(n, len(ids), f"找纯音轨版与专辑 {vid}")
         try:
-            target, info, note = ytmusic.resolve(vid)
+            target, info, note = (vid, preset[vid], "") if vid in preset else ytmusic.resolve(vid)
         except Exception as e:
             log(f"ERROR: YouTube Music 查询失败 {vid}：{e}")
             errors += 1
@@ -203,6 +223,30 @@ def music_targets(urls, a, cookies):
         targets.append("https://www.youtube.com/watch?v=" + target)
     log(f"要下 {len(targets)} 首（{len(ids)} 个视频里，已下载过 {skipped} 个，出错 {errors} 个）")
     return targets, skipped, errors
+
+
+def channel_id(url, opts):
+    """频道链接（/channel/UC…、/@名字、/c/…、/user/…）的频道 ID；不是频道链接时返回空。"""
+    import yt_dlp
+    m = re.search(r"youtube\.com/channel/(UC[\w-]+)", url)
+    if m:
+        return m.group(1)
+    if not re.search(r"youtube\.com/(@[^/?#]+|c/[^/?#]+|user/[^/?#]+)/?([/?#]|$)", url):
+        return ""
+    with yt_dlp.YoutubeDL({**opts, "playlist_items": "1"}) as ydl:
+        return ydl.extract_info(normalize(url), download=False).get("channel_id") or ""
+
+
+def download_mvs(a, platform):
+    """歌手的正式 MV 下成视频：media_library/shortvideo/MV/<歌手>/<标题> [ID].mp4。"""
+    files, skipped, errors = [], 0, 0
+    for name, ids in a.mv_jobs:
+        log(f"下载 {name} 的 MV（{len(ids)} 个）")
+        sub = argparse.Namespace(**vars(a))
+        sub.mv_artist, sub.per_list, sub.items = name, 0, ""
+        f, s, e = ytdlp(["https://www.youtube.com/watch?v=" + v for v in ids], sub, platform)
+        files, skipped, errors = files + f, skipped + s, errors + e
+    return files, skipped, errors
 
 
 # 网站要求登录时给出的中文提示（日志最后一行）
@@ -548,6 +592,8 @@ def main():
     a.lastfm_known = {}   # 排名时查到的 Last.fm 信息（按视频 ID），下载后写进标签时复用
     a.album_of = {}       # 文件 → (专辑名, 曲序)：指定了专辑时由 ytdlp() 记下
     a.music_info = {}     # 视频 ID → YouTube Music 上的曲名、歌手、专辑、曲序：music_targets() 查到的
+    a.mv_jobs = []        # [(歌手, [MV 视频 ID])]：给的是歌手页时由 music_targets() 记下
+    a.mv_artist = ""      # 正在下谁的 MV（download_mvs 设）
 
     if a.scheme == "x":
         files, skipped, errors = gallerydl(a.urls, a)
@@ -568,6 +614,9 @@ def main():
         files, skipped, errors = ytdlp(a.urls, a, platform)
     if a.scheme == "music":
         enrich_music(files, a.lastfm_known, a.batch, a.album_of, a.music_info)
+        if a.mv_jobs:
+            f, s, e = download_mvs(a, next((p for p in PLATFORMS if p["id"] == "youtube"), platform_of(a.urls[0])))
+            files, skipped, errors = files + f, skipped + s, errors + e
     progress(len(a.urls), len(a.urls), f"完成：新下载 {len(files)} 个文件，跳过已下载 {skipped} 个，出错 {errors} 个")
     for h in sorted(hints):
         log("提示：" + h)
