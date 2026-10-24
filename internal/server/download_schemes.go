@@ -76,7 +76,7 @@ func (r *Router) schemeKinds() []*dlKind {
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("bilibili", p) },
 		},
 		{
-			ID: "x", Title: "X", Description: "下载作者发过的图片和视频（gallery-dl，需要在「账号与 Cookie」里读过 X 的登录）。按作者放进短视频：视频一个文件，一条帖子的图片一个图集（和抖音、小红书的图文一样，可以在设置里「图集入库」收进数据库）。第一次下一个作者会下能翻到的全部历史；之后再下同一个作者，最新的连续 20 个都下过就停，只补新帖子。",
+			ID: "x", Title: "X", Description: "下载作者本人发的图片（原图；不要视频、转发和引用；作者在自己推文下面接着回复补的图也要，和原推合成一个图集）。用 gallery-dl，需要在「账号与 Cookie」里读过 X 的登录。按作者放进短视频，一条推（连同补图）一个图集，和抖音、小红书的图文一样，可以在设置里「图集入库」收进数据库。一个作者第一次会翻到最早、下完全部历史，中断了下次接着补，下过的跳过；完整下完一次以后再下，只补新帖子。",
 			Scheme: &dlScheme{Steps: []string{"填作者用户名或主页链接（一行一个）", "下载到暂存区（下过的跳过）", "在「暂存区」看图、删掉不要的", "移入资源库"},
 				Destination: "短视频 / X / <作者>/", Input: "作者用户名或主页链接，一行一个", Placeholder: "nasa\n@nasa\nhttps://x.com/<作者>/media"},
 			needs:  []string{"uv"},

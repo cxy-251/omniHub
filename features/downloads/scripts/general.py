@@ -485,17 +485,45 @@ hints = set()
 # 图文平台（gallery-dl）：每个作者一个 gallery-dl 进程，先下到批次的 .incoming/<平台>/，再按帖子整理进短视频：
 #   视频 → 短视频/<平台>/<作者>/<日期>_<正文>_<帖子编号>.mp4
 #   图片 → 短视频/<平台>/<作者>/<日期>_<正文>_<帖子编号>/01.jpg …（一条帖子一个图集，和抖音、小红书的图文一样）
-# 增量：下载名单里有的跳过，连续 20 个都下过就停（作者再下一次只补新帖子）。
+# 增量：下载名单里有的跳过。一个作者完整下完过一次（gallery-dl 正常结束）才记下来，之后再下这个作者，
+# 连续 20 个都下过就停、只补新帖子；没完整下完过的（第一次中断了）每次都翻到底，下过的跳过，直到补全。
 SOCIAL = {
-    "x": {"dir": "X", "cookie": "x", "user_url": "https://x.com/{}/media"},
+    # X：只要作者本人发的图片（原图）；作者主页链接一律读「媒体」页（主页时间线里可能混着转发）。
+    #    作者在自己推文下面接着回复补图（一条发不下）的也要（replies=self），整理时按会话合成一个图集
+    "x": {"dir": "X", "cookie": "x", "user_url": "https://x.com/{}/media",
+          "profile": r"^https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})(?:/(?:media|with_replies|photo)?)?/?(?:\?.*)?$",
+          "filter": "type == 'photo' and not retweet_id",
+          "options": ["retweets=false", "quoted=false", "replies=self", "size=orig"]},
 }
+
+
+def complete_path(a):
+    return os.path.splitext(a.archive)[0] + "-complete.json" if a.archive else ""
+
+
+def load_complete(a):
+    """完整下完过的作者（「平台:链接」→ 日期），和下载名单放在一起。"""
+    try:
+        with open(complete_path(a), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_complete(a, complete):
+    if not complete_path(a):
+        return
+    with open(complete_path(a) + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(complete, f, ensure_ascii=False, indent=1)
+    os.replace(complete_path(a) + ".tmp", complete_path(a))
 
 
 def post_info(meta):
     """gallery-dl 元数据里的作者、帖子编号、日期、正文（X、Pixiv、Instagram 的字段名不同）。"""
     who = meta.get("author") or meta.get("user") or {}
     author = (who.get("name") if isinstance(who, dict) else who) or meta.get("username") or meta.get("owner") or "未知作者"
-    pid = meta.get("tweet_id") or meta.get("post_id") or meta.get("post_shortcode") or meta.get("id") or ""
+    # X 的同一串（作者自己回复补图）用会话编号，合成一个帖子
+    pid = meta.get("conversation_id") or meta.get("tweet_id") or meta.get("post_id") or meta.get("post_shortcode") or meta.get("id") or ""
     text = meta.get("content") or meta.get("description") or meta.get("title") or ""
     text = re.sub(r"https?://\S+|#\S+|@\S+", " ", str(text))   # 去掉链接、话题、@
     text = " ".join(text.split())[:40] or "无标题"
@@ -510,11 +538,22 @@ def gallerydl(urls, a, scheme="x"):
     incoming = os.path.join(a.batch, ".incoming", conf["dir"])
     for i, url in enumerate(urls):
         url = url.strip()
-        if "://" not in url:   # 只写了用户名
-            url = conf["user_url"].format(url.lstrip("@"))
+        m = re.match(conf.get("profile") or r"^$", url)
+        if "://" not in url or m:   # 只写了用户名，或作者主页链接
+            url = conf["user_url"].format(m.group(1) if m else url.lstrip("@"))
         progress(i, len(urls), f"{conf['dir']} · {url}")
         os.makedirs(incoming, exist_ok=True)
-        cmd = [sys.executable, "-m", "gallery_dl", "--write-metadata", "-D", incoming, "-A", "20"]
+        complete = load_complete(a)
+        key = f"{scheme}:{url.lower()}"
+        cmd = [sys.executable, "-m", "gallery_dl", "--write-metadata", "-D", incoming]
+        if complete.get(key):
+            cmd += ["-A", "20"]   # 完整下过：只补新帖子
+        else:
+            log(f"{url}：还没完整下完过，这次翻到最早，下过的跳过")
+        if conf.get("filter"):
+            cmd += ["--filter", conf["filter"]]
+        for opt in conf.get("options") or []:
+            cmd += ["-o", opt]
         if a.archive:
             cmd += ["--download-archive", a.archive + ".gallery-dl.sqlite3"]
         cookies = cookie_file(conf["cookie"])
@@ -536,6 +575,10 @@ def gallerydl(urls, a, scheme="x"):
                         hints.add(hint.format(conf["dir"]))
             log(line)
         proc.wait()
+        if proc.returncode == 0 and a.x_limit <= 0 and not complete.get(key):   # 正常结束、没限数量：记为完整下完
+            complete[key] = time.strftime("%Y-%m-%d")
+            save_complete(a, complete)
+            log(f"{url}：已完整下完，以后再下只补新帖子")
     # 按帖子整理
     posts = {}
     for name in sorted(os.listdir(incoming)) if os.path.isdir(incoming) else []:
@@ -547,9 +590,13 @@ def gallerydl(urls, a, scheme="x"):
             with open(path + ".json", encoding="utf-8") as f:
                 meta = json.load(f)
             os.remove(path + ".json")
-        posts.setdefault(post_info(meta), []).append((path, meta))
+        author, pid, _, _ = post_info(meta)
+        posts.setdefault((author, pid), []).append((path, meta))
     root = os.path.join(a.batch, "media_library", "shortvideo", conf["dir"])
-    for (author, pid, day, text), items in posts.items():
+    for (author, pid), items in posts.items():
+        # 同一串按发出的先后、每条里的第几张排；日期和正文用第一条的
+        items.sort(key=lambda x: (int(x[1].get("tweet_id") or 0), int(x[1].get("num") or 0)))
+        _, _, day, text = post_info(items[0][1])
         base = f"{day}_{safe(text)}_{pid}"
         folder = os.path.join(root, safe(author))
         images = [(p, m) for p, m in items if not p.lower().endswith(VIDEO_EXT)]
