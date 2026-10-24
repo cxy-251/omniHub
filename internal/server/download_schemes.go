@@ -46,7 +46,7 @@ func (r *Router) schemeKinds() []*dlKind {
 	}
 	return []*dlKind{
 		{
-			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑、单曲或歌手页（YouTube、YouTube Music、B 站等），全部下载，不筛选。YouTube 的歌换成 YouTube Music 上的纯音轨版（MV 有片头片尾，不下它的音频；找不到纯音轨版的 MV 跳过）。按歌手归档：属于专辑、EP 的歌放进歌手下的专辑文件夹，单曲放在歌手文件夹里。歌手页（YouTube Music 歌手页或歌手的官方频道）下全部专辑、EP、单曲，同一首只留最早发行的那版，正式 MV 下成视频放进短视频的 MV/<歌手>。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
+			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑、单曲或歌手页（YouTube、YouTube Music、B 站等），全部下载，不筛选。YouTube 的歌换成 YouTube Music 上的纯音轨版（MV 有片头片尾，不下它的音频）；找不到纯音轨版时只收官方音频（Official Audio），MV、歌词视频、现场、翻唱都不下。按歌手归档：属于专辑、EP 的歌放进歌手下的专辑文件夹，单曲放在歌手文件夹里。歌手页（YouTube Music 歌手页或歌手的官方频道）下全部专辑、EP、单曲，同一首只留最早发行的那版，MV（标题写着 Music Video、Official Video、MV 的，歌词视频、现场不算）下成视频放进短视频的 MV/<歌手>。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
 			Scheme: &dlScheme{Steps: []string{"粘贴歌单/专辑链接（一行一个）", "全部下载到暂存区（下过的跳过）", "播放数、点赞、日期、Last.fm 信息写进标签", "在「暂存区」试听、删掉不要的", "移入资源库"}, Destination: "音声 / 音乐 / <歌手>/（整张专辑放 <歌手>/<专辑>/）",
 				Input: "歌单、专辑、单曲或歌手页链接，一行一个", Placeholder: "https://music.youtube.com/playlist?list=LM（赞过的歌）\nhttps://music.youtube.com/channel/…（歌手）\nhttps://www.youtube.com/watch?v=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},

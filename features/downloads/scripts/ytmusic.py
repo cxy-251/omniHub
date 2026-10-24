@@ -3,8 +3,8 @@
 YouTube 上同一首歌有几种视频（YouTube Music 的分类）：
   ATV  纯音轨（「Provided to YouTube by …」，封面是专辑图）——要的就是这种
   OMV  官方上传：MV、官方音频、歌词视频、官方现场都算——先换成同名的 ATV；找不到时，
-       标题看得出是 MV 的不下（有片头片尾），其余（官方音频、歌词视频、现场等）按原视频下
-  UGC  普通用户上传（现场、翻唱、剪辑）——能找到同名 ATV 就换，找不到就按原视频下
+       只有标题写着 Official Audio 的（录音室音轨配静态图）按原视频下，MV、歌词视频、现场都不下
+  UGC  普通用户上传（现场、翻唱、剪辑）——能找到同名 ATV 就换，找不到就不下
 ATV 在 YouTube Music 上都属于一张发行：Album、EP 或 Single。Album、EP 归进 <歌手>/<专辑>/，Single 算单曲。
 """
 import os
@@ -69,7 +69,7 @@ def album_tracks(playlist_id, log):
 
 def album_songs(a, browse_id, log, seen=None):
     """一张发行里的歌：[(纯音轨版视频 ID, 信息)]，信息里是这张发行的名字、类型、曲序。
-    曲目表里有 MV 的歌给的常是 MV，换成纯音轨版（优先同一张专辑里的）；找不到时是 MV 就不收，官方音频等按原视频收。
+    曲目表里有 MV 的歌给的常是 MV，换成纯音轨版（优先同一张专辑里的）；找不到时只收官方音频，其余不收。
     seen 是已收过的曲名（去掉括号说明），给了就跳过已收过的、并把这次收的加进去。"""
     songs = []
     for t in a.get("tracks") or []:
@@ -83,12 +83,12 @@ def album_songs(a, browse_id, log, seen=None):
             found = audio_version(info["title"], info["artists"], browse_id)
             if found:
                 vid = found["videoId"]
-            elif MV_TITLE.search(youtube_title(vid)):
-                log(f"  {info['title']}：只有 MV（{youtube_title(vid)}），没找到纯音轨版，不下")
-                continue
-            else:
+            elif is_official_audio(youtube_title(vid)):
                 info["kind"] = "OMV"
-                log(f"  {info['title']}：没找到纯音轨版，官方上传（{youtube_title(vid)}）不是 MV，按原视频下")
+                log(f"  {info['title']}：没找到纯音轨版，按官方音频（{youtube_title(vid)}）下")
+            else:
+                log(f"  {info['title']}：没找到纯音轨版（曲目表里是 {youtube_title(vid)}），不下")
+                continue
         if seen is not None:
             seen.add(key)
         info.update(place_of(a, t["videoId"], info["title"]))
@@ -114,22 +114,40 @@ def audio_version(title, artists, album_id=""):
     return next((s for s in found if (s.get("album") or {}).get("id") == album_id), found[0] if found else None)
 
 
-# YouTube 标题里看得出是 MV 的：Music Video、Official Video、MV、M/V
-MV_TITLE = re.compile(r"music\s*video|official\s*video|(?<![a-z])m/?v(?![a-z])", re.I)
+# 按 YouTube 上的原标题分（YouTube Music 给的标题去掉了「(Official Video)」这类说明，看不出来）：
+# MV 是有剧情画面的音乐录影带，标题写着 Music Video、Official (HD) Video、MV、M/V
+MV_TITLE = re.compile(r"music\s*video|official\s*(?:hd\s*|4k\s*)?video|(?<![a-z])m/?v(?![a-z])", re.I)
+# 官方音频：录音室音轨配静态图，找不到纯音轨版时可以用它
+AUDIO_TITLE = re.compile(r"official\s*audio|[(\[]audio[)\]]|音频|音訊|音源", re.I)
+# 不要的：歌词视频、现场、翻唱、彩排、黑胶转盘视频、预告、花絮等
+NOT_WANTED = re.compile(r"lyric|\blive\b|concert|performance|rehearsal|cover|vinyl|visuali[sz]er|teaser|trailer|"
+                        r"behind|making|karaoke|ktv|interview|reaction|demo|歌词|歌詞|现场|現場|演唱会|演唱會|花絮|预告|預告|伴奏|翻唱", re.I)
 _titles = {}
 
 
+def ydl_opts(**extra):
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, **extra}
+    cookies = os.path.join(os.environ.get("OMNIHUB_COOKIES_DIR", ""), "youtube.txt")
+    if os.path.isfile(cookies):
+        opts["cookiefile"] = cookies
+    if os.environ.get("OMNIHUB_YTDLP_PROXY"):
+        opts["proxy"] = os.environ["OMNIHUB_YTDLP_PROXY"]
+    return opts
+
+
+def is_mv(title):
+    return bool(MV_TITLE.search(title)) and not NOT_WANTED.search(title)
+
+
+def is_official_audio(title):
+    return bool(AUDIO_TITLE.search(title)) and not NOT_WANTED.search(title)
+
+
 def youtube_title(video_id):
-    """YouTube 上的原标题（YouTube Music 给的标题去掉了「(Official Video)」这类说明，看不出是不是 MV）。"""
+    """YouTube 上的原标题。"""
     if video_id not in _titles:
         import yt_dlp
-        opts = {"quiet": True, "no_warnings": True, "skip_download": True}
-        cookies = os.path.join(os.environ.get("OMNIHUB_COOKIES_DIR", ""), "youtube.txt")
-        if os.path.isfile(cookies):
-            opts["cookiefile"] = cookies
-        if os.environ.get("OMNIHUB_YTDLP_PROXY"):
-            opts["proxy"] = os.environ["OMNIHUB_YTDLP_PROXY"]
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
             _titles[video_id] = ydl.extract_info("https://www.youtube.com/watch?v=" + video_id, download=False, process=False).get("title") or ""
     return _titles[video_id]
 
@@ -150,9 +168,9 @@ def resolve(video_id):
             note = f"{kind} 换成纯音轨版 {target}"
         if not target:
             info = {"title": title, "artists": artists, "kind": kind}
-            if kind == "OMV" and MV_TITLE.search(youtube_title(video_id)):
-                return None, info, f"是 MV（{youtube_title(video_id)}），YouTube Music 上没找到纯音轨版，没下"
-            return video_id, info, ("官方上传（不是 MV）" if kind == "OMV" else "普通用户上传") + "，没找到纯音轨版，按原视频下"
+            if kind == "OMV" and is_official_audio(youtube_title(video_id)):
+                return video_id, info, f"没找到纯音轨版，原视频是官方音频（{youtube_title(video_id)}），按它下"
+            return None, info, f"没找到纯音轨版，原视频不是官方音频（{youtube_title(video_id)}），没下"
     info = {"title": track.get("title") or title, "artists": [x["name"] for x in track.get("artists") or []] or artists, "kind": kind}
     browse_id = (track.get("album") or {}).get("id")
     if browse_id:
@@ -160,18 +178,11 @@ def resolve(video_id):
     return target, info, note
 
 
-# 歌手的视频列表里混着歌词视频、官方音频、现场等，标题里有这些词的不算 MV
-# （「(Musikladen, 1975)」这种括号里带年份的是电视节目现场）
-NOT_MV = re.compile(r"lyric|audio|visuali[sz]er|\blive\b|remaster|teaser|trailer|behind|making|karaoke|ktv|interview|"
-                    r"reaction|concert|performance|demo|alternate|unreleased|\bhits\b|\([^)]*\b(?:19|20)\d\d\)|"
-                    r"歌词|歌詞|现场|現場|演唱会|演唱會|花絮|预告|預告|伴奏", re.I)
-
-
 def artist(channel_id, log):
     """歌手页（YouTube Music 歌手 ID，或歌手的官方 YouTube 频道 ID）。不是歌手页时返回 None；网络出错时抛出异常。
     返回 {name, songs: [(视频 ID, 信息)], mvs: [(视频 ID, 标题)]}：
     songs 是全部专辑、EP、单曲里的歌，按发行年份从早到晚，同一首（去掉括号说明后曲名相同）只留最早那版；
-    mvs 是视频列表里的正式 MV（按标题排除歌词视频、官方音频、现场等，同名的只留一个）。"""
+    mvs 是视频列表里的 MV：YouTube 原标题写着 Music Video / Official Video / MV，且不是歌词视频、现场、翻唱等（is_mv）。"""
     import requests
     try:
         page = call("get_artist", channel_id)
@@ -196,17 +207,14 @@ def artist(channel_id, log):
         songs += got
         if not got:
             log("  没有新的歌（前面的发行里都有了，或只有 MV），整张跳过")
-    mvs, seen_mv = [], set()
+    mvs, tracks = [], []
     vids = page.get("videos") or {}
-    if str(vids.get("browseId") or "").startswith("VL"):
-        tracks = call("get_playlist", vids["browseId"][2:], limit=None)["tracks"]
-    else:
-        tracks = vids.get("results") or []
-    for t in tracks:
-        key = _core(t.get("title"))
-        if t.get("videoId") and key and key not in seen_mv and not NOT_MV.search(t.get("title") or ""):
-            seen_mv.add(key)
-            mvs.append((t["videoId"], t.get("title") or ""))
-    log(f"视频列表 {len(tracks)} 个，其中正式 MV {len(mvs)} 个")
+    if str(vids.get("browseId") or "").startswith("VL"):   # 视频列表在 YouTube 上是个播放列表，从那里拿原标题
+        import yt_dlp
+        with yt_dlp.YoutubeDL(ydl_opts(extract_flat="in_playlist")) as ydl:
+            tracks = [e for e in ydl.extract_info("https://www.youtube.com/playlist?list=" + vids["browseId"][2:], download=False)["entries"] if e]
+    mvs = [(t["id"], t.get("title") or "") for t in tracks if t.get("id") and is_mv(t.get("title") or "")]
+    mvs = list({v: (v, title) for v, title in mvs}.values())
+    log(f"视频列表 {len(tracks)} 个，其中 MV {len(mvs)} 个（歌词视频、现场、翻唱等不要）")
     name = max(set(names), key=names.count) if names else page.get("name") or ""
     return {"name": name, "songs": songs, "mvs": mvs}
