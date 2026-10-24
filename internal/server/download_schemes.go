@@ -76,15 +76,12 @@ func (r *Router) schemeKinds() []*dlKind {
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("bilibili", p) },
 		},
 		{
-			ID: "x", Title: "X", Description: "下载用户发过的图片和视频（gallery-dl，需要在「账号与 Cookie」里读过 X 的登录）。图片移入时并进相册，视频进短视频。",
-			Scheme: &dlScheme{Steps: []string{"填用户名（一行一个）", "选图片/视频、最近多少个", "下载到暂存区", "在「暂存区」看图、删掉不要的", "移入资源库"},
-				Destination: "图片 → 相册；视频 → 短视频 / X / <用户>/", Input: "用户名或主页链接，一行一个", Placeholder: "elonmusk\n@nasa\nhttps://x.com/<用户>/media"},
-			needs: []string{"uv"},
-			Fields: []dlField{urls,
-				{Name: "x_media", Label: "要什么", Type: "choice", Default: "all", Options: []dlOption{{"all", "图片和视频"}, {"image", "只要图片"}, {"video", "只要视频"}}},
-				{Name: "x_limit", Label: "每个用户最多", Type: "choice", Default: "200", Options: []dlOption{{"50", "最近 50 个"}, {"200", "最近 200 个"}, {"1000", "最近 1000 个"}, {"0", "全部"}}},
-				library},
-			build: func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("x", p) },
+			ID: "x", Title: "X", Description: "下载作者发过的图片和视频（gallery-dl，需要在「账号与 Cookie」里读过 X 的登录）。按作者放进短视频：视频一个文件，一条帖子的图片一个图集（和抖音、小红书的图文一样，可以在设置里「图集入库」收进数据库）。第一次下一个作者会下能翻到的全部历史；之后再下同一个作者，最新的连续 20 个都下过就停，只补新帖子。",
+			Scheme: &dlScheme{Steps: []string{"填作者用户名或主页链接（一行一个）", "下载到暂存区（下过的跳过）", "在「暂存区」看图、删掉不要的", "移入资源库"},
+				Destination: "短视频 / X / <作者>/", Input: "作者用户名或主页链接，一行一个", Placeholder: "nasa\n@nasa\nhttps://x.com/<作者>/media"},
+			needs:  []string{"uv"},
+			Fields: []dlField{urls, library},
+			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("x", p) },
 		},
 		{
 			ID: "other", Title: "其他链接", Description: "以上方案之外的网站（抖音、TikTok 等 yt-dlp 支持的站点）。按域名认平台，视频进短视频。",
@@ -222,9 +219,6 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 		if rank := p.text("rank"); rank != "" {
 			args = append(args, "--rank", rank, "--top", p.text("top"))
 		}
-	}
-	if m := p.text("x_media"); m != "" {
-		args = append(args, "--x-media", m)
 	}
 	if n := p.text("x_limit"); n != "" {
 		args = append(args, "--x-limit", n)

@@ -7,7 +7,7 @@
             或 …/<歌手>/<专辑>/<曲序 曲名>（属于 Album、EP 的歌，单独下的也归进专辑）
   youtube   yt-dlp 视频 → media_library/shortvideo/YouTube/<频道>/<日期>_<标题>_<id>
   bilibili  yt-dlp 视频 → media_library/shortvideo/B站/<UP主>/…
-  x         gallery-dl → 图片 gallery/X/<用户>/（移入资源库时并进相册），视频 media_library/shortvideo/X/<用户>/
+  x         gallery-dl → 短视频/X/<作者>/：视频一个文件，图片一条帖子一个图集（见 SOCIAL）
   other     按链接域名认平台（平台表见 OMNIHUB_PLATFORMS），视频 → media_library/shortvideo/<平台>/<作者>/
 元数据（yt-dlp 的 .info.json、gallery-dl 的 .json）下完后精简、合成批次里的一个 download-meta-<时间>.json，
 单个的删掉，不留一堆零碎文件；移入资源库时追加进 .omni_data/download-meta.jsonl，留给以后打分。
@@ -482,51 +482,96 @@ LOGIN_HINTS = {
 hints = set()
 
 
-def gallerydl(urls, a):
-    """X：每个用户一个 gallery-dl 进程；图片留在 gallery/X/<用户>/，视频移到 shortvideo/X/<用户>/。"""
+# 图文平台（gallery-dl）：每个作者一个 gallery-dl 进程，先下到批次的 .incoming/<平台>/，再按帖子整理进短视频：
+#   视频 → 短视频/<平台>/<作者>/<日期>_<正文>_<帖子编号>.mp4
+#   图片 → 短视频/<平台>/<作者>/<日期>_<正文>_<帖子编号>/01.jpg …（一条帖子一个图集，和抖音、小红书的图文一样）
+# 增量：下载名单里有的跳过，连续 20 个都下过就停（作者再下一次只补新帖子）。
+SOCIAL = {
+    "x": {"dir": "X", "cookie": "x", "user_url": "https://x.com/{}/media"},
+}
+
+
+def post_info(meta):
+    """gallery-dl 元数据里的作者、帖子编号、日期、正文（X、Pixiv、Instagram 的字段名不同）。"""
+    who = meta.get("author") or meta.get("user") or {}
+    author = (who.get("name") if isinstance(who, dict) else who) or meta.get("username") or meta.get("owner") or "未知作者"
+    pid = meta.get("tweet_id") or meta.get("post_id") or meta.get("post_shortcode") or meta.get("id") or ""
+    text = meta.get("content") or meta.get("description") or meta.get("title") or ""
+    text = re.sub(r"https?://\S+|#\S+|@\S+", " ", str(text))   # 去掉链接、话题、@
+    text = " ".join(text.split())[:40] or "无标题"
+    day = str(meta.get("date") or "")[:10] or "0000-00-00"
+    return str(author), str(pid), day, text
+
+
+def gallerydl(urls, a, scheme="x"):
+    """图文平台下载（见 SOCIAL）。返回 (整理好的文件, 已下载过跳过的数量, 出错的数量)。"""
+    conf = SOCIAL[scheme]
     files, skipped, errors = [], 0, 0
+    incoming = os.path.join(a.batch, ".incoming", conf["dir"])
     for i, url in enumerate(urls):
         url = url.strip()
-        user = (urlparse(url).path.strip("/").split("/") or [""])[0] if "://" in url else url.lstrip("@")
-        if "://" not in url:
-            url = f"https://x.com/{user}/media"
-        user = safe(user or "未知用户")
-        target = os.path.join(a.batch, "gallery", "X", user)
-        cmd = [sys.executable, "-m", "gallery_dl", "--write-metadata", "-D", target]
+        if "://" not in url:   # 只写了用户名
+            url = conf["user_url"].format(url.lstrip("@"))
+        progress(i, len(urls), f"{conf['dir']} · {url}")
+        os.makedirs(incoming, exist_ok=True)
+        cmd = [sys.executable, "-m", "gallery_dl", "--write-metadata", "-D", incoming, "-A", "20"]
         if a.archive:
             cmd += ["--download-archive", a.archive + ".gallery-dl.sqlite3"]
-        cookies = cookie_file("x")
+        cookies = cookie_file(conf["cookie"])
         if cookies:
             cmd += ["--cookies", cookies]
         if os.environ.get("OMNIHUB_YTDLP_PROXY"):
             cmd += ["--proxy", os.environ["OMNIHUB_YTDLP_PROXY"]]
-        if a.x_limit > 0:
+        if a.x_limit > 0:   # 测试用：只取前 N 个
             cmd += ["--range", f"1-{a.x_limit}"]
-        if a.x_media == "image":
-            cmd += ["--filter", "extension not in ('mp4', 'mov', 'webm', 'm3u8')"]
-        elif a.x_media == "video":
-            cmd += ["--filter", "extension in ('mp4', 'mov', 'webm', 'm3u8')"]
-        progress(i, len(urls), f"X · @{user}")
         proc = subprocess.Popen(cmd + [url], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         for line in proc.stdout:
             line = line.rstrip("\n")
             if line.startswith("# "):
                 skipped += 1
-            elif line and os.path.isfile(line):
-                files.append(line)
             elif "[error]" in line:
                 errors += 1
+                for key, hint in LOGIN_HINTS.items():
+                    if key.lower() in line.lower():
+                        hints.add(hint.format(conf["dir"]))
             log(line)
         proc.wait()
-        # 视频放到短视频里（相册只收图片）
-        videos = os.path.join(a.batch, "media_library", "shortvideo", "X", user)
-        for name in os.listdir(target) if os.path.isdir(target) else []:
-            if name.lower().endswith(VIDEO_EXT):
-                os.makedirs(videos, exist_ok=True)
-                shutil.move(os.path.join(target, name), os.path.join(videos, name))
-                meta = os.path.join(target, name + ".json")
-                if os.path.isfile(meta):
-                    shutil.move(meta, os.path.join(videos, name + ".json"))
+    # 按帖子整理
+    posts = {}
+    for name in sorted(os.listdir(incoming)) if os.path.isdir(incoming) else []:
+        path = os.path.join(incoming, name)
+        if name.endswith(".json") or not os.path.isfile(path):
+            continue
+        meta = {}
+        if os.path.isfile(path + ".json"):
+            with open(path + ".json", encoding="utf-8") as f:
+                meta = json.load(f)
+            os.remove(path + ".json")
+        posts.setdefault(post_info(meta), []).append((path, meta))
+    root = os.path.join(a.batch, "media_library", "shortvideo", conf["dir"])
+    for (author, pid, day, text), items in posts.items():
+        base = f"{day}_{safe(text)}_{pid}"
+        folder = os.path.join(root, safe(author))
+        images = [(p, m) for p, m in items if not p.lower().endswith(VIDEO_EXT)]
+        videos = [(p, m) for p, m in items if p.lower().endswith(VIDEO_EXT)]
+        for k, (path, meta) in enumerate(videos, 1):
+            dest = os.path.join(folder, base + (f"_{k}" if len(videos) > 1 else "") + os.path.splitext(path)[1])
+            os.makedirs(folder, exist_ok=True)
+            shutil.move(path, dest)
+            rec = {kk: v for kk, v in meta.items() if kk not in META_DROP}
+            if not embed_info(dest, rec, {"OMNIHUB_MODE": "social"}, {"artist": author, "title": text}):
+                a.meta_records.append({**rec, "omnihub_file": os.path.relpath(dest, a.batch)})
+            files.append(dest)
+        if images:   # 一条帖子的图片放一个图集文件夹，帖子的记录收进批次元数据（图片写不进标签）
+            album = os.path.join(folder, base)
+            os.makedirs(album, exist_ok=True)
+            for k, (path, meta) in enumerate(images, 1):
+                dest = os.path.join(album, f"{k:02d}{os.path.splitext(path)[1].lower()}")
+                shutil.move(path, dest)
+                files.append(dest)
+            rec = {kk: v for kk, v in images[0][1].items() if kk not in META_DROP and kk not in ("num", "filename", "extension", "width", "height")}
+            a.meta_records.append({**rec, "omnihub_file": os.path.relpath(album, a.batch), "images": len(images)})
+    shutil.rmtree(incoming, ignore_errors=True)
     return files, skipped, errors
 
 
@@ -864,7 +909,6 @@ def main():
                    help="按质量挑：replay 重播率（Last.fm）、views 播放量；none 不挑，全下")
     p.add_argument("--top", type=int, default=30, help="按质量挑时每个链接取前多少个")
     p.add_argument("--archive", default="", help="已下载名单文件（下过的不再下）")
-    p.add_argument("--x-media", choices=["all", "image", "video"], default="all")
     p.add_argument("--x-limit", type=int, default=0, help="X：每个用户最多下最近这么多个文件，0 表示不限")
     p.add_argument("--plan-out", default="", help="音乐：只读取列表，把会下什么写进这个 JSON 文件，不下载")
     p.add_argument("--plan", default="", help="音乐：按读取好的列表（--plan-out 写的文件）下载")
@@ -906,7 +950,7 @@ def main():
         return
 
     if a.scheme == "x":
-        files, skipped, errors = gallerydl(a.urls, a)
+        files, skipped, errors = gallerydl(a.urls, a, "x")
     elif a.scheme == "other":
         files, skipped, errors = [], 0, 0
         groups = {}
