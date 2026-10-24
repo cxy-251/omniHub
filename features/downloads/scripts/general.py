@@ -268,6 +268,13 @@ def wikidata_norm(name):
     return wikidata.norm(name)
 
 
+def is_channel(url):
+    """频道首页、UP 主空间（整个频道）；合集、系列、收藏夹、播放列表、单个视频不算。"""
+    if re.search(r"youtube\.com/(@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+)(/(videos|featured)?)?/?(\?.*)?$", url):
+        return True
+    return bool(re.search(r"space\.bilibili\.com/\d+(/video|/upload/video)?/?(\?.*)?$", url))
+
+
 def mv_song(title):
     """MV 标题里引号中的歌名（「IVE 아이브 'LOVE DIVE' MV」→ LOVE DIVE），没有就用整个标题。"""
     m = re.search(r"[\"'‘“「『【]([^\"'’”」』】]+)[\"'’”」』】]", title or "")
@@ -290,6 +297,7 @@ def list_videos(a):
             errors += 1
             continue
         log(f"== {title or url}：列表里 {len(entries)} 个")
+        whole_channel = is_channel(url)   # 频道首页 / UP 主空间：太多时只默认勾一部分；合集、收藏夹、播放列表是挑好的，全勾
         book = book or (title if len(entries) > 1 else (entries[0]["title"] if entries else ""))
         for k, e in enumerate(entries):
             if e["id"] in done:
@@ -299,7 +307,7 @@ def list_videos(a):
                 shorts += 1
                 continue
             channel = e.get("uploader") or re.sub(r"\s+-\s+(Videos|Shorts|Live|Home|Playlists)$", "", title or "")   # 「HYBE LABELS - Videos」→ 频道名
-            item = {"id": e["id"], "url": e["url"], "title": e["title"], "channel": channel,
+            item = {"id": e["id"], "url": e["url"], "title": e["title"], "channel": channel, "whole": not whole_channel,
                     "views": e.get("views"), "list": title, "index": k + 1, "group": ""}
             if a.mode == "girlvideo":
                 item["group"] = ytmusic.mv_artist(e["title"]) or UNKNOWN_ARTIST
@@ -345,12 +353,15 @@ def list_videos(a):
         videos.sort(key=lambda v: (v["kind"] != "girl", v["group"] == UNKNOWN_ARTIST, v["group"].casefold(), -(v["views"] or -1)))
     elif a.mode == "video":
         videos.sort(key=lambda v: -(v["views"] if v["views"] is not None else -1))
-    many = len(videos) > PICK_ALL_UP_TO
-    for k, v in enumerate(videos):
-        v["picked"] = (v.get("kind") == "girl") if a.mode in ("girls", "girlvideo") else (not many or (a.mode == "video" and k < PICK_TOP) or a.mode == "audio")
+    from_channels = [v for v in videos if not v["whole"]]
+    many = len(from_channels) > PICK_ALL_UP_TO
+    top = {v["id"] for v in from_channels[:PICK_TOP]}   # 已按播放量排好
+    for v in videos:
+        v["picked"] = (v.get("kind") == "girl") if a.mode in ("girls", "girlvideo") else \
+            (v["whole"] or not many or a.mode == "audio" or v["id"] in top)
     plan = {"urls": a.urls, "mode": a.mode, "videos": videos, "book": book, "skipped": skipped, "other_count": other_count,
             "done_count": ndone, "shorts": shorts, "songs": [], "mvs": [], "done": [], "other": [], "errors": errors,
-            "pick_note": f"太多了：默认勾播放量前 {PICK_TOP} 个" if many and a.mode == "video" else ""}
+            "pick_note": f"频道里视频太多：默认勾播放量前 {PICK_TOP} 个（合集、收藏夹、播放列表全勾）" if many and a.mode == "video" else ""}
     log(f"列表：候选 {len(videos)} 个（默认勾上 {sum(v['picked'] for v in videos)} 个）；带 MV 字样但不要的 {len(skipped)} 个；"
         f"其他视频 {other_count} 个；Shorts {shorts} 个（不下）；已下载过 {ndone} 个；出错 {errors} 个")
     return plan
@@ -369,7 +380,7 @@ def save_plan(a, plan):
 
 def write_plan(a):
     """只读取、不下载：把会下什么写进 a.plan_out（JSON），给界面列出来勾选。
-    songs 要下的歌（含归档位置、来源）；mvs 歌手的 MV；skipped 不下的及原因；done 已下载过的；other 不经 YouTube Music 的链接（B 站等，按原视频下）。"""
+    songs 要下的歌（含归档位置、来源）；mvs 歌手的 MV；skipped 不下的及原因；done 已下载过的；other 现在总是空的（音乐只收 YouTube）。"""
     youtube = [u for u in a.urls if platform_of(u)["id"] == "youtube"]
     other = [u for u in a.urls if platform_of(u)["id"] != "youtube"]
     targets, _, errors = music_targets(youtube, a, cookie_file("youtube")) if youtube else ([], 0, 0)
@@ -877,6 +888,14 @@ def main():
     a.music_skipped = []  # 不下的歌及原因、已下载过的：读取列表时列出来
     a.music_done = []
 
+    if a.scheme == "music":   # 音乐只从 YouTube / YouTube Music 来（其他网站的多是搬运）
+        dropped = [u for u in a.urls if platform_of(u)["id"] != "youtube"]
+        for u in dropped:
+            log(f"音乐只从 YouTube / YouTube Music 下，跳过：{u}")
+        a.urls = [u for u in a.urls if u not in dropped]
+        if not a.urls:
+            print("OMNIHUB_RESULT " + json.dumps({"files": 0, "skipped": 0, "errors": len(dropped), "path": a.batch, "hints": []}, ensure_ascii=False), flush=True)
+            sys.exit(1)
     if a.plan_out and a.scheme in ("youtube", "bilibili"):
         write_video_plan(a)
         print("OMNIHUB_RESULT " + json.dumps({"plan": a.plan_out}, ensure_ascii=False), flush=True)
@@ -919,7 +938,7 @@ def main():
     elif a.rank != "none":
         files, skipped, errors = ranked(a)
     else:
-        # 音乐也可能来自 B 站等：按第一个链接认平台（决定用哪份 Cookie）
+        # 按第一个链接认平台（决定用哪份 Cookie；音乐只会是 YouTube）
         platform = platform_of(a.urls[0]) if a.scheme == "music" else next(
             (p for p in PLATFORMS if p["id"] == SCHEME_PLATFORM[a.scheme]), platform_of(a.urls[0]))
         files, skipped, errors = ytdlp(a.urls, a, platform)

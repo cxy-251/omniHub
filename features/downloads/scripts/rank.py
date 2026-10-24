@@ -93,15 +93,19 @@ def fill_bilibili(entries):
         m = re.search(r"(BV[0-9A-Za-z]{10})", e["url"])
         if e["title"] or not m:
             continue
-        try:
-            req = urllib.request.Request("https://api.bilibili.com/x/web-interface/view?bvid=" + m.group(1), headers=headers)
-            with opener.open(req, timeout=20) as r:
-                data = (json.load(r) or {}).get("data") or {}
-            e["title"] = data.get("title") or ""
-            e["uploader"] = (data.get("owner") or {}).get("name") or e.get("uploader") or ""
-            e["views"] = (data.get("stat") or {}).get("view")
-        except Exception as err:
-            print(f"  B 站视频信息没取到（{m.group(1)}）：{err}", flush=True)
+        for attempt in range(3):   # 网络偶尔断（超时、SSL EOF）：重试两次
+            try:
+                req = urllib.request.Request("https://api.bilibili.com/x/web-interface/view?bvid=" + m.group(1), headers=headers)
+                with opener.open(req, timeout=20) as r:
+                    data = (json.load(r) or {}).get("data") or {}
+                e["title"] = data.get("title") or ""
+                e["uploader"] = (data.get("owner") or {}).get("name") or e.get("uploader") or ""
+                e["views"] = (data.get("stat") or {}).get("view")
+                break
+            except Exception as err:
+                if attempt == 2:
+                    print(f"  B 站视频信息没取到（{m.group(1)}）：{err}", flush=True)
+                time.sleep(2 + attempt * 3)
         time.sleep(0.3)
 
 

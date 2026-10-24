@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,7 +49,7 @@ func (r *Router) schemeKinds() []*dlKind {
 	}}
 	return []*dlKind{
 		{
-			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑、单曲或歌手页（YouTube、YouTube Music、B 站等），全部下载，不筛选。YouTube 的歌换成 YouTube Music 上的纯音轨版（MV 有片头片尾，不下它的音频）；找不到纯音轨版时只收官方音频（Official Audio），MV、歌词视频、现场、翻唱都不下。按歌手归档：属于专辑、EP 的歌放进歌手下的专辑文件夹，单曲放在歌手文件夹里。歌手页（YouTube Music 歌手页或歌手的官方频道）下全部专辑、EP、单曲，同一首只留最早发行的那版，MV（标题写着 Music Video、Official Video、MV 的，歌词视频、现场不算）下成视频放进短视频的 MV/<歌手>。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
+			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑、单曲或歌手页，只从 YouTube / YouTube Music 下（其他网站的音乐多是搬运，不收），全部下载，不筛选。YouTube 的歌换成 YouTube Music 上的纯音轨版（MV 有片头片尾，不下它的音频）；找不到纯音轨版时只收官方音频（Official Audio），MV、歌词视频、现场、翻唱都不下。按歌手归档：属于专辑、EP 的歌放进歌手下的专辑文件夹，单曲放在歌手文件夹里。歌手页（YouTube Music 歌手页或歌手的官方频道）下全部专辑、EP、单曲，同一首只留最早发行的那版，MV（标题写着 Music Video、Official Video、MV 的，歌词视频、现场不算）下成视频放进短视频的 MV/<歌手>。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
 			Scheme: &dlScheme{Listable: true, Steps: []string{"粘贴歌单/专辑/歌手链接（一行一个）", "读取列表：看会下哪些歌和 MV、哪些不下，去掉不要的勾", "下载到暂存区（下过的跳过）", "播放数、点赞、日期、Last.fm 信息写进标签", "在「暂存区」试听、删掉不要的", "移入资源库"}, Destination: "音声 / 音乐 / <歌手>/（整张专辑放 <歌手>/<专辑>/）",
 				Input: "歌单、专辑、单曲或歌手页链接，一行一个", Placeholder: "https://music.youtube.com/playlist?list=LM（赞过的歌）\nhttps://music.youtube.com/channel/…（歌手）\nhttps://www.youtube.com/watch?v=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
@@ -66,10 +67,10 @@ func (r *Router) schemeKinds() []*dlKind {
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("youtube", p) },
 		},
 		{
-			ID: "bilibili", Title: "B 站", Description: "一次可以填很多个 UP 主、合集或视频，正常下载视频，放进 UP 主文件夹。先「读取列表」看会下哪些（按播放量排），勾选后一个一个下载。下过的自动跳过。",
+			ID: "bilibili", Title: "B 站", Description: "一次可以填很多个链接：单个视频、UP 主空间、别人的合集或系列、自己或别人的收藏夹（私密收藏夹要先在「账号与 Cookie」里读取 B 站登录）。正常下载视频，每个视频放进它的 UP 主文件夹。先「读取列表」看会下哪些（按播放量排；UP 主空间视频太多时默认勾前 30 个，合集、收藏夹全勾），勾选后一个一个下载。下过的自动跳过。",
 			Scheme: &dlScheme{Steps: []string{"粘贴 UP 主空间/合集/视频链接（一行一个）", "读取列表，勾选要的", "一个一个下载到暂存区（下过的跳过）", "移入资源库"},
 				Destination: "短视频 / B站 / <UP主>/", Listable: true,
-				Input: "UP 主空间、合集或视频链接，一行一个", Placeholder: "https://space.bilibili.com/<UID>/video\nhttps://www.bilibili.com/video/BV…"},
+				Input: "视频、UP 主空间、合集、收藏夹链接，一行一个", Placeholder: "https://www.bilibili.com/video/BV…\nhttps://space.bilibili.com/<UID>\nhttps://space.bilibili.com/<UID>/lists/<合集编号>?type=season\nhttps://space.bilibili.com/<UID>/favlist?fid=<收藏夹编号>"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
 			Fields: []dlField{urls, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("bilibili", p) },
@@ -147,6 +148,16 @@ func videoArgs(p dlParams) []string {
 	return args
 }
 
+// isYouTube 判断链接是不是 YouTube / YouTube Music（音乐只收这两个来源）。
+func isYouTube(u string) bool {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "youtu.be" || host == "youtube.com" || strings.HasSuffix(host, ".youtube.com")
+}
+
 // buildScheme 建暂存批次并组好下载脚本的参数。
 func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 	urls := p.lines("urls")
@@ -156,6 +167,9 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 	for _, u := range urls {
 		if scheme != "x" && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 			return dlPlan{}, fmt.Errorf("不是网址：%s", u)
+		}
+		if scheme == "music" && !isYouTube(u) {
+			return dlPlan{}, fmt.Errorf("音乐只从 YouTube / YouTube Music 下：%s", u)
 		}
 	}
 	if p.text("step") == "list" && (scheme == "music" || scheme == "youtube" || scheme == "bilibili") {
