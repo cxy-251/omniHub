@@ -254,9 +254,10 @@ def planned_path(info):
 
 # 视频方案的模式（YouTube 三种，B 站只有普通视频）：挑什么、怎么排、默认勾哪些、放哪里都由模式决定，界面上只选模式
 #   video  普通视频：全部，按播放量排；短视频/<平台>/<发布者>/
-#   mv     MV：只留正式 MV（按标题，见 ytmusic.is_mv），从标题认艺人、按艺人分组；短视频/<平台>/<公司频道>/<艺人>/，4K
+#   girls  女团 MV：只留正式 MV（按标题，见 ytmusic.is_mv），从标题认艺人，只要女团（Wikidata 判断，见 wikidata.py）；
+#          按团分组，短视频/<平台>/<公司频道>/<团名>/，4K。和音乐方案歌手页下的「音乐 MV」（短视频/MV/<歌手>/）是两类
 #   audio  有声书 / 音频：只要声音，按列表顺序；音声/standard/<书名>/，书名默认是播放列表名
-PICK_ALL_UP_TO = 50   # 候选不多于这么多时默认全勾；多了：普通视频勾播放量前 PICK_TOP 个，MV 一个都不勾（按艺人勾）
+PICK_ALL_UP_TO = 50   # 候选不多于这么多时默认全勾；多了：普通视频勾播放量前 PICK_TOP 个（女团 MV 确认是女团的都勾）
 PICK_TOP = 30
 UNKNOWN_ARTIST = "未认出艺人"
 
@@ -291,7 +292,7 @@ def list_videos(a):
             channel = e.get("uploader") or re.sub(r"\s+-\s+(Videos|Shorts|Live|Home|Playlists)$", "", title or "")   # 「HYBE LABELS - Videos」→ 频道名
             item = {"id": e["id"], "url": e["url"], "title": e["title"], "channel": channel,
                     "views": e.get("views"), "list": title, "index": k + 1, "group": ""}
-            if a.mode == "mv":
+            if a.mode == "girls":
                 if not ytmusic.is_mv(e["title"]):
                     if ytmusic.MV_TITLE.search(e["title"]):   # 带 MV 字样但不是正式 MV 的列出来，其余只记数量
                         skipped.append({"id": e["id"], "title": e["title"], "artists": [], "reason": "预告、练习室、舞台、花絮、反应视频等"})
@@ -300,23 +301,35 @@ def list_videos(a):
                     continue
                 item["group"] = ytmusic.mv_artist(e["title"]) or UNKNOWN_ARTIST
             videos.append(item)
-    if a.mode == "mv":   # 同一艺人大小写不同（Hyolyn / HYOLYN）并成一组，用出现最多的写法
+    others = {}
+    if a.mode == "girls":   # 同一艺人大小写不同（Hyolyn / HYOLYN）并成一组，用出现最多的写法
         spell = {}
         for v in videos:
             spell.setdefault(v["group"].casefold(), []).append(v["group"])
         for v in videos:
             names = spell[v["group"].casefold()]
             v["group"] = max(set(names), key=names.count)
-        videos.sort(key=lambda v: (v["group"] == UNKNOWN_ARTIST, v["group"].casefold(), -(v["views"] or -1)))
+        # 只要女团：男团、个人歌手只记名字和数量；查不出的列在「不确定」里，默认不勾
+        import wikidata
+        names = sorted({v["group"] for v in videos if v["group"] != UNKNOWN_ARTIST})
+        log(f"   {len(names)} 个艺人，按 Wikidata 判断是不是女团（查过的有缓存）")
+        kinds = wikidata.classify(names, progress, log)
+        for v in videos:
+            v["kind"] = "unknown" if v["group"] == UNKNOWN_ARTIST else kinds.get(v["group"], "unknown")
+        for v in videos:
+            if v["kind"] == "other":
+                others[v["group"]] = others.get(v["group"], 0) + 1
+        videos = [v for v in videos if v["kind"] != "other"]
+        videos.sort(key=lambda v: (v["kind"] != "girl", v["group"] == UNKNOWN_ARTIST, v["group"].casefold(), -(v["views"] or -1)))
     elif a.mode == "video":
         videos.sort(key=lambda v: -(v["views"] if v["views"] is not None else -1))
     many = len(videos) > PICK_ALL_UP_TO
     for k, v in enumerate(videos):
-        v["picked"] = not many or (a.mode == "video" and k < PICK_TOP) or a.mode == "audio"
+        v["picked"] = (v.get("kind") == "girl") if a.mode == "girls" else (not many or (a.mode == "video" and k < PICK_TOP) or a.mode == "audio")
     plan = {"urls": a.urls, "mode": a.mode, "videos": videos, "book": book, "skipped": skipped, "other_count": other_count,
+            "other_artists": sorted(others.items(), key=lambda x: -x[1]),
             "done_count": ndone, "songs": [], "mvs": [], "done": [], "other": [], "errors": errors,
-            "pick_note": "" if not many else {"video": f"太多了：默认勾播放量前 {PICK_TOP} 个", "mv": "太多了：默认不勾，按艺人勾选",
-                                                "audio": ""}[a.mode]}
+            "pick_note": f"太多了：默认勾播放量前 {PICK_TOP} 个" if many and a.mode == "video" else ""}
     log(f"列表：候选 {len(videos)} 个（默认勾上 {sum(v['picked'] for v in videos)} 个）；带 MV 字样但不要的 {len(skipped)} 个；"
         f"其他视频 {other_count} 个；已下载过 {ndone} 个；出错 {errors} 个")
     return plan
@@ -381,9 +394,9 @@ def download_videos(a, plan, skip, platform):
         if a.mode == "audio":
             key = ("", a.album or plan.get("book") or v["list"])
             a.video_extra[v["id"]] = {"fields": {"OMNIHUB_MODE": "audio"}, "std": {"album": key[1], "title": v["title"], "number": v["index"]}}
-        elif a.mode == "mv":
+        elif a.mode == "girls":
             key = (v["group"] if v["group"] != UNKNOWN_ARTIST else "", "")
-            a.video_extra[v["id"]] = {"fields": {"OMNIHUB_MODE": "mv", "COMPANY": v["channel"]},
+            a.video_extra[v["id"]] = {"fields": {"OMNIHUB_MODE": "girl_group_mv", "COMPANY": v["channel"]},
                                       "std": {"artist": key[0], "title": mv_song(v["title"])}}
         else:
             key = ("", "")
@@ -417,6 +430,8 @@ def download_mvs(a, platform):
         log(f"下载 {name} 的 MV（{len(ids)} 个）")
         sub = argparse.Namespace(**vars(a))
         sub.mv_artist, sub.per_list, sub.items = name, 0, ""
+        for v, _ in ids:   # 音乐方案歌手页下的 MV（欧美等音乐 MV），和 YouTube 的女团 MV 分开标记
+            a.video_extra[v] = {"fields": {"OMNIHUB_MODE": "music_mv"}, "std": {"artist": name}}
         f, s, e = ytdlp(["https://www.youtube.com/watch?v=" + v for v, _ in ids], sub, platform)
         files, skipped, errors = files + f, skipped + s, errors + e
     return files, skipped, errors
@@ -818,8 +833,8 @@ def main():
     p.add_argument("--plan-out", default="", help="音乐：只读取列表，把会下什么写进这个 JSON 文件，不下载")
     p.add_argument("--plan", default="", help="音乐：按读取好的列表（--plan-out 写的文件）下载")
     p.add_argument("--exclude", default="", help="按列表下载时不要的视频 ID，逗号分隔")
-    p.add_argument("--mode", choices=["video", "mv", "audio"], default="video",
-                   help="视频方案的模式：video 普通视频、mv MV（按艺人分）、audio 有声书/音频（B 站只有 video）")
+    p.add_argument("--mode", choices=["video", "girls", "audio"], default="video",
+                   help="视频方案的模式：video 普通视频、girls 女团 MV（按公司/团分）、audio 有声书/音频（B 站只有 video）")
     a = p.parse_args()
     a.lastfm_known = {}   # 排名时查到的 Last.fm 信息（按视频 ID），下载后写进标签时复用
     a.album_of = {}       # 文件 → (专辑名, 曲序)：指定了专辑时由 ytdlp() 记下
@@ -830,7 +845,7 @@ def main():
     a.video_extra = {}    # 视频 ID → 写进文件的模式字段与标准标签（download_videos 记下）
     if a.scheme == "bilibili":
         a.mode = "video"
-    if a.mode == "mv" and a.max_height == 1080:   # MV 要高画质：有 4K 就要
+    if a.mode == "girls" and a.max_height == 1080:   # 女团 MV 要高画质：有 4K 就要
         a.max_height = 2160
     a.meta_records = []   # 批次的下载元数据：音乐每首、排名表；最后连同其他文件旁边的 .json 合成一个文件
     a.music_skipped = []  # 不下的歌及原因、已下载过的：读取列表时列出来
@@ -864,7 +879,7 @@ def main():
             plan = list_videos(a)
             skip = {v["id"] for v in plan["videos"] if not v["picked"]}
         a.mode = plan.get("mode") or a.mode
-        if a.mode == "mv" and a.max_height == 1080:
+        if a.mode == "girls" and a.max_height == 1080:
             a.max_height = 2160
         platform = next((p for p in PLATFORMS if p["id"] == SCHEME_PLATFORM[a.scheme]), {"id": a.scheme, "dir": a.scheme})
         files, skipped, errors = download_videos(a, plan, skip, platform)

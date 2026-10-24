@@ -137,13 +137,17 @@ ColumnLayout {
         if (songs.length) out.push({type: "head", group: "song", text: "要下的歌 " + songs.length + " 首（放到 音声/音乐/ 下的位置）"})
         songs.forEach(function (x) { out.push({type: "song", grp: "song", id: x.id, text: x.path, note: x.source === "纯音轨" ? "" : x.source}) })
         var mvs = (plan.mvs || []).filter(function (m) { return !m.done })
-        if (mvs.length) out.push({type: "head", group: "mv", text: "MV " + mvs.length + " 个（下成视频，放到 短视频/MV/<歌手>/）"})
+        if (mvs.length) out.push({type: "head", group: "mv", text: "音乐 MV " + mvs.length + " 个（下成视频，放到 短视频/MV/<歌手>/）"})
         mvs.forEach(function (m) { out.push({type: "mv", grp: "mv", id: m.id, text: m.title, note: m.artist}) })
         var videos = plan.videos || []
-        if (plan.mode === "mv") {   // 一个艺人一行（勾选整组），点「展开」看这个艺人的每支 MV
-            var last = null
+        if (plan.mode === "girls") {   // 一个团一行（勾选整组），点「展开」看每支 MV；女团在前，查不出的在「不确定」下面
+            var last = null, unsure = false
             videos.forEach(function (v) {
                 var key = "a:" + v.group
+                if (v.kind !== "girl" && !unsure) {
+                    unsure = true
+                    out.push({type: "head", text: "不确定是不是女团（Wikidata 查不出，默认不勾，要的自己勾）"})
+                }
                 if (v.group !== last) {
                     last = v.group
                     var mine = videos.filter(function (x) { return x.group === v.group })
@@ -162,11 +166,17 @@ ColumnLayout {
                           note: plan.mode === "audio" ? "" : views(v.views) + " · " + v.channel})
             })
         }
-        if (plan.mode === "mv" && plan.pick_note) out.splice(0, 0, {type: "head", text: "共 " + videos.length + " 个 MV；" + plan.pick_note})
+        if (plan.mode === "girls") {
+            var girls = videos.filter(function (v) { return v.kind === "girl" })
+            out.splice(0, 0, {type: "head", text: "女团 " + Object.keys(girls.reduce(function (m, v) { m[v.group] = 1; return m }, {})).length + " 个、正式 MV " + girls.length + " 支（默认全勾）"})
+            var others = plan.other_artists || []
+            if (others.length) out.push({type: "head", text: "不是女团（男团、个人歌手），不下：" + others.length + " 个艺人，" + others.reduce(function (n, x) { return n + x[1] }, 0) + " 支"})
+            if (others.length) out.push({type: "skip", text: others.map(function (x) { return x[0] + "（" + x[1] + "）" }).join("、")})
+        }
         if (plan.other_count) out.push({type: "head", text: "其他视频 " + plan.other_count + " 个（不是 MV，不列出）"})
         if ((plan.other || []).length) out.push({type: "head", text: "其他网站的链接 " + plan.other.length + " 个（不查纯音轨版，按原视频下音频）"})
         ;(plan.other || []).forEach(function (u) { out.push({type: "other", text: u}) })
-        if (plan.skipped.length) out.push({type: "head", text: (plan.mode === "mv" ? "带 MV 字样但不是正式 MV（预告、练习室等），不下 " : "不下 ") + plan.skipped.length + " 个"})
+        if (plan.skipped.length) out.push({type: "head", text: (plan.mode === "girls" ? "带 MV 字样但不是正式 MV（预告、练习室等），不下 " : "不下 ") + plan.skipped.length + " 个"})
         plan.skipped.forEach(function (x) { out.push({type: "skip", text: who(x), note: x.reason || ""}) })
         var done = (plan.done || []).map(who).concat(mvs.length < (plan.mvs || []).length ? plan.mvs.filter(function (m) { return m.done }).map(function (m) { return "MV：" + m.title }) : [])
         var doneCount = done.length + (plan.done_count || 0)
@@ -177,8 +187,8 @@ ColumnLayout {
     function pickedText() {
         var parts = []
         if (count("song")) parts.push("歌 " + count("song") + " 首")
-        if (count("mv")) parts.push("MV " + count("mv") + " 个")
-        if (count("video")) parts.push((plan && plan.mode === "mv" ? "MV " : plan && plan.mode === "audio" ? "音频 " : "视频 ") + count("video") + " 个")
+        if (count("mv")) parts.push("音乐 MV " + count("mv") + " 个")
+        if (count("video")) parts.push((plan && plan.mode === "girls" ? "女团 MV " : plan && plan.mode === "audio" ? "音频 " : "视频 ") + count("video") + " 个")
         return parts.join("、") || "没有勾选"
     }
     function startPlan() {

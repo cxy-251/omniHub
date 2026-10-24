@@ -41,7 +41,7 @@ func (r *Router) schemeKinds() []*dlKind {
 	urls := dlField{Name: "urls", Label: "链接", Type: "lines", Required: true}
 	// YouTube 只选模式，挑什么、怎么排、放哪里、画质都由模式决定（见 general.py 的 list_videos）
 	mode := dlField{Name: "mode", Label: "模式", Type: "modes", Default: "video", Options: []dlOption{
-		{"mv", "MV：只要正式 MV，按公司 / 艺人分，4K"},
+		{"girls", "女团 MV：只要女团的正式 MV，按公司 / 团分，4K"},
 		{"audio", "有声书 / 音频：只要声音，按列表顺序，放进音声"},
 		{"video", "普通视频：按发布者分"},
 	}}
@@ -55,10 +55,10 @@ func (r *Router) schemeKinds() []*dlKind {
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("music", p) },
 		},
 		{
-			ID: "youtube", Title: "YouTube", Description: "一次可以填很多个频道、播放列表或视频，选一个模式：MV 模式只留正式 MV（去掉预告、练习室、舞台、花絮、反应视频），从标题认出艺人，放进「公司频道 / 艺人」，有 4K 就要；有声书模式只下声音，按列表顺序放进音声「书名」专辑（书名默认用播放列表名，可以改）；普通视频放进发布者文件夹。先「读取列表」看会下哪些、按组勾选，再一个一个下载。下过的自动跳过。",
+			ID: "youtube", Title: "YouTube", Description: "一次可以填很多个频道、播放列表或视频，选一个模式：女团 MV 模式只留正式 MV（去掉预告、练习室、舞台、花絮、反应视频），从标题认出艺人，按 Wikidata 只留女团（男团、个人歌手去掉，查不出的单独列出），放进「公司频道 / 团名」，有 4K 就要（和音乐方案歌手页下的欧美 MV 是两类）；有声书模式只下声音，按列表顺序放进音声「书名」专辑（书名默认用播放列表名，可以改）；普通视频放进发布者文件夹。先「读取列表」看会下哪些、按组勾选，再一个一个下载。下过的自动跳过。",
 			Scheme: &dlScheme{Steps: []string{"粘贴频道/播放列表/视频链接（一行一个）", "选模式", "读取列表，勾选要的", "一个一个下载到暂存区（下过的跳过）", "移入资源库"},
 				Destination: "短视频 / YouTube / <发布者>/", Listable: true,
-				ModeDestinations: map[string]string{"mv": "短视频 / YouTube / <公司频道>/<艺人>/", "audio": "音声 / <书名>/", "video": "短视频 / YouTube / <发布者>/"},
+				ModeDestinations: map[string]string{"girls": "短视频 / YouTube / <公司频道>/<团名>/", "audio": "音声 / <书名>/", "video": "短视频 / YouTube / <发布者>/"},
 				Input:            "频道、播放列表或视频链接，一行一个", Placeholder: "https://www.youtube.com/@HYBELABELS\nhttps://www.youtube.com/playlist?list=…\nhttps://www.youtube.com/watch?v=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
 			Fields: []dlField{urls, mode, library},
@@ -140,7 +140,7 @@ func (r *Router) buildList(scheme string, p dlParams, urls []string) (dlPlan, er
 // videoArgs 是视频方案的模式与书名（读取列表和下载共用）。
 func videoArgs(p dlParams) []string {
 	var args []string
-	if m := p.text("mode"); m == "video" || m == "mv" || m == "audio" {
+	if m := p.text("mode"); m == "video" || m == "girls" || m == "audio" {
 		args = append(args, "--mode", m)
 	}
 	return args

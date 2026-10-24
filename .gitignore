@@ -7,3 +7,4 @@ build/
 __pycache__/
 web/dist/
 web/vendor/
+features/downloads/artist-kinds.json
