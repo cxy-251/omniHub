@@ -19,8 +19,9 @@ const maxDirEntries = 50000
 
 var imageExtensions = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true}
 
-// 下载插件的命名：2024-12-05_标题_7444881751299657018；YouTube 下载：2022-04-05_标题_Y8JFxS1HlDo（11 位视频 ID）
-var namePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(.*?)(?:_([0-9a-f]{16,}|\d{10,}|[A-Za-z0-9_-]{11}))?$`)
+// 下载插件的命名：2024-12-05_标题_7444881751299657018；YouTube 下载：2022-04-05_标题_Y8JFxS1HlDo（11 位视频 ID）；
+// B 站下载：2019-12-31_标题_BV1GJ411x7h7
+var namePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(.*?)(?:_([0-9a-f]{16,}|\d{10,}|BV[0-9A-Za-z]{10}|[A-Za-z0-9_-]{11}))?$`)
 
 // ScanStats 汇总一次扫描的变化。
 type ScanStats struct {

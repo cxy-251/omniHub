@@ -278,7 +278,7 @@ def list_videos(a):
     """视频方案读列表（只读列表页，不逐个打开视频）：按模式筛选、排序、定默认勾选。返回列表（plan）。"""
     import rank
     import ytmusic
-    done, videos, skipped, ndone, errors, other_count = archived(a), [], [], 0, 0, 0
+    done, videos, skipped, ndone, errors, other_count, shorts = archived(a), [], [], 0, 0, 0, 0
     book = ""
     for i, url in enumerate(a.urls):
         url = normalize(url)
@@ -294,6 +294,9 @@ def list_videos(a):
         for k, e in enumerate(entries):
             if e["id"] in done:
                 ndone += 1
+                continue
+            if "/shorts/" in (e.get("url") or "") or "/shorts/" in (e.get("source") or ""):   # 不下 Shorts（Shorts 分页、单个 Shorts 链接）
+                shorts += 1
                 continue
             channel = e.get("uploader") or re.sub(r"\s+-\s+(Videos|Shorts|Live|Home|Playlists)$", "", title or "")   # 「HYBE LABELS - Videos」→ 频道名
             item = {"id": e["id"], "url": e["url"], "title": e["title"], "channel": channel,
@@ -346,10 +349,10 @@ def list_videos(a):
     for k, v in enumerate(videos):
         v["picked"] = (v.get("kind") == "girl") if a.mode in ("girls", "girlvideo") else (not many or (a.mode == "video" and k < PICK_TOP) or a.mode == "audio")
     plan = {"urls": a.urls, "mode": a.mode, "videos": videos, "book": book, "skipped": skipped, "other_count": other_count,
-            "done_count": ndone, "songs": [], "mvs": [], "done": [], "other": [], "errors": errors,
+            "done_count": ndone, "shorts": shorts, "songs": [], "mvs": [], "done": [], "other": [], "errors": errors,
             "pick_note": f"太多了：默认勾播放量前 {PICK_TOP} 个" if many and a.mode == "video" else ""}
     log(f"列表：候选 {len(videos)} 个（默认勾上 {sum(v['picked'] for v in videos)} 个）；带 MV 字样但不要的 {len(skipped)} 个；"
-        f"其他视频 {other_count} 个；已下载过 {ndone} 个；出错 {errors} 个")
+        f"其他视频 {other_count} 个；Shorts {shorts} 个（不下）；已下载过 {ndone} 个；出错 {errors} 个")
     return plan
 
 

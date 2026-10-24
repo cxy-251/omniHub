@@ -22,6 +22,7 @@ func TestScanVideoSubfolders(t *testing.T) {
 	write("YouTube/STARSHIP/IVE/2022-04-05_IVE 'LOVE DIVE' MV_Y8JFxS1HlDo.mp4")
 	write("YouTube/STARSHIP/2020-01-01_公司宣传片_abcdefghijk.mp4")
 	write("抖音/博主/2024-01-01_图集_1234567890/01.webp")
+	write("B站/UP主/2019-12-31_【官方 MV】Never Gonna Give You Up_BV1GJ411x7h7.mp4")
 	s, err := Open(dir, false)
 	if err != nil {
 		t.Fatal(err)
@@ -31,8 +32,11 @@ func TestScanVideoSubfolders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Videos != 2 || stats.Albums != 1 {
-		t.Fatalf("videos=%d albums=%d, want 2 and 1", stats.Videos, stats.Albums)
+	if stats.Videos != 3 || stats.Albums != 1 {
+		t.Fatalf("videos=%d albums=%d, want 3 and 1", stats.Videos, stats.Albums)
+	}
+	if p, _, err := s.Post("B站/UP主/2019-12-31_【官方 MV】Never Gonna Give You Up_BV1GJ411x7h7.mp4"); err != nil || p.Title != "【官方 MV】Never Gonna Give You Up" {
+		t.Fatalf("bilibili post = %+v, %v", p, err)
 	}
 	creators, err := s.Creators("YouTube")
 	if err != nil {

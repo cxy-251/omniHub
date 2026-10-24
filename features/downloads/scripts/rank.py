@@ -58,8 +58,10 @@ def extract_list(url, cookies, pool):
         info = ydl.extract_info(url, download=False) or {}
     if not info:
         raise RuntimeError("读不出列表（网站拒绝或需要登录：到「下载 → 账号与 Cookie」读取该平台的 Cookie）")
-    if info.get("_type") not in ("playlist", "multi_video"):
-        return info.get("title") or "", [{"id": str(info.get("id") or ""), "url": info.get("webpage_url") or url, "title": info.get("title") or ""}], False
+    if info.get("_type") not in ("playlist", "multi_video"):   # 单个视频：原链接留着（Shorts 要靠它认出来）
+        return info.get("title") or "", [{"id": str(info.get("id") or ""), "url": info.get("webpage_url") or url, "title": info.get("title") or "",
+                                          "uploader": info.get("channel") or info.get("uploader") or "", "views": info.get("view_count"),
+                                          "source": url}], False
     out = []
     for e in info.get("entries") or []:
         if not e:
@@ -70,8 +72,37 @@ def extract_list(url, cookies, pool):
         if u:
             out.append({"id": str(e.get("id") or ""), "url": u, "title": e.get("title") or "",
                         "uploader": e.get("channel") or e.get("uploader") or "", "views": e.get("view_count")})
+    if any(not e["title"] and "bilibili.com" in e["url"] for e in out):
+        fill_bilibili(out)
     title = re.sub(r"^Album - ", "", info.get("title") or info.get("channel") or "")
+    if not title and out and "bilibili.com" in url:   # B 站个人空间：列表没有名字，用 UP 主名
+        title = out[0].get("uploader") or ""
     return title, out, is_album(url, info)
+
+
+def fill_bilibili(entries):
+    """B 站个人空间、合集的列表只有视频编号：用 B 站公开的视频信息接口（不用登录）补标题、UP 主、播放量，
+    两次请求隔 0.3 秒。失败的留空。"""
+    handlers = []
+    if os.environ.get("OMNIHUB_YTDLP_PROXY"):
+        proxy = os.environ["OMNIHUB_YTDLP_PROXY"]
+        handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    opener = urllib.request.build_opener(*handlers)
+    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) omniHub", "Referer": "https://www.bilibili.com/"}
+    for e in entries:
+        m = re.search(r"(BV[0-9A-Za-z]{10})", e["url"])
+        if e["title"] or not m:
+            continue
+        try:
+            req = urllib.request.Request("https://api.bilibili.com/x/web-interface/view?bvid=" + m.group(1), headers=headers)
+            with opener.open(req, timeout=20) as r:
+                data = (json.load(r) or {}).get("data") or {}
+            e["title"] = data.get("title") or ""
+            e["uploader"] = (data.get("owner") or {}).get("name") or e.get("uploader") or ""
+            e["views"] = (data.get("stat") or {}).get("view")
+        except Exception as err:
+            print(f"  B 站视频信息没取到（{m.group(1)}）：{err}", flush=True)
+        time.sleep(0.3)
 
 
 def guess_artist_track(d):
