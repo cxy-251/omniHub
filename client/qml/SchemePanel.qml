@@ -32,7 +32,7 @@ ColumnLayout {
         kind.fields.forEach(function (f) { if (f.default !== undefined) v[f.name] = f.default })
         values = v; input = ""; analysis = {items: []}
         plan = null; planJob = null; planToken = ""; excluded = {}
-        if (kind.id === "music") restoreList()   // 不用 isMusic：换方案时这个绑定可能还没更新
+        if (kind.scheme && kind.scheme.listable) restoreList()   // 不用 listable：换方案时这个绑定可能还没更新
     }
     onKindChanged: reset()
     Component.onCompleted: reset()
@@ -46,73 +46,105 @@ ColumnLayout {
         panel.run(p)
     }
 
-    // ---- 音乐：读取列表 ----
+    // ---- 读取列表（音乐、YouTube 等）：先看会下什么、去掉不要的勾，再按列表下 ----
     readonly property bool isMusic: kind.id === "music"
+    readonly property bool listable: !!scheme.listable
     property string planToken: ""
     property var planJob: null     // 读取列表的任务（/api/downloads/jobs 里的一项）
-    property var plan: null        // 读出来的列表：songs、mvs、skipped、done、other
+    property var plan: null        // 读出来的列表：songs、mvs、videos、skipped、done、other
     property var excluded: ({})    // 去掉勾的视频 ID
     readonly property bool listing: !!planJob && planJob.running
     readonly property bool listFailed: !!planJob && !planJob.running && planJob.exit_code !== 0
-    // 读取在服务端后台跑：切到别的标签页、关掉下载页再回来，按存下的令牌和任务接着看
-    Settings { id: listPrefs; category: "musicList"; property string input: ""; property string token: ""; property string job: ""; property string excluded: "" }
-    function clearPlan() { planToken = ""; planJob = null; plan = null; excluded = {}; listPrefs.token = ""; listPrefs.job = ""; listPrefs.excluded = "" }
+    // 读取在服务端后台跑：切到别的标签页、关掉下载页再回来，按存下的令牌和任务接着看（每个方案一份）
+    Settings { id: listPrefs; category: "downloadLists"; property string state: "{}" }
+    function saved() { try { return JSON.parse(listPrefs.state)[kind.id] || {} } catch (e) { return {} } }
+    function save(fields) {
+        var all = {}
+        try { all = JSON.parse(listPrefs.state) } catch (e) {}
+        all[kind.id] = Object.assign(all[kind.id] || {}, fields)
+        listPrefs.state = JSON.stringify(all)
+    }
+    function clearPlan() { planToken = ""; planJob = null; plan = null; excluded = {}; save({token: "", job: "", excluded: {}, picked: false}) }
     function readList() {
         clearPlan()
         planToken = Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
-        var params = {step: "list", plan_token: planToken, urls: lines.join("\n"), library: stagingLibrary || values.library || ""}
-        api.send("POST", "/api/downloads/run", {kind: "music", params: params}, listStarted)
+        var params = Object.assign({}, values, {step: "list", plan_token: planToken, urls: lines.join("\n"), library: stagingLibrary || values.library || ""})
+        api.send("POST", "/api/downloads/run", {kind: kind.id, params: params}, listStarted)
     }
-    function listStarted(job) { planJob = job; listPrefs.token = planToken; listPrefs.job = job.id }
-    onInputChanged: if (kind.id === "music") listPrefs.input = input
+    function listStarted(job) { planJob = job; save({token: planToken, job: job.id}) }
+    onInputChanged: if (kind.scheme && kind.scheme.listable) save({input: input})
     function restoreList() {
-        input = listPrefs.input
-        if (!listPrefs.token) return
-        planToken = listPrefs.token
-        excluded = listPrefs.excluded ? JSON.parse(listPrefs.excluded) : {}
-        planJob = {id: listPrefs.job, running: true, done: 0, total: 0, step: "", tail: []}
+        var st = saved()
+        input = st.input || ""
+        if (!st.token) return
+        planToken = st.token
+        excluded = st.excluded || {}
+        planJob = {id: st.job, running: true, done: 0, total: 0, step: "", tail: []}
         pollList()
+    }
+    function planLoaded(r) {
+        // 视频方案：排名在前 N 之后的默认不勾（只在第一次取到列表时；之后按用户改过的）
+        if (!saved().picked) {
+            var m = Object.assign({}, excluded)
+            ;(r.videos || []).forEach(function (v) { if (!v.picked) m[v.id] = true })
+            excluded = m
+            save({picked: true})
+        }
+        plan = r
     }
     function pollList() {
         api.getJSON("/api/downloads/jobs", function (list) {
             var job = list.find(function (j) { return panel.planJob && j.id === panel.planJob.id })
             if (job) panel.planJob = job
             if (!job || (!job.running && job.exit_code === 0))   // 任务不在了（服务端重启过）就直接取列表文件，取不到就作废
-                api.send("GET", "/api/downloads/plan?token=" + panel.planToken, null, function (r) { panel.plan = r },
+                api.send("GET", "/api/downloads/plan?token=" + panel.planToken, null, panel.planLoaded,
                          function () { panel.clearPlan() })
         })
     }
     Timer { interval: 1500; repeat: true; running: panel.listing; onTriggered: panel.pollList() }
     function toggle(id, on) { var m = Object.assign({}, excluded); if (on) delete m[id]; else m[id] = true; excluded = m }
-    onExcludedChanged: if (planToken) listPrefs.excluded = JSON.stringify(excluded)
+    onExcludedChanged: if (planToken) save({excluded: excluded})
     function setAll(type, on) {
         var m = Object.assign({}, excluded)
         rows.forEach(function (r) { if (r.type === type) { if (on) delete m[r.id]; else m[r.id] = true } })
         excluded = m
     }
     function count(type) { return rows.filter(function (r) { return r.type === type && !panel.excluded[r.id] }).length }
-    // 列表的每一行：分组标题、要下的歌、MV、其他网站链接、不下的、已下载过的
+    function views(n) { return n === null || n === undefined ? "播放量不明" : n >= 1e8 ? (n / 1e8).toFixed(1) + " 亿次" : n >= 1e4 ? Math.round(n / 1e4) + " 万次" : n + " 次" }
+    // 列表的每一行：分组标题、要下的歌、MV、视频、其他网站链接、不下的、已下载过的
     readonly property var rows: {
         if (!plan) return []
         var out = []
         var who = function (x) { return (x.artists && x.artists.length ? x.artists.join(" / ") + " - " : "") + (x.title || x.id) }
-        var songs = plan.songs.slice().sort(function (a, b) { return a.path.localeCompare(b.path, undefined, {numeric: true}) })
+        var songs = (plan.songs || []).slice().sort(function (a, b) { return a.path.localeCompare(b.path, undefined, {numeric: true}) })
         if (songs.length) out.push({type: "head", group: "song", text: "要下的歌 " + songs.length + " 首（放到 音声/音乐/ 下的位置）"})
         songs.forEach(function (x) { out.push({type: "song", id: x.id, text: x.path, note: x.source === "纯音轨" ? "" : x.source}) })
-        var mvs = plan.mvs.filter(function (m) { return !m.done })
+        var mvs = (plan.mvs || []).filter(function (m) { return !m.done })
         if (mvs.length) out.push({type: "head", group: "mv", text: "MV " + mvs.length + " 个（下成视频，放到 短视频/MV/<歌手>/）"})
         mvs.forEach(function (m) { out.push({type: "mv", id: m.id, text: m.title, note: m.artist}) })
-        if (plan.other.length) out.push({type: "head", text: "其他网站的链接 " + plan.other.length + " 个（不查纯音轨版，按原视频下音频）"})
-        plan.other.forEach(function (u) { out.push({type: "other", text: u}) })
-        if (plan.skipped.length) out.push({type: "head", text: "不下 " + plan.skipped.length + " 首"})
+        var videos = plan.videos || []
+        if (videos.length) out.push({type: "head", group: "video", text: "候选视频 " + videos.length + " 个（按播放量排，前 " + (values.top || "N") + " 个默认勾上；放到 " + scheme.destination + "）"})
+        videos.forEach(function (v) { out.push({type: "video", id: v.id, text: v.title, note: views(v.views) + " · " + v.channel}) })
+        if ((plan.other || []).length) out.push({type: "head", text: "其他网站的链接 " + plan.other.length + " 个（不查纯音轨版，按原视频下音频）"})
+        ;(plan.other || []).forEach(function (u) { out.push({type: "other", text: u}) })
+        if (plan.off_topic) out.push({type: "head", text: "标题里没有要的团名 " + plan.off_topic + " 个（频道里别的艺人，不列出）"})
+        if (plan.skipped.length) out.push({type: "head", text: "不下 " + plan.skipped.length + " 个"})
         plan.skipped.forEach(function (x) { out.push({type: "skip", text: who(x), note: x.reason || ""}) })
-        var done = plan.done.map(who).concat(plan.mvs.filter(function (m) { return m.done }).map(function (m) { return "MV：" + m.title }))
-        if (done.length) out.push({type: "head", text: "已下载过 " + done.length + " 个（跳过）"})
+        var done = (plan.done || []).map(who).concat(mvs.length < (plan.mvs || []).length ? plan.mvs.filter(function (m) { return m.done }).map(function (m) { return "MV：" + m.title }) : [])
+        var doneCount = done.length + (plan.done_count || 0)
+        if (doneCount) out.push({type: "head", text: "已下载过 " + doneCount + " 个（跳过）"})
         done.forEach(function (t) { out.push({type: "done", text: t}) })
         return out
     }
+    function pickedText() {
+        var parts = []
+        if (count("song")) parts.push("歌 " + count("song") + " 首")
+        if (count("mv")) parts.push("MV " + count("mv") + " 个")
+        if (count("video")) parts.push("视频 " + count("video") + " 个")
+        return parts.join("、") || "没有勾选"
+    }
     function startPlan() {
-        var p = {plan: planToken, urls: lines.join("\n"), library: stagingLibrary || values.library || "", exclude: Object.keys(excluded).join(",")}
+        var p = Object.assign({}, values, {plan: planToken, urls: lines.join("\n"), library: stagingLibrary || values.library || "", exclude: Object.keys(excluded).join(",")})
         panel.run(p)
         clearPlan()
     }
@@ -188,19 +220,19 @@ ColumnLayout {
         }
     }
 
-    // 音乐：读取列表的进度与结果
+    // 读取列表的进度与结果
     Label {
-        visible: panel.isMusic && !!panel.planJob && !panel.plan
+        visible: panel.listable && !!panel.planJob && !panel.plan
         Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
         color: panel.listFailed ? "#f85149" : "#58a6ff"
         text: !panel.planJob ? "" : panel.listFailed ? "读取失败：" + (panel.planJob.tail || []).join(" ") + "（完整日志在「任务」里）"
-            : panel.listing ? "正在读取列表（只查不下载；歌手页要逐张读专辑，几十张要两三分钟，可以先去别的页面，回来接着看）\n"
+            : panel.listing ? "正在读取列表（只查不下载；" + (panel.isMusic ? "歌手页要逐张读专辑，几十张要两三分钟" : "大频道的列表页要读一两分钟，没有播放量的还要逐个补") + "，可以先去别的页面，回来接着看）\n"
                               + (panel.planJob.step || "准备中（第一次要安装依赖）…")
                               + ((panel.planJob.tail || []).length ? "\n最近：" + panel.planJob.tail[panel.planJob.tail.length - 1] : "")
             : "读取完成，正在取列表…"
     }
     Rectangle {
-        visible: panel.isMusic && !!panel.plan
+        visible: panel.listable && !!panel.plan
         Layout.fillWidth: true
         implicitHeight: Math.min(460, planList.contentHeight + 12)
         color: "#0d1117"; border.color: "#30363d"; radius: 4
@@ -213,7 +245,7 @@ ColumnLayout {
             ScrollBar.vertical: ScrollBar {}
             delegate: RowLayout {
                 required property var modelData
-                readonly property bool pickable: modelData.type === "song" || modelData.type === "mv"
+                readonly property bool pickable: modelData.type === "song" || modelData.type === "mv" || modelData.type === "video"
                 width: planList.width - 12
                 spacing: 6
                 CheckBox {
@@ -249,9 +281,9 @@ ColumnLayout {
         Label {
             Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12; color: "#8b949e"
             text: !panel.lines.length ? "先在上面粘贴链接。"
-                : panel.isMusic && panel.plan ? "按上面的列表下：歌 " + panel.count("song") + " 首、MV " + panel.count("mv") + " 个"
-                  + (panel.plan.other.length ? "，其他网站链接 " + panel.plan.other.length + " 个" : "") + "。去掉勾的不下；改了链接要重新读取。"
-                : panel.isMusic ? panel.lines.length + " 个链接。先「读取列表」看会下哪些歌、哪些 MV、哪些不下，再开始下载；也可以不看直接下。"
+                : panel.listable && panel.plan ? "按上面的列表一个一个下：" + panel.pickedText()
+                  + ((panel.plan.other || []).length ? "，其他网站链接 " + panel.plan.other.length + " 个" : "") + "。去掉勾的不下；改了链接或选项要重新读取。"
+                : panel.listable ? panel.lines.length + " 个链接。先「读取列表」看会下哪些、哪些不下，再开始下载；也可以不看直接下。"
                 : panel.lines.length + " 个链接"
                   + (!panel.scheme.ranked ? "" : panel.values.rank === "none" ? "，每个全部下载"
                      : "，每个读一次列表页、按" + panel.optionLabel("rank") + "取" + panel.optionLabel("top") + "（排名表写进任务日志）"
@@ -259,13 +291,14 @@ ColumnLayout {
                   + "，排成一个任务在后台下完，下过的自动跳过。"
                   + (panel.kind.id === "music" ? "全部下载不筛选；每首的播放数、点赞、发布日期、下载日期和 Last.fm 信息（风格、听众、重播率）写进文件，播放时显示。" : "")
         }
-        Chip { visible: panel.isMusic && !panel.plan; text: "不看列表，直接下载"; enabled: panel.ready && !panel.listing; onClicked: panel.start() }
+        Chip { visible: panel.listable && !panel.plan; text: "不看列表，直接下载"; enabled: panel.ready && !panel.listing; onClicked: panel.start() }
+        Chip { visible: panel.listable && !!panel.plan; text: "重新读取"; enabled: panel.ready; onClicked: panel.readList() }
         PrimaryButton {
-            visible: panel.isMusic
-            text: panel.plan ? "开始下载（歌 " + panel.count("song") + " 首、MV " + panel.count("mv") + " 个）" : panel.listing ? "读取中…" : "读取列表"
-            enabled: panel.ready && !panel.listing && (!panel.plan || panel.count("song") + panel.count("mv") + panel.plan.other.length > 0)
+            visible: panel.listable
+            text: panel.plan ? "开始下载（" + panel.pickedText() + "）" : panel.listing ? "读取中…" : "读取列表"
+            enabled: panel.ready && !panel.listing && (!panel.plan || panel.count("song") + panel.count("mv") + panel.count("video") + (panel.plan.other || []).length > 0)
             onClicked: panel.plan ? panel.startPlan() : panel.readList()
         }
-        PrimaryButton { visible: !panel.isMusic; text: panel.lines.length ? "开始下载 " + panel.lines.length + " 个链接" : "开始下载"; enabled: panel.ready; onClicked: panel.start() }
+        PrimaryButton { visible: !panel.listable; text: panel.lines.length ? "开始下载 " + panel.lines.length + " 个链接" : "开始下载"; enabled: panel.ready; onClicked: panel.start() }
     }
 }

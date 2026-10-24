@@ -246,6 +246,60 @@ def planned_path(info):
     return "/".join([safe(artist)] + ([safe(album)] if album else []) + [name])
 
 
+OFF_TOPIC = "标题里没有要的团名"
+
+
+def video_keep(a):
+    """视频方案的筛选：--only mv 只要正式 MV（按标题，见 ytmusic.is_mv）；--keywords 标题里要有其中一个词（如团名，逗号分隔）。
+    返回 keep(条目) → 不要的原因或 None。"""
+    import ytmusic
+    words = [w.strip().casefold() for w in re.split(r"[,，\n]", a.keywords) if w.strip()]
+
+    def keep(e):
+        t = e.get("title") or ""
+        if words and not any(re.search(r"(?<![a-z0-9])" + re.escape(w) + r"(?![a-z0-9])", t.casefold()) for w in words):   # 整词：IVE 不算 FIVE
+            return OFF_TOPIC
+        if a.only == "mv" and not ytmusic.is_mv(t):
+            return "不是正式 MV（预告、练习室、舞台、花絮、反应视频等）" if ytmusic.MV_TITLE.search(t) else "不是 MV"
+        return None
+    return keep
+
+
+def write_video_plan(a):
+    """视频方案只读取、不下载：每个链接读一次列表页、筛选、按播放量排名，前 N 个默认勾上，其余列出来不勾。"""
+    import rank
+    done, videos, skipped, ndone, errors, off_topic = archived(a), [], [], 0, 0, 0
+    keep = video_keep(a)
+    for i, url in enumerate(a.urls):
+        url = normalize(url)
+        progress(i, len(a.urls), f"读第 {i + 1}/{len(a.urls)} 个链接：{url}")
+        try:
+            title, cands, dropped, n = rank.candidates(url, cookie_file(platform_of(url)["id"]), a.rank, done, keep, progress, log)
+        except Exception as e:
+            log(f"ERROR: 读取失败 {url}：{e}")
+            errors += 1
+            continue
+        ndone += n
+        for k, e in enumerate(cands):
+            videos.append({"id": e["id"], "url": e["url"], "title": e["title"], "channel": e.get("uploader") or title,
+                           "views": e.get("views"), "list": title, "picked": a.rank == "none" or a.top <= 0 or k < a.top})
+        # 标题里没有团名的（公司频道里别的艺人）只记数量，不列出来
+        skipped += [{"id": e["id"], "title": e["title"], "artists": [], "reason": e["reason"]} for e in dropped if e["reason"] != OFF_TOPIC]
+        off_topic += sum(e["reason"] == OFF_TOPIC for e in dropped)
+    plan = {"urls": a.urls, "songs": [], "mvs": [], "videos": videos, "skipped": skipped, "done": [],
+            "done_count": ndone, "off_topic": off_topic, "other": [], "errors": errors}
+    save_plan(a, plan)
+    log(f"列表：候选 {len(videos)} 个（默认勾上 {sum(v['picked'] for v in videos)} 个）；不要的 {len(skipped)} 个；标题里没有团名的 {off_topic} 个；"
+        f"已下载过 {ndone} 个；出错 {errors} 个")
+
+
+def save_plan(a, plan):
+    os.makedirs(os.path.dirname(a.plan_out), exist_ok=True)
+    with open(a.plan_out + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(plan, f, ensure_ascii=False)
+    os.replace(a.plan_out + ".tmp", a.plan_out)
+
+
 def write_plan(a):
     """只读取、不下载：把会下什么写进 a.plan_out（JSON），给界面列出来勾选。
     songs 要下的歌（含归档位置、来源）；mvs 歌手的 MV；skipped 不下的及原因；done 已下载过的；other 不经 YouTube Music 的链接（B 站等，按原视频下）。"""
@@ -263,10 +317,7 @@ def write_plan(a):
            for name, items in a.mv_jobs for vid, title in items]
     plan = {"urls": a.urls, "songs": songs, "mvs": mvs, "skipped": a.music_skipped, "done": a.music_done,
             "other": other, "errors": errors}
-    os.makedirs(os.path.dirname(a.plan_out), exist_ok=True)
-    with open(a.plan_out + ".tmp", "w", encoding="utf-8") as f:
-        json.dump(plan, f, ensure_ascii=False)
-    os.replace(a.plan_out + ".tmp", a.plan_out)
+    save_plan(a, plan)
     log(f"列表：要下 {len(songs)} 首、MV {sum(1 for m in mvs if not m['done'])} 个；不下 {len(a.music_skipped)} 首；"
         f"已下载过 {len(a.music_done)} 首；其他网站链接 {len(other)} 个；出错 {errors} 个")
 
@@ -285,6 +336,14 @@ def load_plan(a):
             mvs.setdefault(m["artist"], []).append((m["id"], m["title"]))
     a.mv_jobs = list(mvs.items())
     return ["https://www.youtube.com/watch?v=" + v for v in a.music_info], plan.get("other") or []
+
+
+def load_video_plan(a):
+    """视频方案按读取好的列表下：去掉 --exclude 的。返回视频链接。"""
+    with open(a.plan, encoding="utf-8") as f:
+        plan = json.load(f)
+    skip = set(filter(None, a.exclude.split(",")))
+    return [v["url"] for v in plan.get("videos") or [] if v["id"] not in skip]
 
 
 def channel_id(url, opts):
@@ -616,7 +675,13 @@ def ranked(a):
         cookies = cookie_file(platform["id"])
         log(f"[{n + 1}/{len(a.urls)}] {url}")
         try:
-            title, chosen, rule = rank.pick(url, cookies, a.rank, a.top, done, progress, log)
+            if a.scheme == "music":
+                title, chosen, rule = rank.pick(url, cookies, a.rank, a.top, done, progress, log)
+            else:   # 视频：先筛（只要 MV、标题含团名），缺播放量的补上，再排名
+                title, cands, _, _ = rank.candidates(url, cookies, a.rank, done, video_keep(a), progress, log)
+                chosen, rule = cands[:a.top] if a.top > 0 else cands, a.rank
+                for k, c in enumerate(chosen, 1):
+                    log(f"   ✓ {k:>3}. 播放 {rank.fmt_count(c.get('views'))}  {c['title'][:70]}")
         except Exception as e:
             log(f"   提取或排名失败：{e}")
             errors += 1
@@ -703,6 +768,8 @@ def main():
     p.add_argument("--plan-out", default="", help="音乐：只读取列表，把会下什么写进这个 JSON 文件，不下载")
     p.add_argument("--plan", default="", help="音乐：按读取好的列表（--plan-out 写的文件）下载")
     p.add_argument("--exclude", default="", help="按列表下载时不要的视频 ID，逗号分隔")
+    p.add_argument("--only", choices=["all", "mv"], default="all", help="视频：mv 只要正式 MV（按标题）")
+    p.add_argument("--keywords", default="", help="视频：标题里要有其中一个词（逗号分隔，如团名）")
     a = p.parse_args()
     a.lastfm_known = {}   # 排名时查到的 Last.fm 信息（按视频 ID），下载后写进标签时复用
     a.album_of = {}       # 文件 → (专辑名, 曲序)：指定了专辑时由 ytdlp() 记下
@@ -713,6 +780,10 @@ def main():
     a.music_skipped = []  # 不下的歌及原因、已下载过的：读取列表时列出来
     a.music_done = []
 
+    if a.plan_out and a.scheme in ("youtube", "bilibili"):
+        write_video_plan(a)
+        print("OMNIHUB_RESULT " + json.dumps({"plan": a.plan_out}, ensure_ascii=False), flush=True)
+        return
     if a.scheme == "music" and a.plan_out:
         write_plan(a)
         print("OMNIHUB_RESULT " + json.dumps({"plan": a.plan_out}, ensure_ascii=False), flush=True)
@@ -728,6 +799,11 @@ def main():
         for urls in groups.values():
             f, s, e = ytdlp(urls, a, platform_of(urls[0]))
             files, skipped, errors = files + f, skipped + s, errors + e
+    elif a.plan and a.scheme in ("youtube", "bilibili"):
+        a.per_list, a.items = 0, ""
+        urls = load_video_plan(a)
+        platform = next((p for p in PLATFORMS if p["id"] == SCHEME_PLATFORM[a.scheme]), platform_of(urls[0]) if urls else {})
+        files, skipped, errors = ytdlp(urls, a, platform) if urls else ([], 0, 0)
     elif a.scheme == "music" and a.plan:
         songs, other = load_plan(a)
         youtube = next((p for p in PLATFORMS if p["id"] == "youtube"), platform_of(songs[0]) if songs else {"id": "youtube", "dir": "YouTube"})

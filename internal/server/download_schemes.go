@@ -25,7 +25,8 @@ type dlScheme struct {
 	Destination string   `json:"destination"` // 下到哪里（移入资源库后）
 	Input       string   `json:"input"`       // 输入框说明
 	Placeholder string   `json:"placeholder"`
-	Ranked      bool     `json:"ranked"` // 有「按什么挑、每个链接取」（列表类方案）
+	Ranked      bool     `json:"ranked"`   // 有「按什么挑、每个链接取」（列表类方案）
+	Listable    bool     `json:"listable"` // 可以先「读取列表」看会下什么、勾选后再下
 }
 
 func archivePath(root, scheme string) string {
@@ -43,24 +44,28 @@ func (r *Router) schemeKinds() []*dlKind {
 	}
 	videoRank := rankField([]dlOption{{"views", "播放量"}, {"none", "不挑，全下"}}, "views")
 	top := dlField{Name: "top", Label: "每个链接取", Type: "choice", Default: "30", Options: []dlOption{{"10", "前 10 个"}, {"30", "前 30 个"}, {"100", "前 100 个"}}}
+	onlyMV := dlField{Name: "only", Label: "只要", Type: "choice", Default: "mv", Options: []dlOption{{"mv", "正式 MV"}, {"all", "全部视频"}}}
+	keywords := dlField{Name: "keywords", Label: "标题含", Type: "text", Help: "团名，逗号分隔；留空不限"}
+	height4k := height
+	height4k.Default = "2160"
 	steps := func(first string) []string {
 		return []string{first, "读每个链接的列表页，按重播率或播放量排名取前 N 个", "依次下载到暂存区（下过的跳过）", "在「暂存区」试看试听、删掉不要的", "移入资源库"}
 	}
 	return []*dlKind{
 		{
 			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑、单曲或歌手页（YouTube、YouTube Music、B 站等），全部下载，不筛选。YouTube 的歌换成 YouTube Music 上的纯音轨版（MV 有片头片尾，不下它的音频）；找不到纯音轨版时只收官方音频（Official Audio），MV、歌词视频、现场、翻唱都不下。按歌手归档：属于专辑、EP 的歌放进歌手下的专辑文件夹，单曲放在歌手文件夹里。歌手页（YouTube Music 歌手页或歌手的官方频道）下全部专辑、EP、单曲，同一首只留最早发行的那版，MV（标题写着 Music Video、Official Video、MV 的，歌词视频、现场不算）下成视频放进短视频的 MV/<歌手>。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
-			Scheme: &dlScheme{Steps: []string{"粘贴歌单/专辑/歌手链接（一行一个）", "读取列表：看会下哪些歌和 MV、哪些不下，去掉不要的勾", "下载到暂存区（下过的跳过）", "播放数、点赞、日期、Last.fm 信息写进标签", "在「暂存区」试听、删掉不要的", "移入资源库"}, Destination: "音声 / 音乐 / <歌手>/（整张专辑放 <歌手>/<专辑>/）",
+			Scheme: &dlScheme{Listable: true, Steps: []string{"粘贴歌单/专辑/歌手链接（一行一个）", "读取列表：看会下哪些歌和 MV、哪些不下，去掉不要的勾", "下载到暂存区（下过的跳过）", "播放数、点赞、日期、Last.fm 信息写进标签", "在「暂存区」试听、删掉不要的", "移入资源库"}, Destination: "音声 / 音乐 / <歌手>/（整张专辑放 <歌手>/<专辑>/）",
 				Input: "歌单、专辑、单曲或歌手页链接，一行一个", Placeholder: "https://music.youtube.com/playlist?list=LM（赞过的歌）\nhttps://music.youtube.com/channel/…（歌手）\nhttps://www.youtube.com/watch?v=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
 			Fields: []dlField{urls, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("music", p) },
 		},
 		{
-			ID: "youtube", Title: "YouTube", Description: "一次可以填很多个频道、播放列表或视频。按播放量取每个链接的前 N 个（或全下），排成一个任务下完，设好就不用管。下过的自动跳过。",
-			Scheme: &dlScheme{Steps: steps("粘贴频道/播放列表链接（一行一个）"), Destination: "短视频 / YouTube / <频道>/", Ranked: true,
-				Input: "频道、播放列表或视频链接，一行一个", Placeholder: "https://www.youtube.com/@频道名\nhttps://www.youtube.com/@另一个频道\nhttps://www.youtube.com/playlist?list=…"},
+			ID: "youtube", Title: "YouTube", Description: "一次可以填很多个频道、播放列表或视频（如韩国女团所在公司的频道）。可以只要正式 MV（按标题去掉预告、练习室、舞台、花絮、反应视频），只要标题里有某些团名的；按播放量取每个链接的前 N 个（列表页上没有播放量的逐个补上）。先「读取列表」看会下哪些、去掉不要的，再一个一个下载。下过的自动跳过。",
+			Scheme: &dlScheme{Steps: steps("粘贴频道/播放列表链接（一行一个）"), Destination: "短视频 / YouTube / <频道>/", Ranked: true, Listable: true,
+				Input: "频道、播放列表或视频链接，一行一个", Placeholder: "https://www.youtube.com/@HYBELABELS\nhttps://www.youtube.com/@starshipTV\nhttps://www.youtube.com/playlist?list=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, videoRank, top, height, library},
+			Fields: []dlField{urls, onlyMV, keywords, videoRank, top, height4k, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("youtube", p) },
 		},
 		{
@@ -106,8 +111,8 @@ func (r *Router) planPath(token string) (string, bool) {
 	return filepath.Join(r.cacheDir, "download-plans", token+".json"), true
 }
 
-// buildMusicList 是音乐的「读取列表」：脚本只展开链接、换纯音轨版、查专辑，把会下什么写进列表文件，不下载、不建暂存批次。
-func (r *Router) buildMusicList(p dlParams, urls []string) (dlPlan, error) {
+// buildList 是「读取列表」：脚本只展开链接、筛选（音乐还换纯音轨版、查专辑），把会下什么写进列表文件，不下载、不建暂存批次。
+func (r *Router) buildList(scheme string, p dlParams, urls []string) (dlPlan, error) {
 	path, ok := r.planPath(p.text("plan_token"))
 	if !ok {
 		return dlPlan{}, errors.New("缺少列表令牌")
@@ -129,8 +134,28 @@ func (r *Router) buildMusicList(p dlParams, urls []string) (dlPlan, error) {
 		}
 	}
 	args := append([]string{"scripts/general.py"}, urls...)
-	args = append(args, "--batch", dir, "--scheme", "music", "--archive", archivePath(lib.RootPath, "music"), "--plan-out", path)
-	return dlPlan{title: fmt.Sprintf("音乐 读取列表 %d 个链接", len(urls)), args: args, resource: strings.TrimSuffix(path, ".json"), lib: lib}, nil
+	args = append(args, "--batch", dir, "--scheme", scheme, "--archive", archivePath(lib.RootPath, scheme), "--plan-out", path)
+	args = append(args, videoFilterArgs(p)...)
+	titles := map[string]string{"music": "音乐", "youtube": "YouTube", "bilibili": "B站"}
+	return dlPlan{title: fmt.Sprintf("%s 读取列表 %d 个链接", titles[scheme], len(urls)), args: args, resource: strings.TrimSuffix(path, ".json"), lib: lib}, nil
+}
+
+// videoFilterArgs 是视频方案的筛选与排名参数（读取列表和直接下载共用）。
+func videoFilterArgs(p dlParams) []string {
+	var args []string
+	if v := p.text("only"); v == "mv" || v == "all" {
+		args = append(args, "--only", v)
+	}
+	if v := p.text("keywords"); v != "" {
+		args = append(args, "--keywords", v)
+	}
+	if rank := p.text("rank"); rank != "" {
+		args = append(args, "--rank", rank)
+	}
+	if top := p.text("top"); top != "" {
+		args = append(args, "--top", top)
+	}
+	return args
 }
 
 // buildScheme 建暂存批次并组好下载脚本的参数。
@@ -144,8 +169,8 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 			return dlPlan{}, fmt.Errorf("不是网址：%s", u)
 		}
 	}
-	if scheme == "music" && p.text("step") == "list" {
-		return r.buildMusicList(p, urls)
+	if p.text("step") == "list" && (scheme == "music" || scheme == "youtube" || scheme == "bilibili") {
+		return r.buildList(scheme, p, urls)
 	}
 	lib, err := r.writableLibrary(p.text("library"))
 	if err != nil {
@@ -178,7 +203,7 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 	if a := p.text("album"); a != "" {
 		args = append(args, "--album", a)
 	}
-	if token := p.text("plan"); scheme == "music" && token != "" { // 按读取好的列表下，去掉没勾的
+	if token := p.text("plan"); token != "" { // 按读取好的列表下，去掉没勾的
 		path, ok := r.planPath(token)
 		if !ok || !videoIDs.MatchString(p.text("exclude")) {
 			return dlPlan{}, errors.New("列表参数不对")
@@ -191,6 +216,12 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 	if p.text("mode") == "direct" {
 		if rank := p.text("rank"); rank != "" {
 			args = append(args, "--rank", rank, "--top", p.text("top"))
+		}
+		if v := p.text("only"); v == "mv" || v == "all" {
+			args = append(args, "--only", v)
+		}
+		if v := p.text("keywords"); v != "" {
+			args = append(args, "--keywords", v)
 		}
 	}
 	if m := p.text("x_media"); m != "" {

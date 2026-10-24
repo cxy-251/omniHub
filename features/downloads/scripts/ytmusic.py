@@ -11,8 +11,6 @@ import os
 import re
 import time
 
-from ytmusicapi import YTMusic
-
 _client = None
 _albums = {}   # 专辑 browseId → get_album 结果
 
@@ -20,6 +18,7 @@ _albums = {}   # 专辑 browseId → get_album 结果
 def client():
     global _client
     if _client is None:
+        from ytmusicapi import YTMusic   # 只判断标题时（YouTube 视频方案）用不到它
         proxy = os.environ.get("OMNIHUB_YTDLP_PROXY")
         _client = YTMusic(proxies={"http": proxy, "https": proxy} if proxy else None)
     return _client
@@ -121,7 +120,10 @@ MV_TITLE = re.compile(r"music\s*video|official\s*(?:hd\s*|4k\s*)?video|(?<![a-z]
 AUDIO_TITLE = re.compile(r"official\s*audio|[(\[]audio[)\]]|音频|音訊|音源", re.I)
 # 不要的：歌词视频、现场、翻唱、彩排、黑胶转盘视频、预告、花絮等
 NOT_WANTED = re.compile(r"lyric|\blive\b|concert|performance|rehearsal|cover|vinyl|visuali[sz]er|teaser|trailer|"
-                        r"behind|making|karaoke|ktv|interview|reaction|demo|歌词|歌詞|现场|現場|演唱会|演唱會|花絮|预告|預告|伴奏|翻唱", re.I)
+                        r"behind|making|karaoke|ktv|interview|reaction|demo|practice|choreograph|highlight|medley|"
+                        r"special video|track video|#shorts|\bshorts\b|relay|challenge|fancam|extra cut|sketch|"
+                        r"m/?v\s+bts\b|"
+                        r"歌词|歌詞|现场|現場|演唱会|演唱會|花絮|预告|預告|伴奏|翻唱|티저|비하인드|메이킹|직캠|안무|연습", re.I)
 _titles = {}
 LIVE = re.compile(r"\blive\b|现场|現場|演唱会|演唱會", re.I)
 
