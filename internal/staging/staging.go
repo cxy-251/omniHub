@@ -300,7 +300,14 @@ func Import(ctx context.Context, root, batch string, importGallery GalleryImport
 			res.Refused++
 		} else {
 			dst := filepath.Join(root, filepath.FromSlash(rel))
-			if _, err := os.Lstat(dst); err == nil {
+			if path.Base(rel) == RecordFile { // 插件的已下载名单只增不减：批次里的是最新的，覆盖库里旧的
+				if err := copyFile(filepath.Join(dir, filepath.FromSlash(rel)), dst); err != nil {
+					res.fail(rel, err)
+				} else {
+					_ = os.Remove(filepath.Join(dir, filepath.FromSlash(rel)))
+					res.Moved++
+				}
+			} else if _, err := os.Lstat(dst); err == nil {
 				res.Existing++
 			} else if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 				res.fail(rel, err)

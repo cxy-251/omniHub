@@ -3,6 +3,7 @@ package staging
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -28,8 +29,8 @@ type CollectResult struct {
 }
 
 // CollectBrowser 把 downloads/<平台>/<作者>/ 下插件下好的作品移进资源库 root 的一个新批次，
-// 落在 media_library/shortvideo/<平台>/<作者>/。每个作者文件夹里的 downloaded.txt 留在原处
-// （插件靠它和自己的记录判断哪些已经下过，移走会让插件以为没下过）。没有可收的内容时返回 ErrNothing、不建批次。
+// 落在 media_library/shortvideo/<平台>/<作者>/。每个作者文件夹里的 downloaded.txt（插件的已下载名单）留在原处
+// （插件靠它判断哪些已经下过，移走会让插件以为没下过），同时复制一份进批次，移入资源库时覆盖库里旧的那份。没有可收的内容时返回 ErrNothing、不建批次。
 func CollectBrowser(ctx context.Context, downloads, root string, progress func(done, total int)) (CollectResult, error) {
 	res := CollectResult{Authors: map[string]int{}}
 	type work struct{ platform, author, name string }
@@ -91,7 +92,50 @@ func CollectBrowser(ctx context.Context, downloads, root string, progress func(d
 			progress(i+1, len(todo))
 		}
 	}
+	for author := range res.Authors {
+		src := filepath.Join(downloads, filepath.FromSlash(author), RecordFile)
+		if _, err := os.Stat(src); err == nil {
+			if err := copyFile(src, filepath.Join(base, filepath.FromSlash(author), RecordFile)); err != nil && len(res.Errors) < 20 {
+				res.Errors = append(res.Errors, author+"/"+RecordFile+"："+err.Error())
+			}
+		}
+	}
 	return res, nil
+}
+
+// RecordFile 是浏览器插件在每个作者文件夹里记的已下载名单（一行「平台 作品ID」，只增不减）。
+const RecordFile = "downloaded.txt"
+
+// copyFile 复制到 dst（先写临时文件再改名，dst 已存在时替换）。
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	tmp := dst + ".omnihub-part"
+	out, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dst)
 }
 
 // recent 判断文件（或文件夹里任一文件）在 settleTime 内改过。
