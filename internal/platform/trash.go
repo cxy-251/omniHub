@@ -2,9 +2,11 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 )
 
 // Trash uses the platform recycle bin and fails instead of permanently deleting files.
@@ -28,5 +30,11 @@ func Trash(path string) error {
 	default:
 		return errors.New("recycle bin is unavailable on this platform")
 	}
-	return cmd.Run()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("%w：%s", err, msg)
+		}
+		return err
+	}
+	return nil
 }

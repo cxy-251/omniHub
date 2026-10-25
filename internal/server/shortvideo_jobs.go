@@ -173,6 +173,14 @@ func (r *Router) runShortVideoJob(job string) {
 		r.mergeShortVideo(libID, src)
 		return
 	}
+	switch job {
+	case "phone":
+		r.phoneShortVideo()
+		return
+	case "clean-phone":
+		r.cleanSyncedShortVideo()
+		return
+	}
 	if to, ok := strings.CutPrefix(job, "copy\x00"); ok {
 		r.copyShortVideo(to)
 		return
@@ -341,6 +349,120 @@ func (r *Router) copyShortVideo(toID string) {
 	w.poke()
 }
 
+// ConfigurePhone 设置 adb 位置与手机上 shortvideo/ 的路径。
+func (r *Router) ConfigurePhone(adb, dir string) {
+	r.phoneADB, r.phoneDir = adb, dir
+}
+
+// phoneEnds 连上手机，返回来源库（SSD）的 shortvideo/ 目录、来源库与手机。
+func (r *Router) phoneEnds(ctx context.Context) (string, *library.Library, shortvideo.Phone, error) {
+	source, _ := r.copyLibraries()
+	if source == nil {
+		for _, lib := range r.libMgr.ListLibraries() {
+			if lib.IsPrimary && lib.IsOnline && !lib.ReadOnly {
+				source = lib
+			}
+		}
+	}
+	if source == nil {
+		return "", nil, shortvideo.Phone{}, errors.New("主资源库不在线")
+	}
+	if r.phoneADB == "" {
+		return "", nil, shortvideo.Phone{}, errors.New("没找到 adb（Android platform-tools）")
+	}
+	src, err := r.moduleDirectory(source.RootPath, shortVideoCategory, shortvideo.DatabaseFiles...)
+	if err != nil {
+		return "", nil, shortvideo.Phone{}, err
+	}
+	phone, err := shortvideo.ConnectADB(ctx, r.phoneADB, r.phoneDir)
+	return src, source, phone, err
+}
+
+// keepDirs 是清理 SSD 时还要核对的库（SD 卡等补充目标）的 shortvideo/ 目录。
+func (r *Router) keepDirs() []string {
+	_, targets := r.copyLibraries()
+	var dirs []string
+	for _, t := range targets {
+		if d, err := r.moduleDirectory(t.RootPath, shortVideoCategory, shortvideo.DatabaseFiles...); err == nil {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
+}
+
+// phoneShortVideo 把 SSD 的短视频全部增量补到手机，下载记录两边合并到一致（见 shortvideo.RunPhone）。
+func (r *Router) phoneShortVideo() {
+	w := r.svJobs
+	ctx := w.begin("phone", 0)
+	src, source, phone, err := r.phoneEnds(ctx)
+	if err != nil {
+		w.finish("phone", "", err)
+		return
+	}
+	plan, listing, err := shortvideo.PlanPhone(ctx, src, phone)
+	if err != nil {
+		w.finish("phone", "", err)
+		return
+	}
+	w.mu.Lock()
+	w.total = plan.Count
+	w.mu.Unlock()
+	res, err := shortvideo.RunPhone(ctx, src, phone, plan, listing, func(done int, _ int64) {
+		w.mu.Lock()
+		w.done = done
+		w.mu.Unlock()
+	})
+	note := fmt.Sprintf("复制 %d 个文件（%.1f GB），手机上的下载记录补回 %d 个，推到手机 %d 个", res.Copied, float64(res.Bytes)/1e9, res.Back, res.Archives)
+	if len(plan.Conflicts) > 0 {
+		note += fmt.Sprintf("；%d 个同名文件大小不同，没有覆盖：%s", len(plan.Conflicts), strings.Join(plan.Conflicts[:min(3, len(plan.Conflicts))], "、"))
+	}
+	if errors.Is(err, context.Canceled) {
+		note, err = "已取消；"+note, nil
+	}
+	if store, dir, serr := r.svStore(source); serr == nil && res.Back > 0 {
+		_, _ = store.Scan(ctx, dir)
+	}
+	w.finish("phone", note, err)
+	w.poke()
+}
+
+// cleanSyncedShortVideo 把 SSD 上已同步到手机（和 SD 卡已有博主）的视频与图集移进回收站，保留下载记录。
+func (r *Router) cleanSyncedShortVideo() {
+	w := r.svJobs
+	ctx := w.begin("clean-phone", 0)
+	src, source, phone, err := r.phoneEnds(ctx)
+	if err != nil {
+		w.finish("clean-phone", "", err)
+		return
+	}
+	listing, err := phone.List(ctx)
+	if err != nil {
+		w.finish("clean-phone", "", err)
+		return
+	}
+	plan, err := shortvideo.PlanClean(src, listing, r.keepDirs())
+	if err != nil {
+		w.finish("clean-phone", "", err)
+		return
+	}
+	w.mu.Lock()
+	w.total = len(plan.Items)
+	w.mu.Unlock()
+	n, err := shortvideo.RunClean(ctx, plan, platform.Trash, func(int) { w.progress(0) })
+	note := fmt.Sprintf("移进回收站 %d 项（%d 个文件，%.1f GB）", n, plan.Files, float64(plan.Bytes)/1e9)
+	if plan.NotOnPhone+plan.NotOnKeep > 0 {
+		note += fmt.Sprintf("；保留手机上没有的 %d 个、SD 卡还没补的 %d 个", plan.NotOnPhone, plan.NotOnKeep)
+	}
+	if errors.Is(err, context.Canceled) {
+		note, err = "已取消；"+note, nil
+	}
+	if store, dir, serr := r.svStore(source); serr == nil {
+		_, _ = store.Scan(ctx, dir)
+	}
+	w.finish("clean-phone", note, err)
+	w.poke()
+}
+
 // thumbnailPass 为各库生成一小批缩略图，返回处理数量；有显式任务等待或开关关闭时提前返回。
 func (r *Router) thumbnailPass() int {
 	w := r.svJobs
@@ -403,7 +525,7 @@ func (r *Router) probePass() int {
 	return processed
 }
 
-// handleShortVideoAdmin 处理管理操作：GET 状态；POST scan/import/clean/merge/copy-plan/copy/cancel/thumbnails。
+// handleShortVideoAdmin 处理管理操作：GET 状态；POST scan/import/clean/merge/copy-plan/copy/phone-plan/phone/clean-plan/clean-phone/cancel/thumbnails。
 func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request) {
 	jobs := r.svJobs
 	action := req.URL.Path[len("/api/media/shortvideo/admin/"):]
@@ -500,6 +622,41 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 		}
 		select {
 		case jobs.requests <- "copy\x00" + body.To:
+		default:
+			http.Error(w, "too many queued jobs", http.StatusTooManyRequests)
+			return
+		}
+	case "phone-plan", "clean-plan":
+		// 连手机读清单要一会儿（几万个文件时十几秒）；只列出要做的事，不改任何东西
+		src, _, phone, err := r.phoneEnds(req.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if action == "phone-plan" {
+			plan, _, err := shortvideo.PlanPhone(req.Context(), src, phone)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			writeJSON(w, http.StatusOK, plan)
+			return
+		}
+		listing, err := phone.List(req.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		plan, err := shortvideo.PlanClean(src, listing, r.keepDirs())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, plan)
+		return
+	case "phone", "clean-phone":
+		select {
+		case jobs.requests <- action:
 		default:
 			http.Error(w, "too many queued jobs", http.StatusTooManyRequests)
 			return

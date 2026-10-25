@@ -55,6 +55,44 @@ type CopyResult struct {
 // 也合并回 src（src 没有这个博主时只建目录放 downloaded.txt，扫描不会把它当成博主）。
 // 不复制数据库、隐藏文件、下载中的半截文件和软链接，也从不删除 dst 的任何东西。
 func PlanCopy(src, dst string, existingOnly bool) (CopyPlan, error) {
+	return planCopy(src, localTarget(dst), existingOnly)
+}
+
+// target 是同步的目标一端：本地目录，或经数据线读到的手机清单。rel 都是相对 shortvideo/ 的斜杠路径。
+type target interface {
+	isDir(rel string) bool
+	size(rel string) (int64, bool)
+	records(rel string) ([]string, error) // 某个 downloaded.txt 的记录行（没有时为空）
+	recordFiles() ([]string, error)       // 所有 <平台>/<博主>/downloaded.txt
+}
+
+type localTarget string
+
+func (t localTarget) path(rel string) string {
+	return filepath.Join(string(t), filepath.FromSlash(rel))
+}
+func (t localTarget) isDir(rel string) bool {
+	st, err := os.Stat(t.path(rel))
+	return err == nil && st.IsDir()
+}
+func (t localTarget) size(rel string) (int64, bool) {
+	st, err := os.Stat(t.path(rel))
+	if err != nil {
+		return 0, false
+	}
+	return st.Size(), true
+}
+func (t localTarget) records(rel string) ([]string, error) { return archiveLines(t.path(rel)) }
+func (t localTarget) recordFiles() ([]string, error) {
+	found, err := filepath.Glob(filepath.Join(string(t), "*", "*", ArchiveFile))
+	for i, f := range found {
+		r, _ := filepath.Rel(string(t), f)
+		found[i] = filepath.ToSlash(r)
+	}
+	return found, err
+}
+
+func planCopy(src string, dst target, existingOnly bool) (CopyPlan, error) {
 	var plan CopyPlan
 	platforms, err := os.ReadDir(src)
 	if err != nil {
@@ -90,7 +128,7 @@ func PlanCopy(src, dst string, existingOnly bool) (CopyPlan, error) {
 				continue
 			}
 			if existingOnly {
-				if st, err := os.Stat(filepath.Join(dst, filepath.FromSlash(rel))); err != nil || !st.IsDir() {
+				if !dst.isDir(rel) {
 					plan.Skipped++
 					continue
 				}
@@ -117,14 +155,21 @@ func PlanCopy(src, dst string, existingOnly bool) (CopyPlan, error) {
 			}
 		}
 	}
-	back, err := filepath.Glob(filepath.Join(dst, "*", "*", ArchiveFile))
+	back, err := dst.recordFiles()
 	if err != nil {
 		return plan, err
 	}
-	for _, b := range back {
-		rel, _ := filepath.Rel(dst, b)
-		if missing, _ := archiveMissing(b, filepath.Join(src, rel)); len(missing) > 0 {
-			plan.Back = append(plan.Back, filepath.ToSlash(rel))
+	for _, rel := range back {
+		theirs, err := dst.records(rel)
+		if err != nil {
+			return plan, err
+		}
+		have, err := archiveLines(filepath.Join(src, filepath.FromSlash(rel)))
+		if err != nil {
+			return plan, err
+		}
+		if len(linesMissing(theirs, have)) > 0 {
+			plan.Back = append(plan.Back, rel)
 		}
 	}
 	for c := range creators {
@@ -150,8 +195,8 @@ func skipName(name string) bool {
 }
 
 // add 比较一个文件，按规则记进计划。
-func (plan *CopyPlan) add(src, dst, rel string, creators map[string]bool) {
-	from, to := filepath.Join(src, filepath.FromSlash(rel)), filepath.Join(dst, filepath.FromSlash(rel))
+func (plan *CopyPlan) add(src string, dst target, rel string, creators map[string]bool) {
+	from := filepath.Join(src, filepath.FromSlash(rel))
 	st, err := os.Stat(from)
 	if err != nil {
 		return
@@ -160,18 +205,20 @@ func (plan *CopyPlan) add(src, dst, rel string, creators map[string]bool) {
 	if parts := strings.SplitN(rel, "/", 3); len(parts) == 3 {
 		creator = parts[0] + "/" + parts[1]
 	}
-	have, err := os.Stat(to)
+	have, ok := dst.size(rel)
 	switch {
-	case err != nil:
+	case !ok:
 		plan.Files = append(plan.Files, CopyFile{rel, st.Size()})
 		plan.Bytes += st.Size()
 		creators[creator] = true
 	case path.Base(rel) == ArchiveFile:
-		if missing, _ := archiveMissing(from, to); len(missing) > 0 {
+		mine, _ := archiveLines(from)
+		theirs, _ := dst.records(rel)
+		if len(linesMissing(mine, theirs)) > 0 {
 			plan.Archives = append(plan.Archives, rel)
 			creators[creator] = true
 		}
-	case have.Size() != st.Size():
+	case have != st.Size():
 		plan.Conflicts = append(plan.Conflicts, rel)
 	}
 }
@@ -268,19 +315,11 @@ func (c ctxReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
-// archiveMissing 返回 from 里有、to 里没有的行（按原顺序，去掉空行和重复）。
-func archiveMissing(from, to string) ([]string, error) {
-	have, err := archiveLines(to)
-	if err != nil {
-		return nil, err
-	}
+// linesMissing 返回 theirs 里有、have 里没有的行（按原顺序，去重）。
+func linesMissing(theirs, have []string) []string {
 	seen := map[string]bool{}
 	for _, l := range have {
 		seen[l] = true
-	}
-	theirs, err := archiveLines(from)
-	if err != nil {
-		return nil, err
 	}
 	var missing []string
 	for _, l := range theirs {
@@ -289,7 +328,7 @@ func archiveMissing(from, to string) ([]string, error) {
 			missing = append(missing, l)
 		}
 	}
-	return missing, nil
+	return missing
 }
 
 // archiveLines 读出记录行；文件不存在时为空。
@@ -313,9 +352,22 @@ func archiveLines(path string) ([]string, error) {
 
 // MergeArchive 把 from 里 to 没有的行追加到 to 的内容后面（to 不存在时新建），写临时文件再替换；返回新增行数。
 func MergeArchive(from, to string) (int, error) {
-	missing, err := archiveMissing(from, to)
-	if err != nil || len(missing) == 0 {
+	theirs, err := archiveLines(from)
+	if err != nil {
 		return 0, err
+	}
+	return mergeLines(theirs, to)
+}
+
+// mergeLines 把 theirs 里 to 没有的行追加到 to 后面（to 不存在时新建）。
+func mergeLines(theirs []string, to string) (int, error) {
+	have, err := archiveLines(to)
+	if err != nil {
+		return 0, err
+	}
+	missing := linesMissing(theirs, have)
+	if len(missing) == 0 {
+		return 0, nil
 	}
 	data, err := os.ReadFile(to)
 	if errors.Is(err, fs.ErrNotExist) {

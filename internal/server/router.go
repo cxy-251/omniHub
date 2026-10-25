@@ -81,6 +81,8 @@ type Router struct {
 	gameArt      map[string]*games.ArtStore
 	svJobs       *svWorker
 	mangaDB      map[string]*manga.DB
+
+	phoneADB, phoneDir string // 经数据线同步短视频的手机（ConfigurePhone）
 }
 
 // NewRouter 创建路由分发器实例。

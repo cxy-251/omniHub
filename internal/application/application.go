@@ -175,6 +175,11 @@ func (a *Application) build() *generation {
 		return g
 	}
 	router.ConfigureShortVideo(a.cfg.ShortVideoThumbnails, a.saveShortVideoThumbnails)
+	phoneDir := a.cfg.Phone.ShortVideoDir
+	if phoneDir == "" {
+		phoneDir = config.DefaultPhoneShortVideoDir
+	}
+	router.ConfigurePhone(resolveADB(a.cfg.Phone.ADB), phoneDir)
 	router.ConfigureGames(resolveGameTools(a.cfg.GameTools, a.configDir))
 	router.ConfigureMega(resolveMegaCmd(a.cfg.MegaCmdDir))
 	router.ConfigureDownloads(a.cfg.Downloads, a.configDir, a.saveDownloadSettings)

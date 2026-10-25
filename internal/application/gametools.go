@@ -2,6 +2,7 @@ package application
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"omnihub/internal/config"
@@ -52,6 +53,23 @@ func resolveMegaCmd(override string) string {
 	dir := filepath.Join(home, "Applications", "mega-cmd")
 	if _, err := os.Stat(filepath.Join(dir, "bin", "mega-exec")); err == nil {
 		return dir
+	}
+	return ""
+}
+
+// resolveADB 找 adb：配置指定的、PATH 里的、~/.local/bin 与 ~/Applications/platform-tools 下的；都没有时为空。
+func resolveADB(override string) string {
+	if override != "" {
+		return override
+	}
+	if p, err := exec.LookPath("adb"); err == nil {
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	for _, p := range []string{filepath.Join(home, ".local", "bin", "adb"), filepath.Join(home, "Applications", "platform-tools", "adb")} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
 	}
 	return ""
 }

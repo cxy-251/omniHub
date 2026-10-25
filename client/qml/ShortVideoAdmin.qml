@@ -10,7 +10,8 @@ ColumnLayout {
     property var status: null
     property string error: ""
     property bool confirmClean: false
-    property var copyPlan: null
+    property var review: null          // {text, warn, start（空表示没有要做的）, action, body}
+    property string reviewLoading: ""
     spacing: 10
 
     readonly property var worker: status ? status.worker : null
@@ -20,11 +21,10 @@ ColumnLayout {
     readonly property var source: libraries.filter(function (l) { return l.copy_source })[0] || null
     readonly property var copyTargets: status && status.copy_targets ? status.copy_targets : []
     readonly property var processed: libraries.filter(function (l) { return !l.copy_source })
-    property var copyTarget: null
     readonly property bool thumbsRunning: !!(worker && worker.thumbnails_enabled && processed.some(function (l) { return l.stats && l.stats.thumbnails + l.stats.thumbnail_failures < l.stats.videos + l.stats.albums }))
     readonly property int cleanable: processed.reduce(function (n, l) { return n + (l.stats ? l.stats.albums_cleanable : 0) }, 0)
     readonly property int importable: processed.reduce(function (n, l) { return n + (l.stats ? l.stats.albums_on_disk - l.stats.albums_cleanable : 0) }, 0)
-    readonly property var jobNames: ({scan: "扫描", import: "图集入库", clean: "清理已入库原目录", thumbnails: "生成缩略图", merge: "合并其他设备的数据", copy: "补充到其他资源库"})
+    readonly property var jobNames: ({scan: "扫描", import: "图集入库", clean: "清理已入库原目录", thumbnails: "生成缩略图", merge: "合并其他设备的数据", copy: "补充到其他资源库", phone: "同步到手机", "clean-phone": "清理已同步到手机的视频"})
 
     readonly property var mergeTargets: libraries.filter(function (l) { return !l.error })
     FolderDialog {
@@ -35,9 +35,46 @@ ColumnLayout {
     }
     ApiClient { id: api; onErrorChanged: page.error = error }
     function load() { api.getJSON("/api/media/shortvideo/admin/status", function (s) { page.status = s }) }
+    function creatorsText(list) { return list.length ? "\n" + list.slice(0, 8).join("、") + (list.length > 8 ? " 等" : "") : "" }
+    function conflictsText(list) { return list.length ? list.length + " 个同名文件大小不同，不会覆盖：" + list.slice(0, 5).join("、") : "" }
+    // plan 请求：失败时把错误（比如手机没连上）显示在预览框里
+    function plan(action, body, loading, build) {
+        page.review = null; page.reviewLoading = loading
+        api.send("POST", "/api/media/shortvideo/admin/" + action, body, function (p) { page.reviewLoading = ""; page.review = build(p) },
+                 function (xhr) { page.reviewLoading = ""; page.review = {text: xhr.responseText || ("请求失败（" + xhr.status + "）"), warn: "", start: "", action: "", body: {}} })
+    }
     function planCopy(target) {
-        page.copyPlan = null; page.copyTarget = target
-        api.send("POST", "/api/media/shortvideo/admin/copy-plan", {to: target.library_id}, function (p) { page.copyPlan = p })
+        plan("copy-plan", {to: target.library_id}, "正在比对…", function (p) {
+            var back = p.back || [], archives = p.archives || [], creators = p.creators || []
+            var todo = p.files > 0 || archives.length > 0 || back.length > 0
+            return {text: page.source.name + " → " + target.name + "：" + (todo
+                        ? creators.length + " 个博主，复制 " + p.files + " 个文件（" + page.gb(p.bytes) + "），合并下载记录 " + archives.length + " 个；"
+                          + target.name + " 上 " + back.length + " 个博主的下载记录补回 " + page.source.name + page.creatorsText(creators)
+                        : "没有要补充的。"),
+                    warn: page.conflictsText(p.conflicts || []), start: todo ? "开始补充" : "", action: "copy", body: {to: target.library_id}}
+        })
+    }
+    function planPhone() {
+        plan("phone-plan", {}, "正在连接手机、读取手机上的文件清单（文件多时要十几秒）…", function (p) {
+            var back = p.back || [], archives = p.archives || [], creators = p.creators || []
+            var todo = p.files > 0 || archives.length > 0 || back.length > 0
+            return {text: page.source.name + " → 手机：" + (todo
+                        ? creators.length + " 个博主，复制 " + p.files + " 个文件（" + page.gb(p.bytes) + "）；手机上 " + back.length + " 个博主的下载记录补回 "
+                          + page.source.name + "，再把合并好的 " + archives.length + " 个下载记录推到手机，两边一致" + page.creatorsText(creators)
+                          + "\n传输时别拔线；断了重新点一次，从断点接着传。"
+                        : "手机上已经都有了，下载记录也一致。"),
+                    warn: page.conflictsText(p.conflicts || []), start: todo ? "开始同步到手机" : "", action: "phone", body: {}}
+        })
+    }
+    function planClean() {
+        plan("clean-plan", {}, "正在连接手机、核对哪些视频手机上已经有了…", function (p) {
+            var kept = (p.not_on_phone ? "手机上还没有（或大小不同）的 " + p.not_on_phone + " 个" : "")
+                + (p.not_on_keep ? (p.not_on_phone ? "，" : "") + "SD 卡已有的博主那边还没补上的 " + p.not_on_keep + " 个" : "")
+            return {text: p.files > 0
+                        ? "移进回收站：" + p.creators + " 个博主的 " + p.files + " 个文件（" + page.gb(p.bytes) + "），都已在手机上（同名同大小）。downloaded.txt 全部保留。"
+                        : "没有可以清理的。",
+                    warn: kept ? "保留不动：" + kept + "。" : "", start: p.files > 0 ? "移进回收站" : "", action: "clean-phone", body: {}}
+        })
     }
     function gb(bytes) { return (bytes / 1e9).toFixed(1) + " GB" }
     function act(action, body) { api.send("POST", "/api/media/shortvideo/admin/" + action, body || {}, function () { page.load() }) }
@@ -85,7 +122,7 @@ ColumnLayout {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 12
                 text: "合并：视频和没入库的图集目录是文件，直接拷进对应博主目录再「重新扫描」即可；已入库并清理了原目录的图集只在数据库里，用这个按钮把另一台设备的 albums.db（同目录的 index.db、thumbnails.db 一起）并进来。同一作品内容不同时保留本库的。"
             }
-            // 增量补充：把 SSD 的新视频补到目标库已有的博主，只增加不删除。
+            // 短视频移动：方向固定从 SSD 出去。每个按钮先读出要做的事放进 review，确认后才执行。
             Label { visible: !!page.source; text: "短视频移动"; color: "#e6edf3"; font.pixelSize: 14; topPadding: 6 }
             Flow {
                 visible: !!page.source
@@ -96,44 +133,47 @@ ColumnLayout {
                     delegate: Button {
                         required property var modelData
                         text: page.source.name + " → " + modelData.name
-                        enabled: !page.busy
+                        enabled: !page.busy && !page.reviewLoading
                         onClicked: page.planCopy(modelData)
                     }
                 }
+                Button { text: page.source ? page.source.name + " → 手机（数据线）" : ""; enabled: !page.busy && !page.reviewLoading; onClicked: page.planPhone() }
+                Button { text: "清理已同步到手机的视频"; enabled: !page.busy && !page.reviewLoading; onClicked: page.planClean() }
             }
             Label {
                 visible: !!page.source
                 Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 12
-                text: page.source ? "新下载的视频在「" + page.source.name + "」，这里只做中转：不生成缩略图、不入库图集。点按钮先列出要补的内容，确认后才复制。"
-                    + "只补目标库里已有的博主；目标没有的文件才复制（写完核对大小再改名），downloaded.txt 两边合并（目标库上所有博主的下载记录也补回「" + page.source.name + "」，浏览器插件按它判断下过没有）；同名但大小不同的不覆盖，只列出来；不删除任何文件，中断后再点一次接着补。" : ""
+                text: page.source ? "新下载的视频在「" + page.source.name + "」，这里只做中转：不生成缩略图、不入库图集。每个按钮先列出要做的事，确认后才执行；中断后再点一次接着做。\n"
+                    + "• 补到 SD 卡：只补 SD 卡已有的博主。• 补到手机：所有博主都补（手机放全量）。目标没有的文件才复制，写完核对大小再放进去；同名但大小不同的不覆盖，只列出来；不删除目标的任何文件。\n"
+                    + "• downloaded.txt 两边合并，目标上的记录也补回「" + page.source.name + "」（浏览器插件按它判断下过没有）；同步手机后两边内容一致。\n"
+                    + "• 清理：手机上有同名同大小的文件、且 SD 卡已有的博主那边也补上了，才移进回收站；downloaded.txt 全部保留。" : ""
             }
+            Label { visible: page.reviewLoading !== ""; text: page.reviewLoading; color: "#c9d1d9"; font.pixelSize: 12 }
             Rectangle {
-                visible: !!page.copyPlan
+                visible: !!page.review
                 Layout.fillWidth: true
-                implicitHeight: copyBox.implicitHeight + 16
+                implicitHeight: reviewBox.implicitHeight + 16
                 radius: 4; color: "transparent"; border.color: "#58a6ff"
                 ColumnLayout {
-                    id: copyBox
+                    id: reviewBox
                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 8
                     Label {
                         Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#c9d1d9"; font.pixelSize: 12
-                        text: !page.copyPlan ? "" : page.copyPlan.files === 0 && !(page.copyPlan.archives || []).length && !(page.copyPlan.back || []).length
-                            ? page.source.name + " → " + page.copyTarget.name + "：没有要补充的。"
-                            : page.source.name + " → " + page.copyTarget.name + "：" + (page.copyPlan.creators || []).length + " 个博主：复制 " + page.copyPlan.files + " 个文件（" + page.gb(page.copyPlan.bytes) + "），合并下载记录 " + (page.copyPlan.archives || []).length + " 个；" + page.copyTarget.name + " 上有 " + (page.copyPlan.back || []).length + " 个博主的下载记录补回 " + page.source.name
-                              + "\n" + (page.copyPlan.creators || []).slice(0, 8).join("、") + ((page.copyPlan.creators || []).length > 8 ? " 等" : "")
+                        text: page.review ? page.review.text : ""
                     }
                     Label {
-                        visible: !!page.copyPlan && (page.copyPlan.conflicts || []).length > 0
+                        visible: !!page.review && page.review.warn !== ""
                         Layout.fillWidth: true; wrapMode: Text.WrapAnywhere; color: "#d29922"; font.pixelSize: 12
-                        text: page.copyPlan ? (page.copyPlan.conflicts || []).length + " 个同名文件大小不同，不会覆盖：" + (page.copyPlan.conflicts || []).slice(0, 5).join("、") : ""
+                        text: page.review ? page.review.warn : ""
                     }
                     RowLayout {
                         PrimaryButton {
-                            text: "开始补充"
-                            enabled: !page.busy && !!page.copyPlan && (page.copyPlan.files > 0 || (page.copyPlan.archives || []).length > 0 || (page.copyPlan.back || []).length > 0)
-                            onClicked: { page.act("copy", {to: page.copyTarget.library_id}); page.copyPlan = null }
+                            visible: !!page.review && page.review.start !== ""
+                            text: page.review ? page.review.start : ""
+                            enabled: !page.busy
+                            onClicked: { page.act(page.review.action, page.review.body); page.review = null }
                         }
-                        Button { text: "取消"; onClicked: page.copyPlan = null }
+                        Button { text: page.review && page.review.start === "" ? "知道了" : "取消"; onClicked: page.review = null }
                     }
                 }
             }

@@ -64,7 +64,18 @@ type Config struct {
 	MegaCmdDir string `json:"mega_cmd_dir,omitempty"`
 	// Downloads 是下载任务（yt-dlp 等）的代理与 Cookie 设置。
 	Downloads DownloadSettings `json:"downloads,omitzero"`
+	// Phone 是经数据线同步短视频的手机。
+	Phone PhoneSettings `json:"phone,omitzero"`
 }
+
+// PhoneSettings 是 adb 位置与手机上 shortvideo/ 的路径；留空时 adb 按 PATH 等位置找，路径用 DefaultPhoneShortVideoDir。
+type PhoneSettings struct {
+	ADB           string `json:"adb,omitempty"`
+	ShortVideoDir string `json:"shortvideo_dir,omitempty"`
+}
+
+// DefaultPhoneShortVideoDir 是手机共享存储里资源库的短视频目录（和 Deck 上的目录结构相同）。
+const DefaultPhoneShortVideoDir = "/storage/emulated/0/omni_library/media_library/shortvideo"
 
 // DownloadSettings 是下载脚本的网络设置；Cookie 文件复制在配置目录里（仅本人可读）。
 type DownloadSettings struct {
