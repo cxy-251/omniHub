@@ -100,10 +100,15 @@ type svKey struct {
 	lib   string
 }
 
-// svMergedKeys 合并各库符合筛选的作品键，按发布日期倒序；未建索引的库跳过。
+// svMergedKeys 合并各库符合筛选的作品键，按发布日期倒序；未建索引的库、等级不够的平台跳过。
 func (r *Router) svMergedKeys(w http.ResponseWriter, req *http.Request, filter shortvideo.Filter) ([]svKey, bool) {
 	libs, ok := r.queryLibraries(w, req)
 	if !ok {
+		return nil, false
+	}
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
 		return nil, false
 	}
 	var all []svKey
@@ -118,7 +123,9 @@ func (r *Router) svMergedKeys(w http.ResponseWriter, req *http.Request, filter s
 			return nil, false
 		}
 		for _, k := range keys {
-			all = append(all, svKey{k, store, lib.ID})
+			if access.shortVideo(k.ID) {
+				all = append(all, svKey{k, store, lib.ID})
+			}
 		}
 	}
 	sort.SliceStable(all, func(i, j int) bool {
@@ -173,10 +180,15 @@ func (r *Router) handleShortVideoPosts(w http.ResponseWriter, req *http.Request)
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleShortVideoCreators 合并各库的博主，同名博主（同一 ID）作品数相加。
+// handleShortVideoCreators 合并各库的博主，同名博主（同一 ID）作品数相加；等级不够的平台不列。
 func (r *Router) handleShortVideoCreators(w http.ResponseWriter, req *http.Request) {
 	libs, ok := r.queryLibraries(w, req)
 	if !ok {
+		return
+	}
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	merged := make(map[string]*shortvideo.Creator)
@@ -191,6 +203,9 @@ func (r *Router) handleShortVideoCreators(w http.ResponseWriter, req *http.Reque
 			return
 		}
 		for _, c := range list {
+			if !access.shortVideo(c.Platform + "/") {
+				continue
+			}
 			if m := merged[c.ID]; m != nil {
 				m.Posts += c.Posts
 			} else {
@@ -220,6 +235,10 @@ func (r *Router) svPostFromRequest(w http.ResponseWriter, req *http.Request) (*s
 	id := req.URL.Query().Get("id")
 	if !validPostID(id) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
+		return nil, "", shortvideo.Post{}, false
+	}
+	if access, err := r.accessFor(req); err != nil || !access.shortVideo(id) {
+		http.Error(w, "forbidden: insufficient permission level", http.StatusForbidden)
 		return nil, "", shortvideo.Post{}, false
 	}
 	store, dir, err := r.svStore(lib)

@@ -35,7 +35,7 @@ type feedSource interface {
 	snapshotKey(req *http.Request) (string, error)
 	items(req *http.Request) (*feed.Catalog, error)
 	render(req *http.Request, items []feed.Item, liked map[string]bool) (any, error)
-	groups(req *http.Request, cat *feed.Catalog) any
+	groups(req *http.Request, cat *feed.Catalog, allowed func(*feed.Item) bool) any
 	trash(req *http.Request, it feed.Item) error
 }
 
@@ -118,11 +118,31 @@ func parseFeedQuery(req *http.Request) feedQuery {
 	return feedQuery{channel: q.Get("channel"), scope: scope, seed: seed, portrait: q.Get("portrait") == "1", kind: q.Get("kind"), shuffle: q.Get("order") == "shuffle", codecs: codecs}
 }
 
+// feedDenied 返回当前账号等级不够的子分类标签。条目带 perm:<子分类> 标签（短视频是 shortvideo/<平台>，
+// 相册图库是 gallery/<图库>），见各 items；目录列表是所有人共用的，按账号在这里筛。
+func (r *Router) feedDenied(req *http.Request, cat *feed.Catalog) ([]int32, error) {
+	access, err := r.accessFor(req)
+	if err != nil {
+		return nil, err
+	}
+	var out []int32
+	for i, name := range cat.Names {
+		if sub, ok := strings.CutPrefix(name, "perm:"); ok {
+			section, _, _ := strings.Cut(sub, "/")
+			if !access.allowsSub(section, sub) {
+				out = append(out, int32(i))
+			}
+		}
+	}
+	return out, nil
+}
+
 // feedOrderFor 返回频道里的条目顺序（snapshot.items 的下标）。推荐结果按种子缓存，翻页时顺序不变。
-func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapshot, q feedQuery) ([]int32, error) {
+// denied 是当前账号看不了的子分类标签（feedDenied），这些条目在哪个频道都不出现。
+func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapshot, q feedQuery, denied []int32) ([]int32, error) {
 	ctx := req.Context()
 	user := auth.UserFromContext(ctx)
-	cacheKey := fmt.Sprintf("%d|%s|%s|%s|%s|%d|%t|%s|%t|%s", user.ID, domain, snap.key, q.channel, q.scope, q.seed, q.portrait, q.kind, q.shuffle, q.codecs)
+	cacheKey := fmt.Sprintf("%d|%s|%s|%s|%s|%d|%t|%s|%t|%s|%v|%d", user.ID, domain, snap.key, q.channel, q.scope, q.seed, q.portrait, q.kind, q.shuffle, q.codecs, denied, len(r.markedNSFW()))
 	r.feed.mu.Lock()
 	for _, o := range r.feed.orders {
 		if o.key == cacheKey {
@@ -146,25 +166,32 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 	}
 	videoTag := cat.Lookup("kind:video")
 	scopeTag := cat.Lookup(strings.TrimPrefix(q.scope, "tag:"))
-	inScope := func(it *feed.Item) bool { return q.scope == "" || cat.HasTag(it, scopeTag) }
+	inScope := func(it *feed.Item) bool { return (q.scope == "" || cat.HasTag(it, scopeTag)) && !hasAnyTag(cat, it, denied) }
 	group, byGroup := strings.CutPrefix(q.channel, "group:")
 	tag, byTag := strings.CutPrefix(q.channel, "tag:")
 	if strings.HasPrefix(group, "coll:") { // 相册的图库频道：按图库标签筛（照片的分组是色系）
 		tag, byTag, byGroup = group, true, false
 	}
 	groupID, tagID := cat.Lookup(group), cat.Lookup(tag)
-	// NSFW 图库的照片（分组为 nsfw:<图库>）只在选中它自己的频道时出现
+	// NSFW 图库的照片（分组为 nsfw:<图库>）只在选中它自己的频道时出现；
+	// 标了 NSFW 的短视频平台（如 X）只在只看这个平台、或选中它的博主时出现
 	nsfwGroups := map[int32]bool{}
+	var nsfwPlatforms []int32
+	marks := r.markedNSFW()
 	for i, name := range cat.Names {
 		if strings.HasPrefix(name, "nsfw:") {
 			nsfwGroups[int32(i)] = true
+		}
+		if p, ok := strings.CutPrefix(name, "perm:shortvideo/"); ok && marks["shortvideo/"+p] &&
+			q.scope != "tag:platform:"+p && !(byGroup && strings.HasPrefix(group, p+"/")) {
+			nsfwPlatforms = append(nsfwPlatforms, int32(i))
 		}
 	}
 	keep := func(it *feed.Item) bool {
 		if !inScope(it) {
 			return false
 		}
-		if nsfwGroups[it.Group] && !(byGroup && it.Group == groupID) {
+		if (nsfwGroups[it.Group] && !(byGroup && it.Group == groupID)) || hasAnyTag(cat, it, nsfwPlatforms) {
 			return false
 		}
 		// 编码过滤只针对视频（图集没有编码）；未探测编码的视频也排除。
@@ -307,6 +334,12 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "index unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	denied, err := r.feedDenied(req, snap.cat)
+	if err != nil {
+		http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	allowed := func(it *feed.Item) bool { return !hasAnyTag(snap.cat, it, denied) }
 	ctx := req.Context()
 	user := auth.UserFromContext(ctx)
 	switch action {
@@ -316,7 +349,7 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "admin required", http.StatusForbidden)
 			return
 		}
-		order, err := r.feedOrderFor(req, domain, snap, q)
+		order, err := r.feedOrderFor(req, domain, snap, q, denied)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
@@ -368,7 +401,7 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 		}
 	case "groups":
 		pins, _ := r.userState.Pins(ctx, user.ID, domain)
-		writeJSON(w, http.StatusOK, map[string]any{"groups": src.groups(req, snap.cat), "pins": pins})
+		writeJSON(w, http.StatusOK, map[string]any{"groups": src.groups(req, snap.cat, allowed), "pins": pins})
 	case "like", "event", "pin", "trash", "restore":
 		if req.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -399,7 +432,7 @@ func (r *Router) handleFeed(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		i := snap.cat.Find(in.ID)
-		if i < 0 {
+		if i < 0 || !allowed(&snap.cat.Items[i]) {
 			http.Error(w, "unknown item", http.StatusNotFound)
 			return
 		}
@@ -533,7 +566,7 @@ func (s svFeed) items(req *http.Request) (*feed.Catalog, error) {
 				continue
 			}
 			creator := parts[0] + "/" + parts[1]
-			tags := []string{"creator:" + creator, "platform:" + parts[0], "kind:" + string(k.Kind)}
+			tags := []string{"creator:" + creator, "platform:" + parts[0], "kind:" + string(k.Kind), "perm:shortvideo/" + parts[0]}
 			if t := durationTag(k.Duration); t != "" {
 				tags = append(tags, t)
 			}
@@ -595,7 +628,7 @@ func (s svFeed) render(req *http.Request, items []feed.Item, liked map[string]bo
 	return out, nil
 }
 
-func (s svFeed) groups(req *http.Request, cat *feed.Catalog) any {
+func (s svFeed) groups(req *http.Request, cat *feed.Catalog, allowed func(*feed.Item) bool) any {
 	type group struct {
 		ID       string `json:"id"`
 		Label    string `json:"label"`
@@ -605,6 +638,9 @@ func (s svFeed) groups(req *http.Request, cat *feed.Catalog) any {
 	counts := map[string]int{}
 	var ids []string
 	for i := range cat.Items {
+		if !allowed(&cat.Items[i]) {
+			continue
+		}
 		g := cat.GroupName(&cat.Items[i])
 		if counts[g] == 0 {
 			ids = append(ids, g)
@@ -728,6 +764,9 @@ func (g galleryFeed) items(req *http.Request) (*feed.Catalog, error) {
 				color := fmt.Sprintf("color:%d", p.ColorFamily)
 				tags := append([]string{color, shape}, hexTags(p.ColorHex)...)
 				group := color
+				if c.Key != "" {
+					tags = append(tags, "perm:gallery/"+c.Key)
+				}
 				switch {
 				case c.NSFW:
 					group = "nsfw:" + c.Key
@@ -789,7 +828,7 @@ func (g galleryFeed) render(req *http.Request, items []feed.Item, liked map[stri
 	return out, nil
 }
 
-func (g galleryFeed) groups(req *http.Request, cat *feed.Catalog) any {
+func (g galleryFeed) groups(req *http.Request, cat *feed.Catalog, allowed func(*feed.Item) bool) any {
 	type group struct {
 		ID    string `json:"id"`
 		Label string `json:"label"`
@@ -799,7 +838,9 @@ func (g galleryFeed) groups(req *http.Request, cat *feed.Catalog) any {
 	// 按分组编号计数，再换成色系号（避免对 10 万条逐个解析字符串）。
 	byGroup := map[int32]int{}
 	for i := range cat.Items {
-		byGroup[cat.Items[i].Group]++
+		if allowed(&cat.Items[i]) {
+			byGroup[cat.Items[i].Group]++
+		}
 	}
 	for gid, n := range byGroup {
 		var c int
@@ -825,6 +866,9 @@ func (g galleryFeed) groups(req *http.Request, cat *feed.Catalog) any {
 	colls := map[string]int{}
 	for i := range cat.Items {
 		it := &cat.Items[i]
+		if !allowed(it) {
+			continue
+		}
 		if key, ok := strings.CutPrefix(cat.Names[it.Group], "nsfw:"); ok {
 			colls["nsfw:"+key]++
 		}

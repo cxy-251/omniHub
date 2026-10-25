@@ -52,14 +52,11 @@ func ReadCollection(dir, key string) (Collection, bool) {
 	if key == "" {
 		c.Name = "相册"
 	}
-	if data, err := os.ReadFile(filepath.Join(dir, CollectionFile)); err == nil {
-		var info collectionInfo
-		if json.Unmarshal(data, &info) == nil {
-			if info.Name != "" {
-				c.Name = info.Name
-			}
-			c.NSFW = info.NSFW
+	if info, ok := readInfo(dir); ok {
+		if info.Name != "" {
+			c.Name = info.Name
 		}
+		c.NSFW = info.NSFW
 	}
 	_, err := os.Stat(filepath.Join(dir, "gallery.db"))
 	c.Indexed = err == nil
@@ -69,6 +66,18 @@ func ReadCollection(dir, key string) (Collection, bool) {
 	}
 	c.NeedsIndex = len(vols) > 0 && !sameVolumes(dir, vols)
 	return c, true
+}
+
+func readInfo(dir string) (collectionInfo, bool) {
+	var info collectionInfo
+	data, err := os.ReadFile(filepath.Join(dir, CollectionFile))
+	return info, err == nil && json.Unmarshal(data, &info) == nil
+}
+
+// MarkedNSFW 判断目录的说明文件是否标了 NSFW。短视频的平台目录（如 shortvideo/X）也用同一个文件。
+func MarkedNSFW(dir string) bool {
+	info, _ := readInfo(dir)
+	return info.NSFW
 }
 
 // Collections 列出相册目录下的图库：根目录（有 gallery.db 时）和各子文件夹。

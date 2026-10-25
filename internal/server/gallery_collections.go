@@ -17,6 +17,25 @@ import (
 // 相册的多个图库（见 internal/gallery/collections.go）：每个资源库的 media_library/gallery 根目录是原来的相册，
 // 子文件夹各是一个图库。只放了原图分卷的图库由后台建索引后装载；NSFW 图库默认不在列表里。
 
+// galleryCollectionFor 是取单张照片（缩略图、原图）时的图库目录：查等级（不够时写 403），再取目录。
+func (r *Router) galleryCollectionFor(w http.ResponseWriter, req *http.Request, lib *library.Library, key string) (string, bool) {
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
+		return "", false
+	}
+	if !access.galleryCollection(key) {
+		http.Error(w, "forbidden: insufficient permission level", http.StatusForbidden)
+		return "", false
+	}
+	dir, err := r.galleryCollectionDir(lib, key)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return "", false
+	}
+	return dir, true
+}
+
 // galleryCollectionDir 返回一个图库的目录（key 为空是根目录的相册），并检查路径不越界。
 func (r *Router) galleryCollectionDir(lib *library.Library, key string) (string, error) {
 	if key == "" {
@@ -77,10 +96,15 @@ type galleryEntry struct {
 }
 
 // galleryEntries 返回要列出的图库：?collection= 指定一个（空值是根目录的相册），不指定时是全部非 NSFW 的，
-// ?nsfw=1 时连 NSFW 的一起。只列已建好索引的。
+// ?nsfw=1 时连 NSFW 的一起。只列已建好索引、当前账号等级够的。
 func (r *Router) galleryEntries(w http.ResponseWriter, req *http.Request) ([]galleryEntry, bool) {
 	libraries, ok := r.queryLibraries(w, req)
 	if !ok {
+		return nil, false
+	}
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
 		return nil, false
 	}
 	q := req.URL.Query()
@@ -92,7 +116,7 @@ func (r *Router) galleryEntries(w http.ResponseWriter, req *http.Request) ([]gal
 	var out []galleryEntry
 	for _, lib := range libraries {
 		for _, c := range r.galleryCollections(lib) {
-			if !c.Indexed || (picked && c.Key != pick) || (!picked && c.NSFW && q.Get("nsfw") != "1") {
+			if !c.Indexed || (picked && c.Key != pick) || (!picked && c.NSFW && q.Get("nsfw") != "1") || !access.galleryCollection(c.Key) {
 				continue
 			}
 			db, err := r.getMetaDBAt(c.Dir)
@@ -187,10 +211,18 @@ func (r *Router) handleGalleryCollections(w http.ResponseWriter, req *http.Reque
 	if !ok {
 		return
 	}
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	rows := []row{}
 	pending := false
 	for _, lib := range libraries {
 		for _, c := range r.galleryCollections(lib) {
+			if !access.galleryCollection(c.Key) {
+				continue
+			}
 			entry := row{Collection: c, LibraryID: lib.ID, LibraryName: lib.Name}
 			if c.Indexed {
 				if db, err := r.getMetaDBAt(c.Dir); err == nil {

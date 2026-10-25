@@ -194,7 +194,7 @@ ColumnLayout {
         if (plan.list_start) out.push({type: "head", text: plan.older_empty ? "往前读到 " + plan.list_start + "，这一年没有带图的帖子（更早的还可以接着读）"
                                                              : months.length ? "读到 " + plan.list_start + "，更早的没读" : "最近一年没有带图的帖子"})
         months.forEach(function (m) {
-            out.push({type: "month", grp: "month", id: m.id, text: m.author + "　" + m.month + "　" + m.posts + " 条 · " + m.images + " 张" + (m.done ? "（已下 " + m.done + "）" : ""),
+            out.push({type: "month", grp: "month", id: m.id, text: m.author + "　" + m.month + "　" + m.posts + " 条 · " + m.images + " 张" + (m.videos ? " · " + m.videos + " 个视频" : "") + (m.done ? "（已下 " + m.done + "）" : ""),
                       note: m.samples.join(" / ")})
         })
         if ((plan.other || []).length) out.push({type: "head", text: "其他网站的链接 " + plan.other.length + " 个（不查纯音轨版，按原视频下音频）"})

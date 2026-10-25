@@ -35,3 +35,20 @@ func TestSubsectionAccess(t *testing.T) {
 		t.Error("admin must see nsfw")
 	}
 }
+
+// 标了 NSFW 的短视频平台、相册图库默认仅管理员；单独设置后按设置；没标的沿用大分类。
+func TestMarkedNSFWAccess(t *testing.T) {
+	c := &accessChecker{level: 1, stored: map[string]int{"shortvideo": 0, "gallery": 0},
+		nsfw: map[string]bool{"shortvideo/X": true, "gallery/X": true}, memo: map[string]bool{}}
+	if c.shortVideo("X/作者/2026-10-01_a_1.mp4") || c.galleryCollection("X") {
+		t.Error("NSFW platform and gallery must be admin-only by default")
+	}
+	if !c.shortVideo("YouTube/频道/2026-10-01_a_abcdefghijk.mp4") || !c.galleryCollection("Twice") || !c.galleryCollection("") {
+		t.Error("unmarked platforms and galleries follow the section level")
+	}
+	c.stored["shortvideo/X"] = 1
+	c.memo = map[string]bool{}
+	if !c.shortVideo("X/作者/2026-10-01_a_1.mp4") || c.galleryCollection("X") {
+		t.Error("an explicit level opens only that subsection")
+	}
+}

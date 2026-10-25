@@ -57,7 +57,7 @@ export default function AdminPage() {
           {levels.map(level => <option key={level} value={level}>{levelNames[level]}</option>)}</select></label>)}</div>
       {subsections.length ? <>
         <h3 className="mb-1 mt-4 font-semibold">子分区</h3>
-        <p className="mb-2 text-sm text-muted">资源库里的子目录（如 text/novels/nsfw）和各个工具。灰色为默认值：子目录沿用所属分区（nsfw 默认仅管理员）；剪贴板、共享文件默认「用户」，主机状态、网络默认「管理员」。</p>
+        <p className="mb-2 text-sm text-muted">资源库里的子目录（如 text/novels/nsfw、短视频平台 shortvideo/X、相册图库 gallery/X）和各个工具。灰色为默认值：子目录沿用所属分区（nsfw 目录、标了 NSFW 的平台和图库默认仅管理员）；剪贴板、共享文件默认「用户」，主机状态、网络默认「管理员」。</p>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{subsections.map(sub => <label key={sub.id} className="flex items-center justify-between gap-2 text-sm">
           <span className={`min-w-0 truncate ${sub.explicit ? '' : 'text-muted'}`} title={sub.id}>{subsectionNames[sub.id] ?? sub.id}{sub.explicit ? '' : '（默认）'}</span>
           <select className={input} disabled={pending || !devices} value={sub.required_level} onChange={e => { const level = Number(e.target.value); setSubsections(old => old.map(x => x.id === sub.id ? { ...x, required_level: level, explicit: true } : x)); void change('/api/admin/permissions', { section_id: sub.id, required_level: level }); }}>

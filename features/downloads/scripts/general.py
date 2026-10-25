@@ -485,15 +485,16 @@ hints = set()
 # 图文平台（gallery-dl）：每个作者一个 gallery-dl 进程，先下到批次的 .incoming/<平台>/，再按帖子整理：
 #   图片 → 相册里这个平台单独的图库（批次的 gallery/<平台>/<作者>/<日期>_<正文>_<帖子编号>_NN.jpg；
 #          移入资源库时进图库「<平台>」，可标 NSFW，见 internal/gallery/collections.go）
-#   视频 → 短视频/<平台>/<作者>/<日期>_<正文>_<帖子编号>.mp4
+#   视频 → 短视频/<平台>/<作者>/<日期>_<正文>_<帖子编号>.mp4（X 要选「图片和视频」才下；平台目录标 NSFW，见 collection.json）
 # 增量：下载名单里有的跳过。一个作者完整下完过一次（gallery-dl 正常结束）才记下来，之后再下这个作者，
 # 连续 20 个都下过就停、只补新帖子；没完整下完过的（第一次中断了）每次都翻到底，下过的跳过，直到补全。
 SOCIAL = {
-    # X：只要作者本人发的图片（原图）；作者主页链接一律读「媒体」页（主页时间线里可能混着转发）。
+    # X：只要作者本人发的图片（原图），--x-videos 时连视频、GIF（gallery-dl 取最高码率的 mp4）；
+    #    作者主页链接一律读「媒体」页（主页时间线里可能混着转发；媒体页里有作者回复里带图的帖子）。
     #    作者在自己推文下面接着回复补图（一条发不下）的也要（replies=self），整理时按会话合成一个图集
     "x": {"dir": "X", "cookie": "x", "user_url": "https://x.com/{}/media", "nsfw": True,
           "profile": r"^https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})(?:/(?:media|with_replies|photo)?)?/?(?:\?.*)?$",
-          "filter": "type == 'photo' and not retweet_id",
+          "filter": "not retweet_id", "types": ("photo",), "video_types": ("video", "animated_gif"),
           "options": ["retweets=false", "quoted=false", "replies=self", "size=orig"]},
 }
 
@@ -544,7 +545,8 @@ def social_url(url, conf):
 def gallerydl_base(a, conf, filt=None):
     """gallery-dl 的公共参数：平台的过滤与选项、Cookie、代理、下载名单。filt 是额外的过滤条件（按月份）。"""
     cmd = [sys.executable, "-m", "gallery_dl"]
-    conds = [c for c in (conf.get("filter"), filt) if c]
+    types = tuple(conf.get("types") or ()) + (tuple(conf.get("video_types") or ()) if a.x_videos else ())
+    conds = [c for c in (f"type in {types!r}" if types else "", conf.get("filter"), filt) if c]
     if conds:
         cmd += ["--filter", " and ".join(f"({c})" for c in conds)]
     for opt in conf.get("options") or []:
@@ -610,9 +612,9 @@ def write_social_plan(a, scheme):
         by_month = {}
         for meta in rows:
             author, pid, day, text = post_info(meta)
-            mo = by_month.setdefault(day[:7], {"posts": set(), "images": 0, "done": 0, "samples": [], "author": author})
+            mo = by_month.setdefault(day[:7], {"posts": set(), "images": 0, "videos": 0, "done": 0, "samples": [], "author": author})
             mo["posts"].add(pid)
-            mo["images"] += 1
+            mo["videos" if meta.get("type") in conf.get("video_types", ()) else "images"] += 1
             if f"{meta.get('category', scheme)}{meta.get('tweet_id')}_{meta.get('retweet_id') or 0}_{meta.get('num')}" in done:
                 mo["done"] += 1
             if text not in mo["samples"] and len(mo["samples"]) < 3:
@@ -621,13 +623,15 @@ def write_social_plan(a, scheme):
         for month in sorted(by_month, reverse=True):
             mo = by_month[month]
             new_months.append({"id": f"u{i}-{month}", "url": url, "author": mo["author"], "month": month, "posts": len(mo["posts"]),
-                           "images": mo["images"], "done": mo["done"], "samples": mo["samples"], "picked": True})
+                           "images": mo["images"], "videos": mo["videos"], "done": mo["done"], "samples": mo["samples"], "picked": True})
     months = (old.get("months") or []) + new_months
     # list_start：已经读到哪个月（再往前读时从这里接着）；older_empty：这次往前读的 12 个月一张都没有
     plan = {"urls": a.urls, "mode": "social", "months": months, "list_start": start, "older_empty": bool(old) and not new_months,
             "songs": [], "mvs": [], "videos": [], "skipped": [], "done": [], "other": [], "errors": errors}
     save_plan(a, plan)
-    log(f"列表：{len(months)} 个月，共 {sum(m['images'] for m in months)} 张（已下载过 {sum(m['done'] for m in months)} 张），读到 {start}")
+    videos = sum(m.get("videos", 0) for m in months)
+    log(f"列表：{len(months)} 个月，共 {sum(m['images'] for m in months)} 张图" + (f"、{videos} 个视频" if videos else "")
+        + f"（已下载过 {sum(m['done'] for m in months)} 个），读到 {start}")
 
 
 def gallerydl_plan(a, scheme):
@@ -704,8 +708,14 @@ def gallerydl(urls, a, scheme="x", url_filters=None):
         folder = os.path.join(root, safe(author))
         images = [(p, m) for p, m in items if not p.lower().endswith(VIDEO_EXT)]
         videos = [(p, m) for p, m in items if p.lower().endswith(VIDEO_EXT)]
+        if videos and conf.get("nsfw") and not os.path.isfile(os.path.join(root, "collection.json")):   # 平台目录标 NSFW（默认仅管理员可见）
+            os.makedirs(root, exist_ok=True)
+            with open(os.path.join(root, "collection.json"), "w", encoding="utf-8") as f:
+                json.dump({"name": conf["dir"], "nsfw": True}, f, ensure_ascii=False)
         for k, (path, meta) in enumerate(videos, 1):
-            dest = os.path.join(folder, base + (f"_{k}" if len(videos) > 1 else "") + os.path.splitext(path)[1])
+            # 一条推几个视频时序号放在编号前面（短视频按「日期_标题_编号」认文件名）
+            name = f"{day}_{safe(text)}（{k}）_{pid}" if len(videos) > 1 else base
+            dest = os.path.join(folder, name + os.path.splitext(path)[1])
             os.makedirs(folder, exist_ok=True)
             shutil.move(path, dest)
             rec = {kk: v for kk, v in meta.items() if kk not in META_DROP}
@@ -1068,6 +1078,7 @@ def main():
     p.add_argument("--x-limit", type=int, default=0, help="X：每个用户最多下最近这么多个文件，0 表示不限")
     p.add_argument("--plan-out", default="", help="音乐：只读取列表，把会下什么写进这个 JSON 文件，不下载")
     p.add_argument("--plan", default="", help="音乐：按读取好的列表（--plan-out 写的文件）下载")
+    p.add_argument("--x-videos", action="store_true", help="X：图片之外也下视频、GIF")
     p.add_argument("--list-before", default="", help="图文平台读取列表：读这个月（YYYY-MM）以前的 12 个月，空是最近 12 个月")
     p.add_argument("--list-from", default="", help="图文平台读取列表：接在这个列表文件后面（往前多读一年）")
     p.add_argument("--exclude", default="", help="按列表下载时不要的视频 ID，逗号分隔")

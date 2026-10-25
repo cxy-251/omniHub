@@ -4,16 +4,21 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"omnihub/internal/auth"
+	"omnihub/internal/gallery"
 )
 
 // 子分类分级（规格第 5 节的细化）：媒体分类下的一级目录是一个子分类，
 // ID 为「大分类/目录」，如 text/novels/nsfw、audio/nsfw。
-// 没有单独设置的子分类沿用大分类的等级；名为 nsfw 的目录默认仅管理员可见。
+// 没有单独设置的子分类沿用大分类的等级；名为 nsfw 的目录、说明文件（collection.json）标了 NSFW 的目录默认仅管理员可见。
 // 文档的一级目录是主题（C++、Graphic…）而不是分级，所以只有 nsfw 目录单独分级，其余跟随「文本」。
+// 短视频的一级目录是平台（shortvideo/X）；相册的子分类是各图库（gallery/<图库>，根目录的相册跟随「相册」），不按路径，见 nsfwMarks。
 var subsectionRoots = []struct {
 	category, section, prefix string
 	nsfwOnly                  bool
@@ -22,6 +27,44 @@ var subsectionRoots = []struct {
 	{"media_library/docs", "text", "text/docs", true},
 	{"media_library/audio", "audio", "audio", false},
 	{"media_library/manga", "manga", "manga", false},
+	{shortVideoCategory, "shortvideo", "shortvideo", false},
+}
+
+// nsfwMarks 缓存标了 NSFW 的子分类（短视频平台目录、相册图库），30 秒内不重复读说明文件（缩略图请求很密）。
+type nsfwMarks struct {
+	mu  sync.Mutex
+	at  time.Time
+	set map[string]bool
+}
+
+func (r *Router) markedNSFW() map[string]bool {
+	m := &r.nsfwMarks
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.set != nil && time.Since(m.at) < 30*time.Second {
+		return m.set
+	}
+	set := map[string]bool{}
+	for _, lib := range r.libMgr.ListLibraries() {
+		if !lib.IsOnline {
+			continue
+		}
+		if dir, err := r.libMgr.ResolveCategoryPath(lib.ID+":"+shortVideoCategory, shortVideoCategory); err == nil {
+			entries, _ := os.ReadDir(dir)
+			for _, e := range entries {
+				if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && gallery.MarkedNSFW(filepath.Join(dir, e.Name())) {
+					set["shortvideo/"+e.Name()] = true
+				}
+			}
+		}
+		for _, c := range r.galleryCollections(lib) {
+			if c.Key != "" && c.NSFW {
+				set["gallery/"+c.Key] = true
+			}
+		}
+	}
+	m.set, m.at = set, time.Now()
+	return set
 }
 
 // subsectionOf 由逻辑路径（<库ID>:media_library/...）得到所属大分类与子分类；不在分级目录内时 sub 为空。
@@ -48,6 +91,7 @@ type accessChecker struct {
 	r      *Router
 	level  int
 	stored map[string]int
+	nsfw   map[string]bool // 标了 NSFW 的子分类
 	memo   map[string]bool
 }
 
@@ -56,15 +100,15 @@ func (r *Router) accessFor(req *http.Request) (*accessChecker, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &accessChecker{r: r, level: auth.UserFromContext(req.Context()).Level, stored: stored, memo: map[string]bool{}}, nil
+	return &accessChecker{r: r, level: auth.UserFromContext(req.Context()).Level, stored: stored, nsfw: r.markedNSFW(), memo: map[string]bool{}}, nil
 }
 
-// requiredLevel 返回子分类的最低等级：单独设置 > nsfw 默认管理员 > 大分类等级。
+// requiredLevel 返回子分类的最低等级：单独设置 > nsfw 目录、标了 NSFW 的默认管理员 > 大分类等级。
 func (c *accessChecker) requiredLevel(section, sub string) int {
 	if lvl, ok := c.stored[sub]; ok && sub != "" {
 		return lvl
 	}
-	if sub != "" && path.Base(sub) == "nsfw" {
+	if sub != "" && (path.Base(sub) == "nsfw" || c.nsfw[sub]) {
 		return auth.LevelAdmin
 	}
 	return c.stored[section]
@@ -76,6 +120,11 @@ func (c *accessChecker) allows(logical string) bool {
 	if section == "" {
 		return true
 	}
+	return c.allowsSub(section, sub)
+}
+
+// allowsSub 判断当前账号能否访问大分类下的子分类（sub 为空时只看大分类）。
+func (c *accessChecker) allowsSub(section, sub string) bool {
 	key := section + "|" + sub
 	ok, cached := c.memo[key]
 	if !cached {
@@ -83,6 +132,20 @@ func (c *accessChecker) allows(logical string) bool {
 		c.memo[key] = ok
 	}
 	return ok
+}
+
+// shortVideo 判断能否访问短视频作品（ID 是 平台/博主/作品，按平台分级）。
+func (c *accessChecker) shortVideo(id string) bool {
+	platform, _, _ := strings.Cut(id, "/")
+	return c.allowsSub("shortvideo", "shortvideo/"+platform)
+}
+
+// galleryCollection 判断能否访问相册的图库（key 为空是根目录的相册，跟随「相册」）。
+func (c *accessChecker) galleryCollection(key string) bool {
+	if key == "" {
+		return c.allowsSub("gallery", "")
+	}
+	return c.allowsSub("gallery", "gallery/"+key)
 }
 
 // allowPath 校验单个资源的子分类等级，不足时写 403 并返回 false。
@@ -139,6 +202,19 @@ func (r *Router) handleAdminSubsections(w http.ResponseWriter, req *http.Request
 				_, explicit := c.stored[id]
 				seen[id] = entry{ID: id, Section: root.section, RequiredLevel: c.requiredLevel(root.section, id), Explicit: explicit}
 			}
+		}
+	}
+	for _, lib := range r.libMgr.ListLibraries() {
+		if !lib.IsOnline {
+			continue
+		}
+		for _, coll := range r.galleryCollections(lib) {
+			if coll.Key == "" {
+				continue
+			}
+			id := "gallery/" + coll.Key
+			_, explicit := c.stored[id]
+			seen[id] = entry{ID: id, Section: "gallery", RequiredLevel: c.requiredLevel("gallery", id), Explicit: explicit}
 		}
 	}
 	for _, t := range toolDefaults {

@@ -76,6 +76,7 @@ type Router struct {
 	closed       bool
 	metaDB       map[string]*gallery.MetaDB // 按图库目录
 	galleryIndex galleryIndexer
+	nsfwMarks    nsfwMarks
 	svStores     map[string]*shortvideo.Store
 	gameArt      map[string]*games.ArtStore
 	svJobs       *svWorker
@@ -539,9 +540,8 @@ func (r *Router) handleGalleryThumbnail(w http.ResponseWriter, req *http.Request
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	collDir, err := r.galleryCollectionDir(primary, req.URL.Query().Get("collection"))
-	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
+	collDir, ok := r.galleryCollectionFor(w, req, primary, req.URL.Query().Get("collection"))
+	if !ok {
 		return
 	}
 	metaDB, err := r.getMetaDBAt(collDir)
@@ -578,9 +578,8 @@ func (r *Router) handleGalleryOriginal(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	key := req.URL.Query().Get("collection")
-	collDir, err := r.galleryCollectionDir(primary, key)
-	if err != nil {
-		http.Error(w, "gallery index unavailable", 503)
+	collDir, ok := r.galleryCollectionFor(w, req, primary, key)
+	if !ok {
 		return
 	}
 	metaDB, err := r.getMetaDBAt(collDir)

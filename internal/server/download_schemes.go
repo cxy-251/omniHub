@@ -47,6 +47,11 @@ func (r *Router) schemeKinds() []*dlKind {
 		{"audio", "有声书 / 音频：只要声音，按列表顺序，放进音声"},
 		{"video", "普通视频：按发布者分"},
 	}}
+	// X：只要图片，或者图片和视频（视频进短视频的 X 平台，和图库「X」一样标 NSFW，默认仅管理员可见）
+	xMode := dlField{Name: "mode", Label: "模式", Type: "modes", Default: "images", Options: []dlOption{
+		{"images", "只要图片：原图，进相册的图库「X」"},
+		{"media", "图片和视频：图片进图库「X」，视频（最高码率）进短视频的 X"},
+	}}
 	return []*dlKind{
 		{
 			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑、单曲或歌手页，只从 YouTube / YouTube Music 下（其他网站的音乐多是搬运，不收），全部下载，不筛选。YouTube 的歌换成 YouTube Music 上的纯音轨版（MV 有片头片尾，不下它的音频）；找不到纯音轨版时只收官方音频（Official Audio），MV、歌词视频、现场、翻唱都不下。按歌手归档：属于专辑、EP 的歌放进歌手下的专辑文件夹，单曲放在歌手文件夹里。歌手页（YouTube Music 歌手页或歌手的官方频道）下全部专辑、EP、单曲，同一首只留最早发行的那版，MV（标题写着 Music Video、Official Video、MV 的，歌词视频、现场不算）下成视频放进短视频的 MV/<歌手>。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
@@ -76,11 +81,13 @@ func (r *Router) schemeKinds() []*dlKind {
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("bilibili", p) },
 		},
 		{
-			ID: "x", Title: "X", Description: "下载作者本人发的图片（原图；不要视频、转发和引用；作者在自己推文下面接着回复补的图也要，和原推合成一个图集）。用 gallery-dl，需要在「账号与 Cookie」里读过 X 的登录。图片进相册里单独的图库「X」（标为 NSFW，不出现在推荐等频道，只在「图库 · X」里看），文件名带作者和推文日期、正文、编号；一条推（连同补图）的图挨在一起。先「读取列表」：每个作者按月份列出帖子数、图片数、已下载过几张和几条正文样例，去掉不要的月份（比如买来的号以前刷的帖子），只下勾了的月份，翻到比最早勾的月份更老的帖子就停。下过的自动跳过。",
+			ID: "x", Title: "X", Description: "下载作者本人发的图片（原图），也可以连视频一起下（选「图片和视频」）；不要转发和引用；作者在自己推文下面接着回复补的图也要，和原推合成一个图集。用 gallery-dl，需要在「账号与 Cookie」里读过 X 的登录。图片进相册里单独的图库「X」，视频进短视频的 X 平台，两处都标为 NSFW：默认只有管理员看得到（「账号与权限」里可以给别的等级开），也不出现在推荐等频道，只在「图库 · X」、短视频的 X 里看。文件名带作者和推文日期、正文、编号；一条推（连同补图）的图挨在一起。先「读取列表」：每个作者按月份列出帖子数、图片数、已下载过几张和几条正文样例，去掉不要的月份（比如买来的号以前刷的帖子），只下勾了的月份，翻到比最早勾的月份更老的帖子就停。下过的自动跳过。",
 			Scheme: &dlScheme{Listable: true, Steps: []string{"填作者用户名或主页链接（一行一个）", "读取列表：先读最近一年的媒体页（含作者自己回复里补的图），按月份看帖子和正文样例，去掉不要的月份（买来的号、刷量的旧帖）；要更早的再往前读", "下载到暂存区（下过的跳过）", "移入资源库"},
-				Destination: "相册 / 图库「X」（NSFW）/ <作者>/", Input: "作者用户名或主页链接，一行一个", Placeholder: "nasa\n@nasa\nhttps://x.com/<作者>/media"},
+				Destination: "相册 / 图库「X」（NSFW）/ <作者>/",
+				ModeDestinations: map[string]string{"images": "相册 / 图库「X」（NSFW）/ <作者>/", "media": "图片：相册 / 图库「X」（NSFW）/ <作者>/；视频：短视频 / X（NSFW）/ <作者>/"},
+				Input: "作者用户名或主页链接，一行一个", Placeholder: "nasa\n@nasa\nhttps://x.com/<作者>/media"},
 			needs:  []string{"uv"},
-			Fields: []dlField{urls, library},
+			Fields: []dlField{urls, xMode, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("x", p) },
 		},
 		{
@@ -149,11 +156,13 @@ func (r *Router) buildList(scheme string, p dlParams, urls []string) (dlPlan, er
 	return dlPlan{title: fmt.Sprintf("%s %s %d 个链接", titles[scheme], title, len(urls)), args: args, resource: strings.TrimSuffix(path, ".json"), lib: lib}, nil
 }
 
-// videoArgs 是视频方案的模式与书名（读取列表和下载共用）。
+// videoArgs 是视频方案的模式（读取列表和下载共用）；X 的「图片和视频」模式加 --x-videos。
 func videoArgs(p dlParams) []string {
 	var args []string
 	if m := p.text("mode"); m == "video" || m == "girls" || m == "girlvideo" || m == "audio" {
 		args = append(args, "--mode", m)
+	} else if m == "media" {
+		args = append(args, "--x-videos")
 	}
 	return args
 }
@@ -226,7 +235,7 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 		}
 		args = append(args, "--plan", path, "--exclude", p.text("exclude"))
 	}
-	if scheme == "youtube" || scheme == "bilibili" { // 直接下载与按列表下载都要：模式
+	if scheme == "youtube" || scheme == "bilibili" || scheme == "x" { // 直接下载与按列表下载都要：模式
 		args = append(args, videoArgs(p)...)
 	} else if p.text("mode") == "direct" {
 		if rank := p.text("rank"); rank != "" {

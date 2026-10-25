@@ -27,6 +27,10 @@ const Dir = "staging"
 
 const manifest = "batch.json"
 
+// FolderInfo 是目录说明文件（{"name": …, "nsfw": true}），和相册图库的 gallery.CollectionFile 同名；
+// 移入时照原路径放进资源库，不当下载元数据。
+const FolderInfo = "collection.json"
+
 // Batch 是一个批次的概要。
 type Batch struct {
 	Name    string         `json:"name"`
@@ -289,7 +293,17 @@ func Import(ctx context.Context, root, batch string, importGallery GalleryImport
 			return res, err
 		}
 		parts := strings.SplitN(rel, "/", 3)
-		if strings.HasSuffix(rel, ".json") {
+		if path.Base(rel) == FolderInfo && len(parts) == 3 && parts[0] == "media_library" {
+			// 目录说明（如 shortvideo/X 标了 NSFW）：库里还没有时移过去，已有的不覆盖（可能被手改过）
+			src, dst := filepath.Join(dir, filepath.FromSlash(rel)), filepath.Join(root, filepath.FromSlash(rel))
+			if _, err := os.Lstat(dst); err == nil {
+				_ = os.Remove(src)
+			} else if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				res.fail(rel, err)
+			} else if err := moveFile(src, dst); err != nil {
+				res.fail(rel, err)
+			}
+		} else if strings.HasSuffix(rel, ".json") {
 			src := filepath.Join(dir, filepath.FromSlash(rel))
 			if n, err := appendMeta(root, batch, src); err == nil {
 				res.Meta += n

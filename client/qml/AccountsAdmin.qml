@@ -71,7 +71,7 @@ ColumnLayout {
 
     // 子分区等级
     Label { text: "子分区等级（一级目录）"; color: "#c9d1d9"; font.pixelSize: 15; font.bold: true }
-    Label { text: "未单独设置的沿用所属分区；名为 nsfw 的目录默认仅管理员可见。"; color: "#8b949e"; font.pixelSize: 12 }
+    Label { text: "未单独设置的沿用所属分区；名为 nsfw 的目录、标了 NSFW 的短视频平台和相册图库（如 shortvideo/X、gallery/X）默认仅管理员可见。"; wrapMode: Text.Wrap; Layout.fillWidth: true; color: "#8b949e"; font.pixelSize: 12 }
     Flow {
         Layout.fillWidth: true
         spacing: 10
