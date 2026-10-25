@@ -171,6 +171,11 @@ func (r *Router) runShortVideoJob(job string) {
 		r.mergeShortVideo(libID, src)
 		return
 	}
+	if rest, ok := strings.CutPrefix(job, "copy\x00"); ok {
+		from, to, _ := strings.Cut(rest, "\x00")
+		r.copyShortVideo(from, to)
+		return
+	}
 	stores, dirs, _ := r.writableStores()
 	switch job {
 	case "scan":
@@ -246,13 +251,68 @@ func (r *Router) mergeShortVideo(libID, src string) {
 		w.finish("merge", "", err)
 		return
 	}
-	res, err := store.MergeFrom(ctx, src)
+	res, err := store.MergeFrom(ctx, src, nil)
 	note := fmt.Sprintf("并入图集 %d，已有相同 %d，冲突 %d（保留本库的），补作品记录 %d、封面 %d", res.Albums, res.Same, len(res.Conflicts), res.Posts, res.Thumbs)
 	if len(res.Conflicts) > 0 {
 		note += "；冲突：" + strings.Join(res.Conflicts[:min(3, len(res.Conflicts))], "、")
 	}
 	w.progress(0)
 	w.finish("merge", note, err)
+	w.poke()
+}
+
+// copyEnds 找出同步的两端：from 只要在线，to 要在线可写；返回两边的 shortvideo/ 目录和目标库。
+func (r *Router) copyEnds(fromID, toID string) (src, dst string, store *shortvideo.Store, err error) {
+	from, to := r.findLibrary(fromID), r.findLibrary(toID)
+	if from == nil || to == nil || !from.IsOnline || !to.IsOnline || fromID == toID {
+		return "", "", nil, errors.New("两个资源库要不同且都在线")
+	}
+	if to.ReadOnly {
+		return "", "", nil, errors.New("目标资源库是只读的")
+	}
+	if src, err = r.moduleDirectory(from.RootPath, shortVideoCategory, shortvideo.DatabaseFiles...); err != nil {
+		return
+	}
+	store, dst, err = r.svStore(to)
+	return
+}
+
+// copyShortVideo 把 from 库的短视频增量补到 to 库已有的博主（见 shortvideo.PlanCopy），
+// 再并入这些博主已入库的图集，最后重新扫描目标库。
+func (r *Router) copyShortVideo(fromID, toID string) {
+	w := r.svJobs
+	src, dst, store, err := r.copyEnds(fromID, toID)
+	if err != nil {
+		w.finish("copy", "", err)
+		return
+	}
+	plan, err := shortvideo.PlanCopy(src, dst, true)
+	if err != nil {
+		w.finish("copy", "", err)
+		return
+	}
+	ctx := w.begin("copy", plan.Count)
+	res, err := shortvideo.RunCopy(ctx, src, dst, plan, func(int, int64) { w.progress(0) })
+	note := fmt.Sprintf("复制 %d 个文件（%.1f GB），合并下载记录 %d 个", res.Copied, float64(res.Bytes)/1e9, res.Archives)
+	if len(plan.Conflicts) > 0 {
+		note += fmt.Sprintf("；%d 个同名文件大小不同，没有覆盖：%s", len(plan.Conflicts), strings.Join(plan.Conflicts[:min(3, len(plan.Conflicts))], "、"))
+	}
+	if err == nil {
+		var merged shortvideo.MergeResult
+		if merged, err = store.MergeFrom(ctx, src, plan.Keeps); err == nil && merged.Albums > 0 {
+			note += fmt.Sprintf("，并入已入库图集 %d", merged.Albums)
+		}
+	}
+	if err == nil {
+		var st shortvideo.ScanStats
+		if st, err = store.Scan(ctx, dst); err == nil {
+			note += fmt.Sprintf("；扫描新增 %d", st.Added)
+		}
+	}
+	if errors.Is(err, context.Canceled) {
+		note, err = "已取消；"+note, nil
+	}
+	w.finish("copy", note, err)
 	w.poke()
 }
 
@@ -318,7 +378,7 @@ func (r *Router) probePass() int {
 	return processed
 }
 
-// handleShortVideoAdmin 处理管理操作：GET 状态；POST scan/import/clean/cancel/thumbnails。
+// handleShortVideoAdmin 处理管理操作：GET 状态；POST scan/import/clean/merge/copy-plan/copy/cancel/thumbnails。
 func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request) {
 	jobs := r.svJobs
 	action := req.URL.Path[len("/api/media/shortvideo/admin/"):]
@@ -376,6 +436,36 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 		}
 		select {
 		case jobs.requests <- "merge\x00" + body.LibraryID + "\x00" + body.Path:
+		default:
+			http.Error(w, "too many queued jobs", http.StatusTooManyRequests)
+			return
+		}
+	case "copy-plan", "copy":
+		// 把一个库的短视频补到另一个库已有的博主：copy-plan 只列出要做的事，copy 排队执行。
+		var body struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || strings.ContainsRune(body.From+body.To, 0) {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		src, dst, _, err := r.copyEnds(body.From, body.To)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if action == "copy-plan" {
+			plan, err := shortvideo.PlanCopy(src, dst, true)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, plan)
+			return
+		}
+		select {
+		case jobs.requests <- "copy\x00" + body.From + "\x00" + body.To:
 		default:
 			http.Error(w, "too many queued jobs", http.StatusTooManyRequests)
 			return

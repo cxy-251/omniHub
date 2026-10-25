@@ -6,7 +6,7 @@ type Worker = { thumbnails_enabled: boolean; job: string; done: number; total: n
 type Status = { worker: Worker; libraries: { library_id: string; name: string; stats: Stats; error?: string }[] | null };
 
 const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
-const jobNames: Record<string, string> = { scan: '扫描', import: '图集入库', clean: '清理已入库原目录', thumbnails: '生成缩略图' };
+const jobNames: Record<string, string> = { scan: '扫描', import: '图集入库', clean: '清理已入库原目录', thumbnails: '生成缩略图', merge: '合并其他设备的数据', copy: '补充到其他资源库' };
 
 // ShortVideoAdmin 管理短视频索引：缩略图开关、扫描、图集入库与校验后清理原目录。
 // 有任务运行时每 2 秒刷新进度，空闲时不轮询。

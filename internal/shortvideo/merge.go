@@ -23,8 +23,8 @@ type MergeResult struct {
 // MergeFrom 把另一台设备拷来的短视频数据库（srcDir 里的 albums.db，及可选的 index.db、thumbnails.db）
 // 并入本库（ARCHITECTURE.md 2.3）。视频与未入库的图集目录是文件，用同步或拷贝工具放进对应博主目录后由扫描收录；
 // 这里合并的是只存在于数据库里的图集（原目录已清理），以及它们的作品记录和封面。
-// 外部库经 ATTACH 挂载（路径用绑定参数），在事务里合并；重复执行结果不变。
-func (s *Store) MergeFrom(ctx context.Context, srcDir string) (MergeResult, error) {
+// keep 不为空时只合并它接受的作品。外部库经 ATTACH 挂载（路径用绑定参数），在事务里合并；重复执行结果不变。
+func (s *Store) MergeFrom(ctx context.Context, srcDir string, keep func(postID string) bool) (MergeResult, error) {
 	var result MergeResult
 	if s.readOnly {
 		return result, errors.New("只读库不能合并")
@@ -33,7 +33,7 @@ func (s *Store) MergeFrom(ctx context.Context, srcDir string) (MergeResult, erro
 	if err := checkSource(albums); err != nil {
 		return result, err
 	}
-	merged, err := s.mergeAlbums(ctx, albums, &result)
+	merged, err := s.mergeAlbums(ctx, albums, keep, &result)
 	if err != nil || len(merged) == 0 {
 		return result, err
 	}
@@ -88,7 +88,7 @@ func detach(conn *sql.Conn) {
 	conn.Close()
 }
 
-func (s *Store) mergeAlbums(ctx context.Context, path string, result *MergeResult) ([]string, error) {
+func (s *Store) mergeAlbums(ctx context.Context, path string, keep func(string) bool, result *MergeResult) ([]string, error) {
 	conn, err := attach(ctx, s.albums, path)
 	if err != nil {
 		return nil, err
@@ -110,7 +110,9 @@ func (s *Store) mergeAlbums(ctx context.Context, path string, result *MergeResul
 			rows.Close()
 			return nil, err
 		}
-		ids = append(ids, id)
+		if keep == nil || keep(id) {
+			ids = append(ids, id)
+		}
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
