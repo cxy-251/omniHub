@@ -190,7 +190,7 @@ ColumnLayout {
         }
         if (plan.other_count) out.push({type: "head", text: "其他视频 " + plan.other_count + " 个（不是 MV，不列出）"})
         var months = plan.months || []   // 图文平台（X）：一行一个月，勾掉不要的月份
-        if (months.length) out.push({type: "head", group: "month", text: "按月份（新的在上面；去掉买号前、刷量的月份）"})
+        if (months.length) out.push({type: "head", group: "month", text: "按月份（新的在上面；看样例，不要的取消勾选）"})
         if (plan.list_start) out.push({type: "head", text: plan.older_empty ? "往前读到 " + plan.list_start + "，这一年没有带图的帖子（更早的还可以接着读）"
                                                              : months.length ? "读到 " + plan.list_start + "，更早的没读" : "最近一年没有带图的帖子"})
         months.forEach(function (m) {
