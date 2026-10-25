@@ -16,9 +16,14 @@ ColumnLayout {
     readonly property var worker: status ? status.worker : null
     readonly property bool busy: !!(worker && worker.job)
     readonly property var libraries: status && status.libraries ? status.libraries : []
-    readonly property bool thumbsRunning: !!(worker && worker.thumbnails_enabled && libraries.some(function (l) { return l.stats && l.stats.thumbnails + l.stats.thumbnail_failures < l.stats.videos + l.stats.albums }))
-    readonly property int cleanable: libraries.reduce(function (n, l) { return n + (l.stats ? l.stats.albums_cleanable : 0) }, 0)
-    readonly property int importable: libraries.reduce(function (n, l) { return n + (l.stats ? l.stats.albums_on_disk - l.stats.albums_cleanable : 0) }, 0)
+    // 补充方向固定：来源是下载落地的主库（SSD），它不生成缩略图、不入库图集，统计里也不算它
+    readonly property var source: libraries.filter(function (l) { return l.copy_source })[0] || null
+    readonly property var copyTargets: status && status.copy_targets ? status.copy_targets : []
+    readonly property var processed: libraries.filter(function (l) { return !l.copy_source })
+    property var copyTarget: null
+    readonly property bool thumbsRunning: !!(worker && worker.thumbnails_enabled && processed.some(function (l) { return l.stats && l.stats.thumbnails + l.stats.thumbnail_failures < l.stats.videos + l.stats.albums }))
+    readonly property int cleanable: processed.reduce(function (n, l) { return n + (l.stats ? l.stats.albums_cleanable : 0) }, 0)
+    readonly property int importable: processed.reduce(function (n, l) { return n + (l.stats ? l.stats.albums_on_disk - l.stats.albums_cleanable : 0) }, 0)
     readonly property var jobNames: ({scan: "扫描", import: "图集入库", clean: "清理已入库原目录", thumbnails: "生成缩略图", merge: "合并其他设备的数据", copy: "补充到其他资源库"})
 
     readonly property var mergeTargets: libraries.filter(function (l) { return !l.error })
@@ -30,11 +35,10 @@ ColumnLayout {
     }
     ApiClient { id: api; onErrorChanged: page.error = error }
     function load() { api.getJSON("/api/media/shortvideo/admin/status", function (s) { page.status = s }) }
-    function copyEnds() {
-        return {from: page.libraries[Math.max(0, copyFrom.currentIndex)].library_id,
-                to: page.mergeTargets[Math.max(0, copyTo.currentIndex)].library_id}
+    function planCopy(target) {
+        page.copyPlan = null; page.copyTarget = target
+        api.send("POST", "/api/media/shortvideo/admin/copy-plan", {to: target.library_id}, function (p) { page.copyPlan = p })
     }
-    function planCopy() { page.copyPlan = null; api.send("POST", "/api/media/shortvideo/admin/copy-plan", copyEnds(), function (p) { page.copyPlan = p }) }
     function gb(bytes) { return (bytes / 1e9).toFixed(1) + " GB" }
     function act(action, body) { api.send("POST", "/api/media/shortvideo/admin/" + action, body || {}, function () { page.load() }) }
     Component.onCompleted: load()
@@ -81,20 +85,27 @@ ColumnLayout {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 12
                 text: "合并：视频和没入库的图集目录是文件，直接拷进对应博主目录再「重新扫描」即可；已入库并清理了原目录的图集只在数据库里，用这个按钮把另一台设备的 albums.db（同目录的 index.db、thumbnails.db 一起）并进来。同一作品内容不同时保留本库的。"
             }
-            // 增量补充：把来源库的新视频补到目标库已有的博主，只增加不删除。
-            RowLayout {
-                visible: page.libraries.length > 1 && page.mergeTargets.length > 0
+            // 增量补充：把 SSD 的新视频补到目标库已有的博主，只增加不删除。
+            Label { visible: !!page.source; text: "短视频移动"; color: "#e6edf3"; font.pixelSize: 14; topPadding: 6 }
+            Flow {
+                visible: !!page.source
+                Layout.fillWidth: true
                 spacing: 6
-                Label { text: "从"; color: "#c9d1d9"; font.pixelSize: 12 }
-                ComboBox { id: copyFrom; model: page.libraries; textRole: "name"; implicitHeight: 30; onActivated: page.copyPlan = null }
-                Label { text: "补充到"; color: "#c9d1d9"; font.pixelSize: 12 }
-                ComboBox { id: copyTo; model: page.mergeTargets; textRole: "name"; implicitHeight: 30; currentIndex: page.mergeTargets.length > 1 ? 1 : 0; onActivated: page.copyPlan = null }
-                Button { text: "查看要补充的"; enabled: !page.busy; onClicked: page.planCopy() }
+                Repeater {
+                    model: page.copyTargets
+                    delegate: Button {
+                        required property var modelData
+                        text: page.source.name + " → " + modelData.name
+                        enabled: !page.busy
+                        onClicked: page.planCopy(modelData)
+                    }
+                }
             }
             Label {
-                visible: page.libraries.length > 1
+                visible: !!page.source
                 Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 12
-                text: "只处理目标库里已有的博主：目标没有的文件才复制（先写临时文件，写完核对大小再改名），下载记录 downloaded.txt 两边合并；同名但大小不同的文件不覆盖，只列出来。不删除目标库的任何文件，中断后再点一次接着补。"
+                text: page.source ? "新下载的视频在「" + page.source.name + "」，这里只做中转：不生成缩略图、不入库图集。点按钮先列出要补的内容，确认后才复制。"
+                    + "只补目标库里已有的博主；目标没有的文件才复制（写完核对大小再改名），downloaded.txt 两边合并；同名但大小不同的不覆盖，只列出来；不删除任何文件，中断后再点一次接着补。" : ""
             }
             Rectangle {
                 visible: !!page.copyPlan
@@ -107,8 +118,8 @@ ColumnLayout {
                     Label {
                         Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#c9d1d9"; font.pixelSize: 12
                         text: !page.copyPlan ? "" : page.copyPlan.files === 0 && !(page.copyPlan.archives || []).length
-                            ? "没有要补充的。"
-                            : (page.copyPlan.creators || []).length + " 个博主：复制 " + page.copyPlan.files + " 个文件（" + page.gb(page.copyPlan.bytes) + "），合并下载记录 " + (page.copyPlan.archives || []).length + " 个"
+                            ? page.source.name + " → " + page.copyTarget.name + "：没有要补充的。"
+                            : page.source.name + " → " + page.copyTarget.name + "：" + (page.copyPlan.creators || []).length + " 个博主：复制 " + page.copyPlan.files + " 个文件（" + page.gb(page.copyPlan.bytes) + "），合并下载记录 " + (page.copyPlan.archives || []).length + " 个"
                               + "\n" + (page.copyPlan.creators || []).slice(0, 8).join("、") + ((page.copyPlan.creators || []).length > 8 ? " 等" : "")
                     }
                     Label {
@@ -120,7 +131,7 @@ ColumnLayout {
                         PrimaryButton {
                             text: "开始补充"
                             enabled: !page.busy && !!page.copyPlan && (page.copyPlan.files > 0 || (page.copyPlan.archives || []).length > 0)
-                            onClicked: { page.act("copy", page.copyEnds()); page.copyPlan = null }
+                            onClicked: { page.act("copy", {to: page.copyTarget.library_id}); page.copyPlan = null }
                         }
                         Button { text: "取消"; onClicked: page.copyPlan = null }
                     }
@@ -175,7 +186,10 @@ ColumnLayout {
                     Label { text: modelData.name; color: "#e6edf3"; font.pixelSize: 14; font.bold: true; bottomPadding: 4 }
                     Label { visible: !!modelData.error; text: modelData.error || ""; color: "#8b949e"; font.pixelSize: 12 }
                     Repeater {
-                        model: modelData.error ? [] : [
+                        model: modelData.error ? [] : modelData.copy_source ? [
+                            "视频 " + modelData.stats.videos + "，图集 " + modelData.stats.albums,
+                            "新下载的中转区：不生成缩略图、不入库图集"
+                        ] : [
                             "视频 " + modelData.stats.videos + "，图集 " + modelData.stats.albums,
                             "编码/尺寸已探测 " + modelData.stats.videos_probed + " / " + modelData.stats.videos,
                             "缩略图 " + modelData.stats.thumbnails + " / " + (modelData.stats.videos + modelData.stats.albums) + (modelData.stats.thumbnail_failures ? "（" + modelData.stats.thumbnail_failures + " 个无法解码）" : ""),

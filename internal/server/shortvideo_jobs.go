@@ -150,9 +150,11 @@ func (r *Router) runShortVideoWorker() {
 }
 
 // writableStores 列出在线可写库的短视频库（不存在的分类目录跳过）。
-func (r *Router) writableStores() (stores []*shortvideo.Store, dirs []string, libs []*library.Library) {
+// noSource 时去掉补充的来源库（下载落地的主库）：它只是中转，不生成缩略图、不入库图集。
+func (r *Router) writableStores(noSource bool) (stores []*shortvideo.Store, dirs []string, libs []*library.Library) {
+	source, _ := r.copyLibraries()
 	for _, lib := range r.libMgr.ListLibraries() {
-		if !lib.IsOnline || lib.ReadOnly || r.libMgr.IsCategoryDisabled(shortVideoCategory) {
+		if !lib.IsOnline || lib.ReadOnly || r.libMgr.IsCategoryDisabled(shortVideoCategory) || noSource && source != nil && lib.ID == source.ID {
 			continue
 		}
 		store, dir, err := r.svStore(lib)
@@ -171,12 +173,11 @@ func (r *Router) runShortVideoJob(job string) {
 		r.mergeShortVideo(libID, src)
 		return
 	}
-	if rest, ok := strings.CutPrefix(job, "copy\x00"); ok {
-		from, to, _ := strings.Cut(rest, "\x00")
-		r.copyShortVideo(from, to)
+	if to, ok := strings.CutPrefix(job, "copy\x00"); ok {
+		r.copyShortVideo(to)
 		return
 	}
-	stores, dirs, _ := r.writableStores()
+	stores, dirs, _ := r.writableStores(job != "scan")
 	switch job {
 	case "scan":
 		ctx := w.begin(job, len(stores))
@@ -261,27 +262,51 @@ func (r *Router) mergeShortVideo(libID, src string) {
 	w.poke()
 }
 
-// copyEnds 找出同步的两端：from 只要在线，to 要在线可写；返回两边的 shortvideo/ 目录和目标库。
-func (r *Router) copyEnds(fromID, toID string) (src, dst string, store *shortvideo.Store, err error) {
-	from, to := r.findLibrary(fromID), r.findLibrary(toID)
-	if from == nil || to == nil || !from.IsOnline || !to.IsOnline || fromID == toID {
-		return "", "", nil, errors.New("两个资源库要不同且都在线")
+// copyLibraries 返回短视频补充的方向：来源是下载落地的主库，目标是其他在线可写、有短视频目录的库。
+// 只有一个库时（比如手机上）没有来源，所有库照常生成缩略图、入库图集。
+func (r *Router) copyLibraries() (source *library.Library, targets []*library.Library) {
+	for _, lib := range r.libMgr.ListLibraries() {
+		if !lib.IsOnline {
+			continue
+		}
+		if lib.IsPrimary {
+			source = lib
+		} else if !lib.ReadOnly {
+			if _, err := r.moduleDirectory(lib.RootPath, shortVideoCategory, shortvideo.DatabaseFiles...); err == nil {
+				targets = append(targets, lib)
+			}
+		}
 	}
-	if to.ReadOnly {
-		return "", "", nil, errors.New("目标资源库是只读的")
+	if source == nil || len(targets) == 0 {
+		return nil, nil
 	}
-	if src, err = r.moduleDirectory(from.RootPath, shortVideoCategory, shortvideo.DatabaseFiles...); err != nil {
+	return source, targets
+}
+
+// copyEnds 找出补充到 toID 库的两端：返回来源和目标的 shortvideo/ 目录与目标库。
+func (r *Router) copyEnds(toID string) (src, dst string, store *shortvideo.Store, err error) {
+	source, targets := r.copyLibraries()
+	var to *library.Library
+	for _, t := range targets {
+		if t.ID == toID {
+			to = t
+		}
+	}
+	if to == nil {
+		return "", "", nil, errors.New("目标资源库不在线、只读，或不是可补充的库")
+	}
+	if src, err = r.moduleDirectory(source.RootPath, shortVideoCategory, shortvideo.DatabaseFiles...); err != nil {
 		return
 	}
 	store, dst, err = r.svStore(to)
 	return
 }
 
-// copyShortVideo 把 from 库的短视频增量补到 to 库已有的博主（见 shortvideo.PlanCopy），
+// copyShortVideo 把来源库的短视频增量补到 toID 库已有的博主（见 shortvideo.PlanCopy），
 // 再并入这些博主已入库的图集，最后重新扫描目标库。
-func (r *Router) copyShortVideo(fromID, toID string) {
+func (r *Router) copyShortVideo(toID string) {
 	w := r.svJobs
-	src, dst, store, err := r.copyEnds(fromID, toID)
+	src, dst, store, err := r.copyEnds(toID)
 	if err != nil {
 		w.finish("copy", "", err)
 		return
@@ -319,7 +344,7 @@ func (r *Router) copyShortVideo(fromID, toID string) {
 // thumbnailPass 为各库生成一小批缩略图，返回处理数量；有显式任务等待或开关关闭时提前返回。
 func (r *Router) thumbnailPass() int {
 	w := r.svJobs
-	stores, dirs, _ := r.writableStores()
+	stores, dirs, _ := r.writableStores(true)
 	processed := 0
 	for i, s := range stores {
 		pending, err := s.PendingThumbnails(8)
@@ -354,7 +379,7 @@ func (r *Router) thumbnailPass() int {
 // probePass 为各库探测一小批视频的编码、尺寸与时长；有显式任务等待时提前返回。
 func (r *Router) probePass() int {
 	w := r.svJobs
-	stores, dirs, _ := r.writableStores()
+	stores, dirs, _ := r.writableStores(false)
 	processed := 0
 	for i, s := range stores {
 		pending, err := s.PendingProbes(16)
@@ -384,17 +409,27 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 	action := req.URL.Path[len("/api/media/shortvideo/admin/"):]
 	if req.Method == http.MethodGet && action == "status" {
 		type libStats struct {
-			ID    string           `json:"library_id"`
-			Name  string           `json:"name"`
-			Stats shortvideo.Stats `json:"stats"`
-			Error string           `json:"error,omitempty"`
+			ID     string           `json:"library_id"`
+			Name   string           `json:"name"`
+			Source bool             `json:"copy_source"` // 补充的来源（下载落地的主库）：不生成缩略图、不入库图集
+			Stats  shortvideo.Stats `json:"stats"`
+			Error  string           `json:"error,omitempty"`
+		}
+		type libRef struct {
+			ID   string `json:"library_id"`
+			Name string `json:"name"`
 		}
 		var libs []libStats
+		var copyTo []libRef
+		source, targets := r.copyLibraries()
+		for _, t := range targets {
+			copyTo = append(copyTo, libRef{t.ID, t.Name})
+		}
 		for _, lib := range r.libMgr.ListLibraries() {
 			if !lib.IsOnline {
 				continue
 			}
-			entry := libStats{ID: lib.ID, Name: lib.Name}
+			entry := libStats{ID: lib.ID, Name: lib.Name, Source: source != nil && lib.ID == source.ID}
 			if store, _, err := r.svStore(lib); err != nil {
 				entry.Error = "未建立索引"
 				if lib.ReadOnly {
@@ -405,7 +440,7 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 			}
 			libs = append(libs, entry)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"worker": jobs.status(), "libraries": libs})
+		writeJSON(w, http.StatusOK, map[string]any{"worker": jobs.status(), "libraries": libs, "copy_targets": copyTo})
 		return
 	}
 	if req.Method != http.MethodPost {
@@ -441,16 +476,15 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 			return
 		}
 	case "copy-plan", "copy":
-		// 把一个库的短视频补到另一个库已有的博主：copy-plan 只列出要做的事，copy 排队执行。
+		// 把来源库（SSD）的短视频补到目标库已有的博主：copy-plan 只列出要做的事，copy 排队执行。
 		var body struct {
-			From string `json:"from"`
-			To   string `json:"to"`
+			To string `json:"to"`
 		}
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || strings.ContainsRune(body.From+body.To, 0) {
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || strings.ContainsRune(body.To, 0) {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
-		src, dst, _, err := r.copyEnds(body.From, body.To)
+		src, dst, _, err := r.copyEnds(body.To)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -465,7 +499,7 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 			return
 		}
 		select {
-		case jobs.requests <- "copy\x00" + body.From + "\x00" + body.To:
+		case jobs.requests <- "copy\x00" + body.To:
 		default:
 			http.Error(w, "too many queued jobs", http.StatusTooManyRequests)
 			return
