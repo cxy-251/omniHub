@@ -112,7 +112,7 @@ jobs:
       - name: Package Android
         run: |
           mkdir -p dist/omniHub
-          cp out/android-arm64/omnihub-server packaging/android/start.sh packaging/android/README.txt dist/omniHub/
+          cp out/android-arm64/omnihub-server packaging/android/omnihub.sh packaging/android/README.txt dist/omniHub/
           tar -C dist -czf "omniHub-$VERSION-android-arm64.tar.gz" omniHub
       - uses: actions/upload-artifact@v4
         with:
