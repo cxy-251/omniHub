@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -111,7 +112,8 @@ func (r *Router) handleToolsMetrics(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// 磁盘看资源库所在的盘（系统根分区在 SteamOS 上只读、很小，没有参考意义）。
-	disk := "/"
+	// 没有资源库时看用户目录（安卓上 / 读出来是 0）。
+	disk, _ := os.UserHomeDir()
 	if primary := r.libMgr.GetPrimary(); primary != nil && primary.IsOnline {
 		disk = primary.RootPath
 	}
