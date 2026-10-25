@@ -3,6 +3,7 @@ package shortvideo
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -22,6 +23,8 @@ type Phone struct {
 	Dir   string // 手机上 shortvideo/ 的绝对路径
 	Shell func(ctx context.Context, script string) ([]byte, error)
 	Push  func(ctx context.Context, files []string, remoteDir string) error
+	// Reserve 是要给手机留的剩余空间，0 时用 PhoneReserve
+	Reserve int64
 }
 
 // endMark 标在清单末尾：读到它才说明手机把清单完整输出了（数据线中途断开时输出会被截断）。
@@ -29,6 +32,12 @@ const endMark = "__OMNIHUB_END__"
 
 // recordMark 在合并输出的 downloaded.txt 里分隔各文件（记录行是「平台 作品ID」，不会以它开头）。
 const recordMark = "==omnihub== "
+
+// ErrPhoneFull 表示手机剩余空间不够，视频传到一半停下了（下载记录已同步）。
+var ErrPhoneFull = errors.New("手机剩余空间不够，视频没传完就停下了（下载记录已同步）")
+
+// PhoneReserve 是同步时给手机留的剩余空间：传完一批会低于它就停下（存储塞满时安卓会出问题）。
+const PhoneReserve = 10 << 30
 
 // pushBatch 是一次 adb push 与一次核对改名脚本处理的文件数上限（脚本长度随之增长）。
 const pushBatch = 50
@@ -78,6 +87,19 @@ func shq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'
 
 func (p Phone) incoming() string { return path.Join(path.Dir(p.Dir), ".omnihub-incoming") }
 
+// Free 返回手机上 shortvideo/ 所在存储的剩余字节数。
+func (p Phone) Free(ctx context.Context) (int64, error) {
+	out, err := p.Shell(ctx, "stat -f -c '%a %S' "+shq(path.Dir(p.Dir)))
+	if err != nil {
+		return 0, fmt.Errorf("查手机剩余空间：%w", err)
+	}
+	var blocks, size int64
+	if _, err := fmt.Sscan(string(out), &blocks, &size); err != nil {
+		return 0, fmt.Errorf("查手机剩余空间：输出看不懂（%q）", strings.TrimSpace(string(out)))
+	}
+	return blocks * size, nil
+}
+
 // PhoneListing 是手机 shortvideo/ 的文件清单与全部下载记录。手机共享存储不区分大小写，按小写比对。
 type PhoneListing struct {
 	sizes map[string]int64
@@ -91,7 +113,9 @@ func (l *PhoneListing) size(rel string) (int64, bool) {
 	n, ok := l.sizes[strings.ToLower(rel)]
 	return n, ok
 }
-func (l *PhoneListing) records(rel string) ([]string, error) { return l.recs[strings.ToLower(rel)], nil }
+func (l *PhoneListing) records(rel string) ([]string, error) {
+	return l.recs[strings.ToLower(rel)], nil
+}
 func (l *PhoneListing) recordFiles() ([]string, error) {
 	var out []string
 	for k := range l.recs {
@@ -166,6 +190,9 @@ func PlanPhone(ctx context.Context, src string, phone Phone) (CopyPlan, *PhoneLi
 	if err != nil {
 		return plan, nil, err
 	}
+	if plan.PhoneFree, err = phone.Free(ctx); err != nil {
+		return plan, nil, err
+	}
 	// downloaded.txt 不当普通文件传：合并回来源后，和手机不一致的在最后整个推过去。Archives 列出这些
 	files := plan.Files[:0]
 	for _, f := range plan.Files {
@@ -227,7 +254,22 @@ func RunPhone(ctx context.Context, src string, phone Phone, plan CopyPlan, l *Ph
 		files := groups[dir]
 		for i := 0; i < len(files); i += pushBatch {
 			batch := files[i:min(i+pushBatch, len(files))]
-			var err error
+			var need int64
+			for _, f := range batch {
+				need += f.Size
+			}
+			free, err := phone.Free(ctx)
+			if err != nil {
+				return res, err
+			}
+			reserve := cmp.Or(phone.Reserve, PhoneReserve)
+			if free-need < reserve {
+				// 视频停下，下载记录照样推过去
+				if err := phone.finishRecords(ctx, src, l, &res); err != nil {
+					return res, err
+				}
+				return res, fmt.Errorf("%w：还剩 %.1f GB，要给手机留 %.0f GB", ErrPhoneFull, float64(free)/(1<<30), float64(reserve)/(1<<30))
+			}
 			for try := 0; try < 3; try++ {
 				if err = ctx.Err(); err != nil {
 					return res, err
@@ -250,13 +292,19 @@ func RunPhone(ctx context.Context, src string, phone Phone, plan CopyPlan, l *Ph
 			}
 		}
 	}
-	n, err := phone.pushRecords(ctx, src, l)
+	return res, phone.finishRecords(ctx, src, l, &res)
+}
+
+// finishRecords 推下载记录并清掉临时目录。
+func (p Phone) finishRecords(ctx context.Context, src string, l *PhoneListing, res *CopyResult) error {
+	inc := p.incoming()
+	n, err := p.pushRecords(ctx, src, l)
 	res.Archives = n
 	if err != nil {
-		return res, err
+		return err
 	}
-	_, _ = phone.Shell(ctx, "rm -rf "+shq(inc))
-	return res, nil
+	_, _ = p.Shell(ctx, "rm -rf "+shq(inc))
+	return nil
 }
 
 // pushBatch 把同一目录下的一批文件推到临时目录，核对大小后改名放进 dir；返回放进去的文件。

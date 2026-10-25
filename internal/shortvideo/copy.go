@@ -26,12 +26,13 @@ type CopyPlan struct {
 	Files     []CopyFile `json:"-"`
 	Count     int        `json:"files"`
 	Bytes     int64      `json:"bytes"`
-	Archives  []string   `json:"archives"`  // 要合并进目标的 downloaded.txt
-	Back      []string   `json:"back"`      // 目标里有、来源缺记录的 downloaded.txt：合并回来源，让来源的记录保持完整
-	Creators  []string   `json:"creators"`  // 有内容要补的博主
-	Conflicts []string   `json:"conflicts"` // 两边同名、大小不同的文件：不覆盖，只报告
-	Skipped   int        `json:"skipped"`   // 目标里没有的博主（只补已有博主时）
-	Prefixes  []string   `json:"-"`         // 处理的博主（"平台/博主/"），合并已入库图集时按它筛选
+	Archives  []string   `json:"archives"`             // 要合并进目标的 downloaded.txt
+	Back      []string   `json:"back"`                 // 目标里有、来源缺记录的 downloaded.txt：合并回来源，让来源的记录保持完整
+	Creators  []string   `json:"creators"`             // 有内容要补的博主
+	Conflicts []string   `json:"conflicts"`            // 两边同名、大小不同的文件：不覆盖，只报告
+	Skipped   int        `json:"skipped"`              // 目标里没有的博主（只补已有博主时）
+	PhoneFree int64      `json:"phone_free,omitempty"` // 同步手机时：手机剩余空间
+	Prefixes  []string   `json:"-"`                    // 处理的博主（"平台/博主/"），合并已入库图集时按它筛选
 }
 
 // CopyFile 是一个要复制的文件。

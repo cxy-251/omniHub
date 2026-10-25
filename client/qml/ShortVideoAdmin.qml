@@ -63,7 +63,11 @@ ColumnLayout {
                           + page.source.name + "，再把合并好的 " + archives.length + " 个下载记录推到手机，两边一致" + page.creatorsText(creators)
                           + "\n传输时别拔线；断了重新点一次，从断点接着传。"
                         : "手机上已经都有了，下载记录也一致。"),
-                    warn: page.conflictsText(p.conflicts || []), start: todo ? "开始同步到手机" : "", action: "phone", body: {}}
+                    warn: [p.phone_free && p.bytes > p.phone_free - 10 * 1073741824
+                              ? "手机只剩 " + page.gb(p.phone_free) + "，放不下这次的 " + page.gb(p.bytes) + "：会传到手机剩 10 GB 左右时停下（下载记录照样同步），没传的下次接着传。"
+                              : p.phone_free ? "手机剩余 " + page.gb(p.phone_free) + "。" : "",
+                           page.conflictsText(p.conflicts || [])].filter(function (x) { return x !== "" }).join("\n"),
+                    start: todo ? "开始同步到手机" : "", action: "phone", body: {}}
         })
     }
     function planClean() {

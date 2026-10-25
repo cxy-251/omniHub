@@ -2,6 +2,7 @@ package shortvideo
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +15,8 @@ func fakePhone(t *testing.T) (Phone, string) {
 	dir := filepath.Join(root, "omni_library/media_library/shortvideo")
 	os.MkdirAll(dir, 0o755)
 	return Phone{
-		Dir: dir,
+		Dir:     dir,
+		Reserve: 1 << 20,
 		Shell: func(ctx context.Context, script string) ([]byte, error) {
 			return exec.CommandContext(ctx, "sh", "-c", script).Output()
 		},
@@ -97,5 +99,28 @@ func TestPhoneSyncAndClean(t *testing.T) {
 	}
 	if read(src, "抖音/a/downloaded.txt") == "" || read(src, "抖音/s/1.mp4") == "" {
 		t.Fatal("clean removed records or unsynced video")
+	}
+}
+
+func TestPhoneStopsWhenFull(t *testing.T) {
+	src := t.TempDir()
+	phone, dst := fakePhone(t)
+	os.MkdirAll(filepath.Join(src, "抖音/a"), 0o755)
+	os.WriteFile(filepath.Join(src, "抖音/a/1.mp4"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(src, "抖音/a/downloaded.txt"), []byte("douyin 1\n"), 0o644)
+	plan, l, err := PlanPhone(context.Background(), src, phone)
+	if err != nil || plan.PhoneFree <= 0 {
+		t.Fatalf("plan = %+v, %v", plan, err)
+	}
+	plan.Files[0].Size = plan.PhoneFree // 假装这个文件大到放不下
+	res, err := RunPhone(context.Background(), src, phone, plan, l, nil)
+	if !errors.Is(err, ErrPhoneFull) || res.Copied != 0 || res.Archives != 1 {
+		t.Fatalf("res = %+v, %v", res, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "抖音/a/1.mp4")); err == nil {
+		t.Fatal("copied despite full phone")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dst, "抖音/a/downloaded.txt")); string(b) != "douyin 1\n" {
+		t.Fatalf("records = %q", b)
 	}
 }

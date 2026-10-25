@@ -24,17 +24,17 @@ type Creator struct {
 
 // Post 是一个作品：视频文件或图集目录。
 type Post struct {
-	ID         string `json:"id"`
-	CreatorID  string `json:"creator_id"`
-	Kind       Kind   `json:"kind"`
-	Title      string `json:"title"`
-	Published  string `json:"published"`
-	Size       int64  `json:"size"`
-	MTime      int64  `json:"-"`
-	ImageCount int    `json:"image_count,omitempty"`
-	Music      string `json:"music,omitempty"`
-	OnDisk     bool   `json:"on_disk"`
-	Imported   bool   `json:"imported"`
+	ID         string  `json:"id"`
+	CreatorID  string  `json:"creator_id"`
+	Kind       Kind    `json:"kind"`
+	Title      string  `json:"title"`
+	Published  string  `json:"published"`
+	Size       int64   `json:"size"`
+	MTime      int64   `json:"-"`
+	ImageCount int     `json:"image_count,omitempty"`
+	Music      string  `json:"music,omitempty"`
+	OnDisk     bool    `json:"on_disk"`
+	Imported   bool    `json:"imported"`
 	Codec      string  `json:"codec,omitempty"`
 	Width      int     `json:"width,omitempty"`
 	Height     int     `json:"height,omitempty"`
