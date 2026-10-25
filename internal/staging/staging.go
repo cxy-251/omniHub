@@ -20,6 +20,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"omnihub/internal/shortvideo"
 )
 
 // Dir 是暂存区在资源库根目录下的名字。
@@ -314,8 +316,8 @@ func Import(ctx context.Context, root, batch string, importGallery GalleryImport
 			res.Refused++
 		} else {
 			dst := filepath.Join(root, filepath.FromSlash(rel))
-			if path.Base(rel) == RecordFile { // 插件的已下载名单只增不减：批次里的是最新的，覆盖库里旧的
-				if err := copyFile(filepath.Join(dir, filepath.FromSlash(rel)), dst); err != nil {
+			if path.Base(rel) == RecordFile { // 插件的已下载名单：和库里的合并，两边的记录都保留（插件给的不一定全）
+				if _, err := shortvideo.MergeArchive(filepath.Join(dir, filepath.FromSlash(rel)), dst); err != nil {
 					res.fail(rel, err)
 				} else {
 					_ = os.Remove(filepath.Join(dir, filepath.FromSlash(rel)))

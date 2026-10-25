@@ -105,7 +105,7 @@ ColumnLayout {
                 visible: !!page.source
                 Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 12
                 text: page.source ? "新下载的视频在「" + page.source.name + "」，这里只做中转：不生成缩略图、不入库图集。点按钮先列出要补的内容，确认后才复制。"
-                    + "只补目标库里已有的博主；目标没有的文件才复制（写完核对大小再改名），downloaded.txt 两边合并；同名但大小不同的不覆盖，只列出来；不删除任何文件，中断后再点一次接着补。" : ""
+                    + "只补目标库里已有的博主；目标没有的文件才复制（写完核对大小再改名），downloaded.txt 两边合并（目标库上所有博主的下载记录也补回「" + page.source.name + "」，浏览器插件按它判断下过没有）；同名但大小不同的不覆盖，只列出来；不删除任何文件，中断后再点一次接着补。" : ""
             }
             Rectangle {
                 visible: !!page.copyPlan
@@ -117,9 +117,9 @@ ColumnLayout {
                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 8
                     Label {
                         Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#c9d1d9"; font.pixelSize: 12
-                        text: !page.copyPlan ? "" : page.copyPlan.files === 0 && !(page.copyPlan.archives || []).length
+                        text: !page.copyPlan ? "" : page.copyPlan.files === 0 && !(page.copyPlan.archives || []).length && !(page.copyPlan.back || []).length
                             ? page.source.name + " → " + page.copyTarget.name + "：没有要补充的。"
-                            : page.source.name + " → " + page.copyTarget.name + "：" + (page.copyPlan.creators || []).length + " 个博主：复制 " + page.copyPlan.files + " 个文件（" + page.gb(page.copyPlan.bytes) + "），合并下载记录 " + (page.copyPlan.archives || []).length + " 个"
+                            : page.source.name + " → " + page.copyTarget.name + "：" + (page.copyPlan.creators || []).length + " 个博主：复制 " + page.copyPlan.files + " 个文件（" + page.gb(page.copyPlan.bytes) + "），合并下载记录 " + (page.copyPlan.archives || []).length + " 个；" + page.copyTarget.name + " 上有 " + (page.copyPlan.back || []).length + " 个博主的下载记录补回 " + page.source.name
                               + "\n" + (page.copyPlan.creators || []).slice(0, 8).join("、") + ((page.copyPlan.creators || []).length > 8 ? " 等" : "")
                     }
                     Label {
@@ -130,7 +130,7 @@ ColumnLayout {
                     RowLayout {
                         PrimaryButton {
                             text: "开始补充"
-                            enabled: !page.busy && !!page.copyPlan && (page.copyPlan.files > 0 || (page.copyPlan.archives || []).length > 0)
+                            enabled: !page.busy && !!page.copyPlan && (page.copyPlan.files > 0 || (page.copyPlan.archives || []).length > 0 || (page.copyPlan.back || []).length > 0)
                             onClicked: { page.act("copy", {to: page.copyTarget.library_id}); page.copyPlan = null }
                         }
                         Button { text: "取消"; onClicked: page.copyPlan = null }

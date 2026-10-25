@@ -318,7 +318,7 @@ func (r *Router) copyShortVideo(toID string) {
 	}
 	ctx := w.begin("copy", plan.Count)
 	res, err := shortvideo.RunCopy(ctx, src, dst, plan, func(int, int64) { w.progress(0) })
-	note := fmt.Sprintf("复制 %d 个文件（%.1f GB），合并下载记录 %d 个", res.Copied, float64(res.Bytes)/1e9, res.Archives)
+	note := fmt.Sprintf("复制 %d 个文件（%.1f GB），合并下载记录 %d 个，补回来源的下载记录 %d 个", res.Copied, float64(res.Bytes)/1e9, res.Archives, res.Back)
 	if len(plan.Conflicts) > 0 {
 		note += fmt.Sprintf("；%d 个同名文件大小不同，没有覆盖：%s", len(plan.Conflicts), strings.Join(plan.Conflicts[:min(3, len(plan.Conflicts))], "、"))
 	}

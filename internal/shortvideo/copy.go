@@ -26,7 +26,8 @@ type CopyPlan struct {
 	Files     []CopyFile `json:"-"`
 	Count     int        `json:"files"`
 	Bytes     int64      `json:"bytes"`
-	Archives  []string   `json:"archives"`  // 要合并的 downloaded.txt
+	Archives  []string   `json:"archives"`  // 要合并进目标的 downloaded.txt
+	Back      []string   `json:"back"`      // 目标里有、来源缺记录的 downloaded.txt：合并回来源，让来源的记录保持完整
 	Creators  []string   `json:"creators"`  // 有内容要补的博主
 	Conflicts []string   `json:"conflicts"` // 两边同名、大小不同的文件：不覆盖，只报告
 	Skipped   int        `json:"skipped"`   // 目标里没有的博主（只补已有博主时）
@@ -44,11 +45,14 @@ type CopyResult struct {
 	Copied   int   `json:"copied"`
 	Bytes    int64 `json:"bytes"`
 	Archives int   `json:"archives"` // 合并后有新增行的 downloaded.txt
+	Back     int   `json:"back"`     // 合并回来源的 downloaded.txt
 }
 
 // PlanCopy 比较 src 与 dst 两个 shortvideo/ 目录，列出 dst 缺少的文件。
 // existingOnly 时只处理 dst 里已有的博主；否则 src 的博主全部补过去，平台目录下的文件（如 collection.json）也补。
 // 规则：dst 没有的文件复制；同名同大小视为已有；downloaded.txt 两边合并；同名不同大小的只报告。
+// 下载记录是浏览器插件判断「下过没有」的依据，src 要保存全部记录：dst 所有博主的 downloaded.txt 里 src 没有的行
+// 也合并回 src（src 没有这个博主时只建目录放 downloaded.txt，扫描不会把它当成博主）。
 // 不复制数据库、隐藏文件、下载中的半截文件和软链接，也从不删除 dst 的任何东西。
 func PlanCopy(src, dst string, existingOnly bool) (CopyPlan, error) {
 	var plan CopyPlan
@@ -113,8 +117,20 @@ func PlanCopy(src, dst string, existingOnly bool) (CopyPlan, error) {
 			}
 		}
 	}
+	back, err := filepath.Glob(filepath.Join(dst, "*", "*", ArchiveFile))
+	if err != nil {
+		return plan, err
+	}
+	for _, b := range back {
+		rel, _ := filepath.Rel(dst, b)
+		if missing, _ := archiveMissing(b, filepath.Join(src, rel)); len(missing) > 0 {
+			plan.Back = append(plan.Back, filepath.ToSlash(rel))
+		}
+	}
 	for c := range creators {
-		plan.Creators = append(plan.Creators, c)
+		if c != "" {
+			plan.Creators = append(plan.Creators, c)
+		}
 	}
 	sort.Strings(plan.Creators)
 	plan.Count = len(plan.Files)
@@ -140,7 +156,7 @@ func (plan *CopyPlan) add(src, dst, rel string, creators map[string]bool) {
 	if err != nil {
 		return
 	}
-	creator := rel
+	creator := "" // 平台目录下的文件不属于博主
 	if parts := strings.SplitN(rel, "/", 3); len(parts) == 3 {
 		creator = parts[0] + "/" + parts[1]
 	}
@@ -164,6 +180,12 @@ func (plan *CopyPlan) add(src, dst, rel string, creators map[string]bool) {
 // 中断只会留下临时文件（下次同步时覆盖重写），不会出现半截的正式文件。progress 在每个文件完成后调用。
 func RunCopy(ctx context.Context, src, dst string, plan CopyPlan, progress func(done int, bytes int64)) (CopyResult, error) {
 	var res CopyResult
+	for _, rel := range plan.Back {
+		if _, err := MergeArchive(filepath.Join(dst, filepath.FromSlash(rel)), filepath.Join(src, filepath.FromSlash(rel))); err != nil {
+			return res, fmt.Errorf("%s：%w", rel, err)
+		}
+		res.Back++
+	}
 	for _, f := range plan.Files {
 		if err := ctx.Err(); err != nil {
 			return res, err
@@ -270,8 +292,12 @@ func archiveMissing(from, to string) ([]string, error) {
 	return missing, nil
 }
 
+// archiveLines 读出记录行；文件不存在时为空。
 func archiveLines(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -285,13 +311,16 @@ func archiveLines(path string) ([]string, error) {
 	return lines, sc.Err()
 }
 
-// MergeArchive 把 from 里 to 没有的行追加到 to 的内容后面，写临时文件再替换；返回新增行数。
+// MergeArchive 把 from 里 to 没有的行追加到 to 的内容后面（to 不存在时新建），写临时文件再替换；返回新增行数。
 func MergeArchive(from, to string) (int, error) {
 	missing, err := archiveMissing(from, to)
 	if err != nil || len(missing) == 0 {
 		return 0, err
 	}
 	data, err := os.ReadFile(to)
+	if errors.Is(err, fs.ErrNotExist) {
+		data, err = nil, os.MkdirAll(filepath.Dir(to), 0o755)
+	}
 	if err != nil {
 		return 0, err
 	}
