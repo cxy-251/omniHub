@@ -77,7 +77,7 @@ func (r *Router) schemeKinds() []*dlKind {
 		},
 		{
 			ID: "x", Title: "X", Description: "下载作者本人发的图片（原图；不要视频、转发和引用；作者在自己推文下面接着回复补的图也要，和原推合成一个图集）。用 gallery-dl，需要在「账号与 Cookie」里读过 X 的登录。图片进相册里单独的图库「X」（标为 NSFW，不出现在推荐等频道，只在「图库 · X」里看），文件名带作者和推文日期、正文、编号；一条推（连同补图）的图挨在一起。先「读取列表」：每个作者按月份列出帖子数、图片数、已下载过几张和几条正文样例，去掉不要的月份（比如买来的号以前刷的帖子），只下勾了的月份，翻到比最早勾的月份更老的帖子就停。下过的自动跳过。",
-			Scheme: &dlScheme{Listable: true, Steps: []string{"填作者用户名或主页链接（一行一个）", "读取列表：按月份看帖子和正文样例，去掉不要的月份（买来的号、刷量的旧帖）", "下载到暂存区（下过的跳过）", "移入资源库"},
+			Scheme: &dlScheme{Listable: true, Steps: []string{"填作者用户名或主页链接（一行一个）", "读取列表：先读最近一年的媒体页（含作者自己回复里补的图），按月份看帖子和正文样例，去掉不要的月份（买来的号、刷量的旧帖）；要更早的再往前读", "下载到暂存区（下过的跳过）", "移入资源库"},
 				Destination: "相册 / 图库「X」（NSFW）/ <作者>/", Input: "作者用户名或主页链接，一行一个", Placeholder: "nasa\n@nasa\nhttps://x.com/<作者>/media"},
 			needs:  []string{"uv"},
 			Fields: []dlField{urls, library},
@@ -97,6 +97,7 @@ func (r *Router) schemeKinds() []*dlKind {
 var (
 	planToken = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
 	videoIDs  = regexp.MustCompile(`^[A-Za-z0-9_,-]*$`)
+	listMonth = regexp.MustCompile(`^[0-9]{4}-(0[1-9]|1[0-2])$`)
 )
 
 // planPath 是音乐「读取列表」写出的列表文件（界面生成的令牌对应一个文件）。
@@ -132,8 +133,20 @@ func (r *Router) buildList(scheme string, p dlParams, urls []string) (dlPlan, er
 	args := append([]string{"scripts/general.py"}, urls...)
 	args = append(args, "--batch", dir, "--scheme", scheme, "--archive", archivePath(lib.RootPath, scheme), "--plan-out", path)
 	args = append(args, videoArgs(p)...)
+	title := "读取列表"
+	if before := p.text("list_before"); before != "" && scheme == "x" { // 往前多读一年，接在上一份列表后面
+		from, ok := r.planPath(p.text("list_from"))
+		if !ok || !listMonth.MatchString(before) {
+			return dlPlan{}, errors.New("列表参数不对")
+		}
+		if _, err := os.Stat(from); err != nil {
+			return dlPlan{}, errors.New("列表已过期，请重新读取")
+		}
+		args = append(args, "--list-before", before, "--list-from", from)
+		title = "读取 " + before + " 以前一年"
+	}
 	titles := map[string]string{"music": "音乐", "youtube": "YouTube", "bilibili": "B站", "x": "X"}
-	return dlPlan{title: fmt.Sprintf("%s 读取列表 %d 个链接", titles[scheme], len(urls)), args: args, resource: strings.TrimSuffix(path, ".json"), lib: lib}, nil
+	return dlPlan{title: fmt.Sprintf("%s %s %d 个链接", titles[scheme], title, len(urls)), args: args, resource: strings.TrimSuffix(path, ".json"), lib: lib}, nil
 }
 
 // videoArgs 是视频方案的模式与书名（读取列表和下载共用）。

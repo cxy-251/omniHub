@@ -77,6 +77,17 @@ ColumnLayout {
         var params = Object.assign({}, values, {step: "list", plan_token: planToken, urls: lines.join("\n"), library: stagingLibrary || values.library || ""})
         api.send("POST", "/api/downloads/run", {kind: kind.id, params: params}, listStarted)
     }
+    // 图文平台（X）一次读 12 个月；往前再读一年，接在现在的列表后面（勾选保留）
+    function readOlder() {
+        var from = planToken
+        planToken = Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
+        planJob = null; plan = null
+        save({token: "", job: "", picked: planToken})
+        var params = Object.assign({}, values, {step: "list", plan_token: planToken, list_from: from, list_before: olderFrom,
+                                                urls: lines.join("\n"), library: stagingLibrary || values.library || ""})
+        api.send("POST", "/api/downloads/run", {kind: kind.id, params: params}, listStarted)
+    }
+    property string olderFrom: ""   // 往前读时从哪个月接着（上一份列表的 list_start）
     function listStarted(job) { planJob = job; save({token: planToken, job: job.id}) }
     onInputChanged: if (kind.scheme && kind.scheme.listable) save({input: input})
     function restoreList() {
@@ -98,6 +109,7 @@ ColumnLayout {
         }
         plan = r
         bookName = r.book || ""
+        olderFrom = r.list_start || ""
     }
     function pollList() {
         api.getJSON("/api/downloads/jobs", function (list) {
@@ -179,6 +191,8 @@ ColumnLayout {
         if (plan.other_count) out.push({type: "head", text: "其他视频 " + plan.other_count + " 个（不是 MV，不列出）"})
         var months = plan.months || []   // 图文平台（X）：一行一个月，勾掉不要的月份
         if (months.length) out.push({type: "head", group: "month", text: "按月份（新的在上面；去掉买号前、刷量的月份）"})
+        if (plan.list_start) out.push({type: "head", text: plan.older_empty ? "往前读到 " + plan.list_start + "，这一年没有带图的帖子（更早的还可以接着读）"
+                                                             : months.length ? "读到 " + plan.list_start + "，更早的没读" : "最近一年没有带图的帖子"})
         months.forEach(function (m) {
             out.push({type: "month", grp: "month", id: m.id, text: m.author + "　" + m.month + "　" + m.posts + " 条 · " + m.images + " 张" + (m.done ? "（已下 " + m.done + "）" : ""),
                       note: m.samples.join(" / ")})
@@ -376,6 +390,7 @@ ColumnLayout {
                 : panel.lines.length + " 个链接，排成一个任务在后台下完，下过的自动跳过。"
         }
         Chip { visible: panel.isMusic && !panel.plan; text: "不看列表，直接下载"; enabled: panel.ready && !panel.listing; onClicked: panel.start() }
+        Chip { visible: !!panel.plan && !!panel.plan.list_start; text: "往前再读一年"; enabled: panel.ready && !panel.listing; onClicked: panel.readOlder() }
         Chip { visible: panel.listable && !!panel.plan; text: "重新读取"; enabled: panel.ready; onClicked: panel.readList() }
         PrimaryButton {
             visible: panel.listable

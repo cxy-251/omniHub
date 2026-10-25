@@ -566,20 +566,39 @@ def month_filter(months):
     return f"date.strftime('%Y-%m') in {set(months)!r} or (date < datetime({y}, {m}, 1) and abort())"
 
 
+def list_window(before):
+    """读列表一次读 12 个月：before（YYYY-MM，不含；空是下个月）往前 12 个月。返回 (起始月, 过滤条件)：
+    比 before 新的跳过，比起始月更老的翻到就停。"""
+    if before:
+        y, m = int(before[:4]), int(before[5:7])
+    else:
+        t = time.localtime()
+        y, m = t.tm_year + t.tm_mon // 12, t.tm_mon % 12 + 1
+    sy, sm = y - 1, m
+    filt = f"(date >= datetime({sy}, {sm}, 1) and date < datetime({y}, {m}, 1)) or (date < datetime({sy}, {sm}, 1) and abort())"
+    return f"{sy:04d}-{sm:02d}", filt
+
+
 def write_social_plan(a, scheme):
-    """图文平台读取列表：每个作者按月份列出帖子数、图片数、已下载过的张数和几条正文样例，给用户按月勾选（只读不下载）。"""
+    """图文平台读取列表：每个作者按月份列出帖子数、图片数、已下载过的张数和几条正文样例，给用户按月勾选（只读不下载）。
+    一次只读最近 12 个月（--list-before 给出时读那之前的 12 个月，接在 --list-from 的列表后面），大号不用翻完整个媒体页。"""
     conf = SOCIAL[scheme]
+    start, window = list_window(a.list_before)
+    old = {}
+    if a.list_from:
+        with open(a.list_from, encoding="utf-8") as f:
+            old = json.load(f)
     done = set()
     db = a.archive + ".gallery-dl.sqlite3" if a.archive else ""
     if db and os.path.isfile(db):
         import sqlite3
         with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as con:
             done = {r[0] for r in con.execute("SELECT entry FROM archive")}
-    months, errors = [], 0
+    new_months, errors = [], 0
     for i, url in enumerate(a.urls):
         url = social_url(url, conf)
         progress(i, len(a.urls), f"读 {url}")
-        proc = subprocess.run(gallerydl_base(a, conf) + ["--simulate", "-j", url], capture_output=True, text=True)
+        proc = subprocess.run(gallerydl_base(a, conf, window) + ["--simulate", "-j", url], capture_output=True, text=True)
         try:
             rows = [x[-1] for x in json.loads(proc.stdout or "[]") if isinstance(x, list) and len(x) >= 3 and isinstance(x[-1], dict)]
         except ValueError:
@@ -598,15 +617,17 @@ def write_social_plan(a, scheme):
                 mo["done"] += 1
             if text not in mo["samples"] and len(mo["samples"]) < 3:
                 mo["samples"].append(text)
-        log(f"{url}：{len(rows)} 张，{len(by_month)} 个月")
+        log(f"{url}：{start} 起的 12 个月里 {len(rows)} 张，{len(by_month)} 个月有图")
         for month in sorted(by_month, reverse=True):
             mo = by_month[month]
-            months.append({"id": f"{url}|{month}", "url": url, "author": mo["author"], "month": month, "posts": len(mo["posts"]),
+            new_months.append({"id": f"u{i}-{month}", "url": url, "author": mo["author"], "month": month, "posts": len(mo["posts"]),
                            "images": mo["images"], "done": mo["done"], "samples": mo["samples"], "picked": True})
-    plan = {"urls": a.urls, "mode": "social", "months": months, "songs": [], "mvs": [], "videos": [], "skipped": [],
-            "done": [], "other": [], "errors": errors}
+    months = (old.get("months") or []) + new_months
+    # list_start：已经读到哪个月（再往前读时从这里接着）；older_empty：这次往前读的 12 个月一张都没有
+    plan = {"urls": a.urls, "mode": "social", "months": months, "list_start": start, "older_empty": bool(old) and not new_months,
+            "songs": [], "mvs": [], "videos": [], "skipped": [], "done": [], "other": [], "errors": errors}
     save_plan(a, plan)
-    log(f"列表：{len(months)} 个月，共 {sum(m['images'] for m in months)} 张（已下载过 {sum(m['done'] for m in months)} 张）")
+    log(f"列表：{len(months)} 个月，共 {sum(m['images'] for m in months)} 张（已下载过 {sum(m['done'] for m in months)} 张），读到 {start}")
 
 
 def gallerydl_plan(a, scheme):
@@ -1047,6 +1068,8 @@ def main():
     p.add_argument("--x-limit", type=int, default=0, help="X：每个用户最多下最近这么多个文件，0 表示不限")
     p.add_argument("--plan-out", default="", help="音乐：只读取列表，把会下什么写进这个 JSON 文件，不下载")
     p.add_argument("--plan", default="", help="音乐：按读取好的列表（--plan-out 写的文件）下载")
+    p.add_argument("--list-before", default="", help="图文平台读取列表：读这个月（YYYY-MM）以前的 12 个月，空是最近 12 个月")
+    p.add_argument("--list-from", default="", help="图文平台读取列表：接在这个列表文件后面（往前多读一年）")
     p.add_argument("--exclude", default="", help="按列表下载时不要的视频 ID，逗号分隔")
     p.add_argument("--mode", choices=["video", "girls", "girlvideo", "audio"], default="video",
                    help="视频方案的模式：video 普通视频、girls 女团 MV（按公司/艺人分）、girlvideo 女团相关视频（按发布者）、"
