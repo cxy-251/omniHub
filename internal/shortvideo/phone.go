@@ -25,6 +25,10 @@ type Phone struct {
 	Push  func(ctx context.Context, files []string, remoteDir string) error
 	// Reserve 是要给手机留的剩余空间，0 时用 PhoneReserve
 	Reserve int64
+	// Reconnect 在断线后等手机重新连上（可能要等用户拔插数据线）；为空时只稍等再重试
+	Reconnect func(ctx context.Context) error
+	// Waiting 在等待重新连接时调用，告诉界面现在在等什么（空字符串表示等完了）
+	Waiting func(note string)
 }
 
 // endMark 标在清单末尾：读到它才说明手机把清单完整输出了（数据线中途断开时输出会被截断）。
@@ -65,6 +69,46 @@ func ConnectADB(ctx context.Context, adb, dir string) (Phone, error) {
 			_, err := run(ctx, append(append([]string{"push"}, files...), remoteDir+"/")...)
 			return err
 		},
+	}
+	// 断线重连（照 z6x 的 phone_push.sh）：先等手机重新出现，认不回来就重启 adb 服务；
+	// 手机端 adbd 卡死时只能拔插数据线（或关开 USB 调试），最多等 30 分钟
+	p.Reconnect = func(ctx context.Context) error {
+		ready := func(d time.Duration) bool {
+			c, cancel := context.WithTimeout(ctx, d)
+			defer cancel()
+			if _, err := run(c, "wait-for-usb-device"); err != nil {
+				return false
+			}
+			out, err := run(c, "shell", "echo ok")
+			return err == nil && strings.TrimSpace(string(out)) == "ok"
+		}
+		for range 3 {
+			if ready(60 * time.Second) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			c, cancel := context.WithTimeout(ctx, 20*time.Second)
+			_ = exec.CommandContext(c, adb, "kill-server").Run()
+			_ = exec.CommandContext(c, adb, "start-server").Run()
+			cancel()
+		}
+		if p.Waiting != nil {
+			p.Waiting("手机的 adb 卡住了：拔下数据线再插上（或在开发者选项里关掉再打开「USB 调试」），插回后自动接着传，最多等 30 分钟")
+			defer p.Waiting("")
+		}
+		if !ready(30 * time.Minute) {
+			return errors.New("手机一直没有重新连上")
+		}
+		c, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		_, _ = run(c, "shell", "svc usb setFunctions")
+		time.Sleep(3 * time.Second)
+		if !ready(60 * time.Second) {
+			return errors.New("手机一直没有重新连上")
+		}
+		return nil
 	}
 	short, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -181,12 +225,13 @@ func complete(out []byte) ([]string, error) {
 }
 
 // PlanPhone 列出要补到手机的内容：来源的所有博主都补（手机放全量），downloaded.txt 两边合并后一致。
-func PlanPhone(ctx context.Context, src string, phone Phone) (CopyPlan, *PhoneListing, error) {
+// platforms 不为空时只处理这些平台（见 PlanCopy）。
+func PlanPhone(ctx context.Context, src string, phone Phone, platforms []string) (CopyPlan, *PhoneListing, error) {
 	l, err := phone.List(ctx)
 	if err != nil {
 		return CopyPlan{}, nil, err
 	}
-	plan, err := planCopy(src, l, false)
+	plan, err := planCopy(src, l, false, platforms)
 	if err != nil {
 		return plan, nil, err
 	}
@@ -211,6 +256,9 @@ func PlanPhone(ctx context.Context, src string, phone Phone) (CopyPlan, *PhoneLi
 	for _, f := range found {
 		rel, _ := filepath.Rel(src, f)
 		rel = filepath.ToSlash(rel)
+		if !inPlatforms(rel, platforms) {
+			continue
+		}
 		mine, err := archiveLines(f)
 		if err != nil {
 			return plan, nil, err
@@ -258,47 +306,52 @@ func RunPhone(ctx context.Context, src string, phone Phone, plan CopyPlan, l *Ph
 			for _, f := range batch {
 				need += f.Size
 			}
-			free, err := phone.Free(ctx)
-			if err != nil {
-				return res, err
-			}
-			reserve := cmp.Or(phone.Reserve, PhoneReserve)
-			if free-need < reserve {
-				// 视频停下，下载记录照样推过去
-				if err := phone.finishRecords(ctx, src, l, &res); err != nil {
-					return res, err
-				}
-				return res, fmt.Errorf("%w：还剩 %.1f GB，要给手机留 %.0f GB", ErrPhoneFull, float64(free)/(1<<30), float64(reserve)/(1<<30))
-			}
-			for try := 0; try < 3; try++ {
+			// 断线（传输失败、读不到手机）时等手机重新连上，接着传这一批；已经放进手机的文件不会重传
+			var err error
+			for try := 0; ; try++ {
 				if err = ctx.Err(); err != nil {
 					return res, err
 				}
-				var moved []CopyFile
-				if moved, err = phone.pushBatch(ctx, src, dir, batch); err == nil {
-					for _, f := range moved {
-						res.Copied++
-						res.Bytes += f.Size
+				var free int64
+				if free, err = phone.Free(ctx); err == nil {
+					reserve := cmp.Or(phone.Reserve, PhoneReserve)
+					if free-need < reserve {
+						// 视频停下，下载记录照样推过去
+						if err := phone.finishRecords(ctx, src, l, plan.Archives, &res); err != nil {
+							return res, err
+						}
+						return res, fmt.Errorf("%w：还剩 %.1f GB，要给手机留 %.0f GB", ErrPhoneFull, float64(free)/(1<<30), float64(reserve)/(1<<30))
 					}
-					if progress != nil {
-						progress(res.Copied, res.Bytes)
+					var moved []CopyFile
+					if moved, err = phone.pushBatch(ctx, src, dir, batch); err == nil {
+						for _, f := range moved {
+							res.Copied++
+							res.Bytes += f.Size
+						}
+						if progress != nil {
+							progress(res.Copied, res.Bytes)
+						}
+						break
 					}
-					break
 				}
-				time.Sleep(3 * time.Second)
-			}
-			if err != nil {
-				return res, fmt.Errorf("%s：%w", dir, err)
+				if try >= 4 || ctx.Err() != nil {
+					return res, fmt.Errorf("%s：%w", dir, err)
+				}
+				if phone.Reconnect == nil {
+					time.Sleep(3 * time.Second)
+				} else if rerr := phone.Reconnect(ctx); rerr != nil {
+					return res, fmt.Errorf("%s：%w（%v）", dir, rerr, err)
+				}
 			}
 		}
 	}
-	return res, phone.finishRecords(ctx, src, l, &res)
+	return res, phone.finishRecords(ctx, src, l, plan.Archives, &res)
 }
 
 // finishRecords 推下载记录并清掉临时目录。
-func (p Phone) finishRecords(ctx context.Context, src string, l *PhoneListing, res *CopyResult) error {
+func (p Phone) finishRecords(ctx context.Context, src string, l *PhoneListing, records []string, res *CopyResult) error {
 	inc := p.incoming()
-	n, err := p.pushRecords(ctx, src, l)
+	n, err := p.pushRecords(ctx, src, l, records)
 	res.Archives = n
 	if err != nil {
 		return err
@@ -355,6 +408,8 @@ func (p Phone) pushBatch(ctx context.Context, src, dir string, batch []CopyFile)
 		for _, f := range missing {
 			if out, _ := p.Shell(ctx, "[ -e "+shq(path.Join(dst, path.Base(f.Rel)))+" ] && echo y"); strings.TrimSpace(string(out)) != "y" {
 				bad = append(bad, f)
+			} else {
+				moved = append(moved, f) // 计划时手机上没有，现在有了：是断线前那一轮放进去的
 			}
 		}
 		if len(bad) > 0 {
@@ -365,11 +420,8 @@ func (p Phone) pushBatch(ctx context.Context, src, dir string, batch []CopyFile)
 }
 
 // pushRecords 把来源里和手机不一致（记录或顺序不同）的 downloaded.txt 推过去替换，返回推过去的个数。
-func (p Phone) pushRecords(ctx context.Context, src string, l *PhoneListing) (int, error) {
-	found, err := filepath.Glob(filepath.Join(src, "*", "*", ArchiveFile))
-	if err != nil {
-		return 0, err
-	}
+// candidates 是计划里列出的要推的记录（已按平台筛过）；合并回来源后再比一次，一致的跳过。
+func (p Phone) pushRecords(ctx context.Context, src string, l *PhoneListing, candidates []string) (int, error) {
 	stage, err := os.MkdirTemp("", "omnihub-records-")
 	if err != nil {
 		return 0, err
@@ -377,9 +429,8 @@ func (p Phone) pushRecords(ctx context.Context, src string, l *PhoneListing) (in
 	defer os.RemoveAll(stage)
 	root := filepath.Join(stage, "records")
 	var rels []string
-	for _, f := range found {
-		rel, _ := filepath.Rel(src, f)
-		rel = filepath.ToSlash(rel)
+	for _, rel := range candidates {
+		f := filepath.Join(src, filepath.FromSlash(rel))
 		mine, err := archiveLines(f)
 		if err != nil {
 			return 0, err
@@ -446,7 +497,8 @@ type CleanPlan struct {
 
 // PlanClean 找出来源里可以清理的视频与图集：手机上有同名同大小的文件，且 keep 里每个已有这个博主的库也有。
 // downloaded.txt、数据库、隐藏与半截文件一律保留。
-func PlanClean(src string, phone *PhoneListing, keep []string) (CleanPlan, error) {
+// platforms 不为空时只清理这些平台（MV 等 omniHub 自己下载的不碰）。
+func PlanClean(src string, phone *PhoneListing, keep []string, platforms []string) (CleanPlan, error) {
 	var plan CleanPlan
 	targets := make([]target, len(keep))
 	for i, k := range keep {
@@ -475,7 +527,7 @@ func PlanClean(src string, phone *PhoneListing, keep []string) (CleanPlan, error
 	}
 	for _, c := range creators {
 		st, err := os.Lstat(c)
-		if err != nil || !st.IsDir() || skipName(filepath.Base(c)) || skipName(filepath.Base(filepath.Dir(c))) {
+		if err != nil || !st.IsDir() || skipName(filepath.Base(c)) || skipName(filepath.Base(filepath.Dir(c))) || !inPlatforms(filepath.Base(filepath.Dir(c)), platforms) {
 			continue
 		}
 		entries, err := os.ReadDir(c)

@@ -54,7 +54,7 @@ func TestPhoneSyncAndClean(t *testing.T) {
 	put(dst, "抖音/o/downloaded.txt", "douyin 8\ndouyin 7\n")
 	put(sd, "抖音/s/other.mp4", "x") // SD 卡有这个博主，但还没补 1.mp4
 
-	plan, l, err := PlanPhone(context.Background(), src, phone)
+	plan, l, err := PlanPhone(context.Background(), src, phone, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,12 +81,12 @@ func TestPhoneSyncAndClean(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(filepath.Dir(dst), ".omnihub-incoming")); err == nil {
 		t.Fatal("incoming left behind")
 	}
-	again, l, err := PlanPhone(context.Background(), src, phone)
+	again, l, err := PlanPhone(context.Background(), src, phone, nil)
 	if err != nil || again.Count != 0 || len(again.Back) != 0 || len(again.Archives) != 0 {
 		t.Fatalf("again = %+v, %v", again, err)
 	}
 
-	clean, err := PlanClean(src, l, []string{sd})
+	clean, err := PlanClean(src, l, []string{sd}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestPhoneStopsWhenFull(t *testing.T) {
 	os.MkdirAll(filepath.Join(src, "抖音/a"), 0o755)
 	os.WriteFile(filepath.Join(src, "抖音/a/1.mp4"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(src, "抖音/a/downloaded.txt"), []byte("douyin 1\n"), 0o644)
-	plan, l, err := PlanPhone(context.Background(), src, phone)
+	plan, l, err := PlanPhone(context.Background(), src, phone, nil)
 	if err != nil || plan.PhoneFree <= 0 {
 		t.Fatalf("plan = %+v, %v", plan, err)
 	}
@@ -122,5 +122,59 @@ func TestPhoneStopsWhenFull(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(dst, "抖音/a/downloaded.txt")); string(b) != "douyin 1\n" {
 		t.Fatalf("records = %q", b)
+	}
+}
+
+func TestPhoneResumesAfterDisconnect(t *testing.T) {
+	src := t.TempDir()
+	phone, dst := fakePhone(t)
+	for i, name := range []string{"1.mp4", "2.mp4"} {
+		p := filepath.Join(src, "抖音/a", name)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte{byte(i)}, 0o644)
+	}
+	os.MkdirAll(filepath.Join(src, "MV/x"), 0o755)
+	os.WriteFile(filepath.Join(src, "MV/x/song.mp4"), []byte("mv"), 0o644)
+	push, fails, reconnects := phone.Push, 1, 0
+	phone.Push = func(ctx context.Context, files []string, dir string) error {
+		if fails > 0 { // 第一次推送中途断线：只传了一半
+			fails--
+			os.WriteFile(filepath.Join(dir, filepath.Base(files[0])), nil, 0o644)
+			return errors.New("device offline")
+		}
+		return push(ctx, files, dir)
+	}
+	phone.Reconnect = func(context.Context) error { reconnects++; return nil }
+	platforms := []string{"抖音", "快手", "TikTok", "小红书"}
+	plan, l, err := PlanPhone(context.Background(), src, phone, platforms)
+	if err != nil || plan.Count != 2 {
+		t.Fatalf("plan = %+v, %v", plan, err)
+	}
+	res, err := RunPhone(context.Background(), src, phone, plan, l, nil)
+	if err != nil || res.Copied != 2 || reconnects != 1 {
+		t.Fatalf("res = %+v, reconnects %d, %v", res, reconnects, err)
+	}
+	for i, name := range []string{"1.mp4", "2.mp4"} {
+		if b, _ := os.ReadFile(filepath.Join(dst, "抖音/a", name)); len(b) != 1 || b[0] != byte(i) {
+			t.Fatalf("%s = %v", name, b)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dst, "MV")); err == nil {
+		t.Fatal("MV synced")
+	}
+	os.MkdirAll(filepath.Join(dst, "MV/x"), 0o755) // 手机上也有这首 MV，清理时也不能动它
+	os.WriteFile(filepath.Join(dst, "MV/x/song.mp4"), []byte("mv"), 0o644)
+	after, err := phone.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean, _ := PlanClean(src, after, nil, platforms)
+	if clean.Files != 2 {
+		t.Fatalf("clean = %+v", clean)
+	}
+	for _, item := range clean.Items {
+		if filepath.Base(filepath.Dir(filepath.Dir(item))) == "MV" {
+			t.Fatal("MV cleaned")
+		}
 	}
 }

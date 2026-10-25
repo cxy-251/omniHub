@@ -15,6 +15,7 @@ import (
 	"omnihub/internal/library"
 	"omnihub/internal/platform"
 	"omnihub/internal/shortvideo"
+	"omnihub/internal/staging"
 )
 
 // 短视频后台工作：同一时间只执行一件事（扫描 / 图集入库 / 清理原目录 / 生成缩略图），
@@ -29,6 +30,7 @@ type svWorker struct {
 	lastJob   string
 	lastError string
 	lastNote  string
+	detail    string // 进行中的任务现在在等什么（比如等手机重新连上）
 	cancelJob context.CancelFunc
 
 	requests chan string
@@ -47,6 +49,7 @@ type svStatus struct {
 	LastJob    string `json:"last_job"`
 	LastError  string `json:"last_error"`
 	LastNote   string `json:"last_note"`
+	Detail     string `json:"detail,omitempty"`
 }
 
 func newSVWorker() *svWorker {
@@ -78,7 +81,7 @@ func (w *svWorker) close() {
 func (w *svWorker) status() svStatus {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return svStatus{w.thumbs, w.job, w.done, w.total, w.lastJob, w.lastError, w.lastNote}
+	return svStatus{w.thumbs, w.job, w.done, w.total, w.lastJob, w.lastError, w.lastNote, w.detail}
 }
 
 func (w *svWorker) thumbsEnabled() bool {
@@ -109,7 +112,7 @@ func (w *svWorker) finish(job string, note string, err error) {
 	if w.cancelJob != nil {
 		w.cancelJob()
 	}
-	w.job, w.cancelJob, w.lastJob, w.lastNote = "", nil, job, note
+	w.job, w.cancelJob, w.lastJob, w.lastNote, w.detail = "", nil, job, note, ""
 	w.lastError = ""
 	if err != nil {
 		w.lastError = err.Error()
@@ -319,7 +322,7 @@ func (r *Router) copyShortVideo(toID string) {
 		w.finish("copy", "", err)
 		return
 	}
-	plan, err := shortvideo.PlanCopy(src, dst, true)
+	plan, err := shortvideo.PlanCopy(src, dst, true, staging.BrowserPlatforms)
 	if err != nil {
 		w.finish("copy", "", err)
 		return
@@ -399,7 +402,12 @@ func (r *Router) phoneShortVideo() {
 		w.finish("phone", "", err)
 		return
 	}
-	plan, listing, err := shortvideo.PlanPhone(ctx, src, phone)
+	phone.Waiting = func(note string) {
+		w.mu.Lock()
+		w.detail = note
+		w.mu.Unlock()
+	}
+	plan, listing, err := shortvideo.PlanPhone(ctx, src, phone, staging.BrowserPlatforms)
 	if err != nil {
 		w.finish("phone", "", err)
 		return
@@ -440,7 +448,7 @@ func (r *Router) cleanSyncedShortVideo() {
 		w.finish("clean-phone", "", err)
 		return
 	}
-	plan, err := shortvideo.PlanClean(src, listing, r.keepDirs())
+	plan, err := shortvideo.PlanClean(src, listing, r.keepDirs(), staging.BrowserPlatforms)
 	if err != nil {
 		w.finish("clean-phone", "", err)
 		return
@@ -612,7 +620,7 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 			return
 		}
 		if action == "copy-plan" {
-			plan, err := shortvideo.PlanCopy(src, dst, true)
+			plan, err := shortvideo.PlanCopy(src, dst, true, staging.BrowserPlatforms)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -634,7 +642,7 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 			return
 		}
 		if action == "phone-plan" {
-			plan, _, err := shortvideo.PlanPhone(req.Context(), src, phone)
+			plan, _, err := shortvideo.PlanPhone(req.Context(), src, phone, staging.BrowserPlatforms)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadGateway)
 				return
@@ -647,7 +655,7 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		plan, err := shortvideo.PlanClean(src, listing, r.keepDirs())
+		plan, err := shortvideo.PlanClean(src, listing, r.keepDirs(), staging.BrowserPlatforms)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

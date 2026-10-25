@@ -30,7 +30,7 @@ func TestPlanAndRunCopy(t *testing.T) {
 	put(dst, "抖音/a/downloaded.txt", "douyin 9\ndouyin 1")
 	put(dst, "快手/c/downloaded.txt", "kuaishou 5\n")
 
-	plan, err := PlanCopy(src, dst, true)
+	plan, err := PlanCopy(src, dst, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,10 +63,10 @@ func TestPlanAndRunCopy(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dst, "抖音/b")); err == nil {
 		t.Fatal("creator not on dst was copied")
 	}
-	if again, _ := PlanCopy(src, dst, true); again.Count != 0 || len(again.Archives) != 0 || len(again.Back) != 0 {
+	if again, _ := PlanCopy(src, dst, true, nil); again.Count != 0 || len(again.Archives) != 0 || len(again.Back) != 0 {
 		t.Fatalf("second plan = %+v", again)
 	}
-	all, _ := PlanCopy(src, dst, false)
+	all, _ := PlanCopy(src, dst, false, nil)
 	if all.Count != 2 || len(all.Creators) != 1 { // 抖音/b/1.mp4 与 X/collection.json；有内容的博主只有 抖音/b
 		t.Fatalf("all = %+v", all)
 	}

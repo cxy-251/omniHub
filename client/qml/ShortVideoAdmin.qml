@@ -148,7 +148,8 @@ ColumnLayout {
                 visible: !!page.source
                 Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 12
                 text: page.source ? "新下载的视频在「" + page.source.name + "」，这里只做中转：不生成缩略图、不入库图集。每个按钮先列出要做的事，确认后才执行；中断后再点一次接着做。\n"
-                    + "• 补到 SD 卡：只补 SD 卡已有的博主。• 补到手机：所有博主都补（手机放全量）。目标没有的文件才复制，写完核对大小再放进去；同名但大小不同的不覆盖，只列出来；不删除目标的任何文件。\n"
+                    + "只处理浏览器插件下载的平台（抖音、快手、TikTok、小红书），MV 等不动。\n"
+                    + "• 补到 SD 卡：只补 SD 卡已有的博主。• 补到手机：所有博主都补（手机放全量）；数据线断了会等手机重新连上接着传，重新点一次也从断点接着传。目标没有的文件才复制，写完核对大小再放进去；同名但大小不同的不覆盖，只列出来；不删除目标的任何文件。\n"
                     + "• downloaded.txt 两边合并，目标上的记录也补回「" + page.source.name + "」（浏览器插件按它判断下过没有）；同步手机后两边内容一致。\n"
                     + "• 清理：手机上有同名同大小的文件、且 SD 卡已有的博主那边也补上了，才移进回收站；downloaded.txt 全部保留。" : ""
             }
@@ -202,7 +203,7 @@ ColumnLayout {
             Label {
                 color: "#c9d1d9"; font.pixelSize: 12
                 text: !page.worker ? "正在读取…"
-                    : page.worker.job && page.worker.job !== "thumbnails" ? "正在" + (page.jobNames[page.worker.job] || page.worker.job) + "：" + page.worker.done + "/" + page.worker.total
+                    : page.worker.job && page.worker.job !== "thumbnails" ? "正在" + (page.jobNames[page.worker.job] || page.worker.job) + "：" + page.worker.done + "/" + page.worker.total + (page.worker.detail ? "\n" + page.worker.detail : "")
                     : page.worker.last_job ? "上次" + (page.jobNames[page.worker.last_job] || page.worker.last_job) + "：" + (page.worker.last_note || "完成")
                     : "空闲"
             }

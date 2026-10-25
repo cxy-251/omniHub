@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -55,8 +56,18 @@ type CopyResult struct {
 // 下载记录是浏览器插件判断「下过没有」的依据，src 要保存全部记录：dst 所有博主的 downloaded.txt 里 src 没有的行
 // 也合并回 src（src 没有这个博主时只建目录放 downloaded.txt，扫描不会把它当成博主）。
 // 不复制数据库、隐藏文件、下载中的半截文件和软链接，也从不删除 dst 的任何东西。
-func PlanCopy(src, dst string, existingOnly bool) (CopyPlan, error) {
-	return planCopy(src, localTarget(dst), existingOnly)
+// platforms 不为空时只处理这些平台目录（浏览器插件下载的平台），其他目录和 shortvideo/ 下的文件都不碰。
+func PlanCopy(src, dst string, existingOnly bool, platforms []string) (CopyPlan, error) {
+	return planCopy(src, localTarget(dst), existingOnly, platforms)
+}
+
+// inPlatforms 判断 rel 是否在 platforms 列出的平台目录下（platforms 为空时都算）。
+func inPlatforms(rel string, platforms []string) bool {
+	if len(platforms) == 0 {
+		return true
+	}
+	first, _, _ := strings.Cut(rel, "/")
+	return slices.Contains(platforms, first)
 }
 
 // target 是同步的目标一端：本地目录，或经数据线读到的手机清单。rel 都是相对 shortvideo/ 的斜杠路径。
@@ -93,15 +104,15 @@ func (t localTarget) recordFiles() ([]string, error) {
 	return found, err
 }
 
-func planCopy(src string, dst target, existingOnly bool) (CopyPlan, error) {
+func planCopy(src string, dst target, existingOnly bool, platforms []string) (CopyPlan, error) {
 	var plan CopyPlan
-	platforms, err := os.ReadDir(src)
+	entries, err := os.ReadDir(src)
 	if err != nil {
 		return plan, err
 	}
 	creators := map[string]bool{}
-	for _, p := range platforms {
-		if skipName(p.Name()) {
+	for _, p := range entries {
+		if skipName(p.Name()) || len(platforms) > 0 && !slices.Contains(platforms, p.Name()) {
 			continue
 		}
 		if p.Type().IsRegular() {
@@ -161,6 +172,9 @@ func planCopy(src string, dst target, existingOnly bool) (CopyPlan, error) {
 		return plan, err
 	}
 	for _, rel := range back {
+		if !inPlatforms(rel, platforms) {
+			continue
+		}
 		theirs, err := dst.records(rel)
 		if err != nil {
 			return plan, err
