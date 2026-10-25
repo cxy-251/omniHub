@@ -329,7 +329,7 @@ func (r *Router) copyShortVideo(toID string) {
 	}
 	ctx := w.begin("copy", plan.Count)
 	res, err := shortvideo.RunCopy(ctx, src, dst, plan, func(int, int64) { w.progress(0) })
-	note := fmt.Sprintf("复制 %d 个文件（%.1f GB），合并下载记录 %d 个，补回来源的下载记录 %d 个", res.Copied, float64(res.Bytes)/1e9, res.Archives, res.Back)
+	note := fmt.Sprintf("复制 %d 个文件（%.1f GB）", res.Copied, float64(res.Bytes)/1e9)
 	if len(plan.Conflicts) > 0 {
 		note += fmt.Sprintf("；%d 个同名文件大小不同，没有覆盖：%s", len(plan.Conflicts), strings.Join(plan.Conflicts[:min(3, len(plan.Conflicts))], "、"))
 	}
@@ -393,11 +393,11 @@ func (r *Router) keepDirs() []string {
 	return dirs
 }
 
-// phoneShortVideo 把 SSD 的短视频全部增量补到手机，下载记录两边合并到一致（见 shortvideo.RunPhone）。
+// phoneShortVideo 把 SSD 上插件平台的短视频全部增量补到手机（见 shortvideo.RunPhone）。
 func (r *Router) phoneShortVideo() {
 	w := r.svJobs
 	ctx := w.begin("phone", 0)
-	src, source, phone, err := r.phoneEnds(ctx)
+	src, _, phone, err := r.phoneEnds(ctx)
 	if err != nil {
 		w.finish("phone", "", err)
 		return
@@ -420,15 +420,12 @@ func (r *Router) phoneShortVideo() {
 		w.done = done
 		w.mu.Unlock()
 	})
-	note := fmt.Sprintf("复制 %d 个文件（%.1f GB），手机上的下载记录补回 %d 个，推到手机 %d 个", res.Copied, float64(res.Bytes)/1e9, res.Back, res.Archives)
+	note := fmt.Sprintf("复制 %d 个文件（%.1f GB）", res.Copied, float64(res.Bytes)/1e9)
 	if len(plan.Conflicts) > 0 {
 		note += fmt.Sprintf("；%d 个同名文件大小不同，没有覆盖：%s", len(plan.Conflicts), strings.Join(plan.Conflicts[:min(3, len(plan.Conflicts))], "、"))
 	}
 	if errors.Is(err, context.Canceled) {
 		note, err = "已取消；"+note, nil
-	}
-	if store, dir, serr := r.svStore(source); serr == nil && res.Back > 0 {
-		_, _ = store.Scan(ctx, dir)
 	}
 	w.finish("phone", note, err)
 	w.poke()

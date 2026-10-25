@@ -58,11 +58,11 @@ func TestPhoneSyncAndClean(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Count != 4 || len(plan.Back) != 2 || len(plan.Archives) != 3 { // 推：a（合并后多了 2）、n（手机没有）、o（顺序不同）
+	if plan.Count != 4 {
 		t.Fatalf("plan = %+v", plan)
 	}
 	res, err := RunPhone(context.Background(), src, phone, plan, l, nil)
-	if err != nil || res.Copied != 4 || res.Back != 2 || res.Archives != 3 {
+	if err != nil || res.Copied != 4 {
 		t.Fatalf("res = %+v, %v", res, err)
 	}
 	for rel, want := range map[string]string{"抖音/a/it's 2.mp4": "two", "抖音/a/album/01.webp": "img", "抖音/n/1.mp4": "new creator"} {
@@ -70,19 +70,15 @@ func TestPhoneSyncAndClean(t *testing.T) {
 			t.Fatalf("phone %s = %q", rel, got)
 		}
 	}
-	for _, rel := range []string{"抖音/a/downloaded.txt", "抖音/n/downloaded.txt", "抖音/o/downloaded.txt", "快手/old/downloaded.txt"} {
-		if read(src, rel) == "" || read(src, rel) != read(dst, rel) { // 逐字节一致
-			t.Fatalf("%s: src %q phone %q", rel, read(src, rel), read(dst, rel))
-		}
-	}
-	if got := read(src, "抖音/a/downloaded.txt"); got != "douyin 1\ndouyin 2\ndouyin 9\n" {
-		t.Fatalf("src record = %q", got)
+	// 下载记录两边都不动
+	if read(src, "抖音/a/downloaded.txt") != "douyin 1\ndouyin 2\n" || read(dst, "抖音/a/downloaded.txt") != "douyin 9\ndouyin 1\n" || read(dst, "抖音/n/downloaded.txt") != "" {
+		t.Fatal("records touched")
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(dst), ".omnihub-incoming")); err == nil {
 		t.Fatal("incoming left behind")
 	}
 	again, l, err := PlanPhone(context.Background(), src, phone, nil)
-	if err != nil || again.Count != 0 || len(again.Back) != 0 || len(again.Archives) != 0 {
+	if err != nil || again.Count != 0 {
 		t.Fatalf("again = %+v, %v", again, err)
 	}
 
@@ -114,14 +110,11 @@ func TestPhoneStopsWhenFull(t *testing.T) {
 	}
 	plan.Files[0].Size = plan.PhoneFree // 假装这个文件大到放不下
 	res, err := RunPhone(context.Background(), src, phone, plan, l, nil)
-	if !errors.Is(err, ErrPhoneFull) || res.Copied != 0 || res.Archives != 1 {
+	if !errors.Is(err, ErrPhoneFull) || res.Copied != 0 {
 		t.Fatalf("res = %+v, %v", res, err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "抖音/a/1.mp4")); err == nil {
 		t.Fatal("copied despite full phone")
-	}
-	if b, _ := os.ReadFile(filepath.Join(dst, "抖音/a/downloaded.txt")); string(b) != "douyin 1\n" {
-		t.Fatalf("records = %q", b)
 	}
 }
 

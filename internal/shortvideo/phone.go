@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -34,11 +33,8 @@ type Phone struct {
 // endMark 标在清单末尾：读到它才说明手机把清单完整输出了（数据线中途断开时输出会被截断）。
 const endMark = "__OMNIHUB_END__"
 
-// recordMark 在合并输出的 downloaded.txt 里分隔各文件（记录行是「平台 作品ID」，不会以它开头）。
-const recordMark = "==omnihub== "
-
-// ErrPhoneFull 表示手机剩余空间不够，视频传到一半停下了（下载记录已同步）。
-var ErrPhoneFull = errors.New("手机剩余空间不够，视频没传完就停下了（下载记录已同步）")
+// ErrPhoneFull 表示手机剩余空间不够，视频传到一半停下了。
+var ErrPhoneFull = errors.New("手机剩余空间不够，视频没传完就停下了")
 
 // PhoneReserve 是同步时给手机留的剩余空间：传完一批会低于它就停下（存储塞满时安卓会出问题）。
 const PhoneReserve = 10 << 30
@@ -148,8 +144,6 @@ func (p Phone) Free(ctx context.Context) (int64, error) {
 type PhoneListing struct {
 	sizes map[string]int64
 	dirs  map[string]bool
-	recs  map[string][]string // 小写 rel → 记录行
-	names map[string]string   // 小写 rel → 手机上的原名
 }
 
 func (l *PhoneListing) isDir(rel string) bool { return l.dirs[strings.ToLower(rel)] }
@@ -157,20 +151,10 @@ func (l *PhoneListing) size(rel string) (int64, bool) {
 	n, ok := l.sizes[strings.ToLower(rel)]
 	return n, ok
 }
-func (l *PhoneListing) records(rel string) ([]string, error) {
-	return l.recs[strings.ToLower(rel)], nil
-}
-func (l *PhoneListing) recordFiles() ([]string, error) {
-	var out []string
-	for k := range l.recs {
-		out = append(out, l.names[k])
-	}
-	return out, nil
-}
 
-// List 读出手机上的文件清单和所有 <平台>/<博主>/downloaded.txt。
+// List 读出手机上的文件清单。
 func (p Phone) List(ctx context.Context) (*PhoneListing, error) {
-	l := &PhoneListing{sizes: map[string]int64{}, dirs: map[string]bool{}, recs: map[string][]string{}, names: map[string]string{}}
+	l := &PhoneListing{sizes: map[string]int64{}, dirs: map[string]bool{}}
 	out, err := p.Shell(ctx, "[ -d "+shq(p.Dir)+" ] && cd "+shq(p.Dir)+" && find . -type f -printf '%P\\t%s\\n'; echo "+endMark)
 	if err != nil {
 		return nil, fmt.Errorf("读手机文件清单：%w", err)
@@ -186,25 +170,9 @@ func (p Phone) List(ctx context.Context) (*PhoneListing, error) {
 			continue
 		}
 		key := strings.ToLower(rel)
-		l.sizes[key], l.names[key] = n, rel
+		l.sizes[key] = n
 		for d := path.Dir(key); d != "."; d = path.Dir(d) {
 			l.dirs[d] = true
-		}
-	}
-	out, err = p.Shell(ctx, "[ -d "+shq(p.Dir)+" ] && cd "+shq(p.Dir)+" && for f in */*/"+ArchiveFile+`; do [ -f "$f" ] && { echo "`+recordMark+`$f"; cat "$f"; echo; }; done; echo `+endMark)
-	if err != nil {
-		return nil, fmt.Errorf("读手机下载记录：%w", err)
-	}
-	if lines, err = complete(out); err != nil {
-		return nil, err
-	}
-	key := ""
-	for _, line := range lines {
-		if rel, ok := strings.CutPrefix(line, recordMark); ok {
-			key = strings.ToLower(rel)
-			l.recs[key], l.names[key] = []string{}, rel
-		} else if t := strings.TrimSpace(line); t != "" && key != "" {
-			l.recs[key] = append(l.recs[key], t)
 		}
 	}
 	return l, nil
@@ -224,7 +192,7 @@ func complete(out []byte) ([]string, error) {
 	return lines[:len(lines)-1], nil
 }
 
-// PlanPhone 列出要补到手机的内容：来源的所有博主都补（手机放全量），downloaded.txt 两边合并后一致。
+// PlanPhone 列出要补到手机的内容：来源的所有博主都补（手机放全量）。
 // platforms 不为空时只处理这些平台（见 PlanCopy）。
 func PlanPhone(ctx context.Context, src string, phone Phone, platforms []string) (CopyPlan, *PhoneListing, error) {
 	l, err := phone.List(ctx)
@@ -238,54 +206,13 @@ func PlanPhone(ctx context.Context, src string, phone Phone, platforms []string)
 	if plan.PhoneFree, err = phone.Free(ctx); err != nil {
 		return plan, nil, err
 	}
-	// downloaded.txt 不当普通文件传：合并回来源后，和手机不一致的在最后整个推过去。Archives 列出这些
-	files := plan.Files[:0]
-	for _, f := range plan.Files {
-		if path.Base(f.Rel) == ArchiveFile {
-			plan.Bytes -= f.Size
-		} else {
-			files = append(files, f)
-		}
-	}
-	plan.Files, plan.Count = files, len(files)
-	plan.Archives = nil
-	found, err := filepath.Glob(filepath.Join(src, "*", "*", ArchiveFile))
-	if err != nil {
-		return plan, nil, err
-	}
-	for _, f := range found {
-		rel, _ := filepath.Rel(src, f)
-		rel = filepath.ToSlash(rel)
-		if !inPlatforms(rel, platforms) {
-			continue
-		}
-		mine, err := archiveLines(f)
-		if err != nil {
-			return plan, nil, err
-		}
-		theirs, _ := l.records(rel)
-		if _, exists := l.size(rel); !exists || !slices.Equal(append(mine, linesMissing(theirs, mine)...), theirs) {
-			plan.Archives = append(plan.Archives, rel)
-		}
-	}
-	// 只在手机上有记录的博主：合并回来源后两边内容相同，不用推
 	return plan, l, nil
 }
 
-// RunPhone 按计划同步到手机：
-//  1. 手机上的下载记录先合并回来源（来源要保存全部记录）；
-//  2. 文件先推到手机的 .omnihub-incoming 临时目录，核对大小后改名放进正式位置，手机上已有的同名文件不覆盖；
-//     中断只会在临时目录留下半截文件，下次开始时清掉；
-//  3. 来源里和手机不一致的 downloaded.txt 整个推过去替换（此时来源已包含手机的全部记录），两边内容一致。
+// RunPhone 按计划同步到手机：文件先推到手机的 .omnihub-incoming 临时目录，核对大小后改名放进正式位置，手机上已有的同名文件不覆盖；
+// 中断只会在临时目录留下半截文件，下次开始时清掉。
 func RunPhone(ctx context.Context, src string, phone Phone, plan CopyPlan, l *PhoneListing, progress func(done int, bytes int64)) (CopyResult, error) {
 	var res CopyResult
-	for _, rel := range plan.Back {
-		theirs, _ := l.records(rel)
-		if _, err := mergeLines(theirs, filepath.Join(src, filepath.FromSlash(rel))); err != nil {
-			return res, fmt.Errorf("%s：%w", rel, err)
-		}
-		res.Back++
-	}
 	inc := phone.incoming()
 	if _, err := phone.Shell(ctx, "rm -rf "+shq(inc)+" && mkdir -p "+shq(inc)); err != nil {
 		return res, fmt.Errorf("建手机上的临时目录：%w", err)
@@ -316,10 +243,7 @@ func RunPhone(ctx context.Context, src string, phone Phone, plan CopyPlan, l *Ph
 				if free, err = phone.Free(ctx); err == nil {
 					reserve := cmp.Or(phone.Reserve, PhoneReserve)
 					if free-need < reserve {
-						// 视频停下，下载记录照样推过去
-						if err := phone.finishRecords(ctx, src, l, plan.Archives, &res); err != nil {
-							return res, err
-						}
+						phone.cleanup(ctx)
 						return res, fmt.Errorf("%w：还剩 %.1f GB，要给手机留 %.0f GB", ErrPhoneFull, float64(free)/(1<<30), float64(reserve)/(1<<30))
 					}
 					var moved []CopyFile
@@ -345,19 +269,13 @@ func RunPhone(ctx context.Context, src string, phone Phone, plan CopyPlan, l *Ph
 			}
 		}
 	}
-	return res, phone.finishRecords(ctx, src, l, plan.Archives, &res)
+	phone.cleanup(ctx)
+	return res, nil
 }
 
-// finishRecords 推下载记录并清掉临时目录。
-func (p Phone) finishRecords(ctx context.Context, src string, l *PhoneListing, records []string, res *CopyResult) error {
-	inc := p.incoming()
-	n, err := p.pushRecords(ctx, src, l, records)
-	res.Archives = n
-	if err != nil {
-		return err
-	}
-	_, _ = p.Shell(ctx, "rm -rf "+shq(inc))
-	return nil
+// cleanup 清掉手机上的临时目录。
+func (p Phone) cleanup(ctx context.Context) {
+	_, _ = p.Shell(ctx, "rm -rf "+shq(p.incoming()))
 }
 
 // pushBatch 把同一目录下的一批文件推到临时目录，核对大小后改名放进 dir；返回放进去的文件。
@@ -417,72 +335,6 @@ func (p Phone) pushBatch(ctx context.Context, src, dir string, batch []CopyFile)
 		}
 	}
 	return moved, nil
-}
-
-// pushRecords 把来源里和手机不一致（记录或顺序不同）的 downloaded.txt 推过去替换，返回推过去的个数。
-// candidates 是计划里列出的要推的记录（已按平台筛过）；合并回来源后再比一次，一致的跳过。
-func (p Phone) pushRecords(ctx context.Context, src string, l *PhoneListing, candidates []string) (int, error) {
-	stage, err := os.MkdirTemp("", "omnihub-records-")
-	if err != nil {
-		return 0, err
-	}
-	defer os.RemoveAll(stage)
-	root := filepath.Join(stage, "records")
-	var rels []string
-	for _, rel := range candidates {
-		f := filepath.Join(src, filepath.FromSlash(rel))
-		mine, err := archiveLines(f)
-		if err != nil {
-			return 0, err
-		}
-		theirs, _ := l.records(rel)
-		_, exists := l.size(rel)
-		if exists && slices.Equal(mine, theirs) { // 顺序也一样才算一致：替换后两边是同一份文件
-			continue
-		}
-		data, err := os.ReadFile(f)
-		if err != nil {
-			return 0, err
-		}
-		to := filepath.Join(root, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
-			return 0, err
-		}
-		if err := os.WriteFile(to, data, 0o644); err != nil {
-			return 0, err
-		}
-		rels = append(rels, rel)
-	}
-	if len(rels) == 0 {
-		return 0, nil
-	}
-	inc := p.incoming()
-	if _, err := p.Shell(ctx, "rm -rf "+shq(path.Join(inc, "records"))); err != nil {
-		return 0, err
-	}
-	pctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	err = p.Push(pctx, []string{root}, inc)
-	cancel()
-	if err != nil {
-		return 0, fmt.Errorf("推送下载记录：%w", err)
-	}
-	done := 0
-	for i := 0; i < len(rels); i += pushBatch {
-		var script strings.Builder
-		for _, rel := range rels[i:min(i+pushBatch, len(rels))] {
-			to := path.Join(p.Dir, rel)
-			if name, ok := l.names[strings.ToLower(rel)]; ok {
-				to = path.Join(p.Dir, name) // 手机上已有的用它的原名，避免大小写不同变成两个文件
-			}
-			fmt.Fprintf(&script, "mkdir -p %s && mv -f %s %s && echo ok\n", shq(path.Dir(to)), shq(path.Join(inc, "records", rel)), shq(to))
-		}
-		out, err := p.Shell(ctx, script.String())
-		done += strings.Count(string(out), "ok\n")
-		if err != nil {
-			return done, fmt.Errorf("替换手机上的下载记录：%w", err)
-		}
-	}
-	return done, nil
 }
 
 // CleanPlan 是清理来源（SSD）里已同步视频的计划。Items 是要移进回收站的文件或整个图集目录。

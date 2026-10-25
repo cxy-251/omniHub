@@ -45,26 +45,22 @@ ColumnLayout {
     }
     function planCopy(target) {
         plan("copy-plan", {to: target.library_id}, "正在比对…", function (p) {
-            var back = p.back || [], archives = p.archives || [], creators = p.creators || []
-            var todo = p.files > 0 || archives.length > 0 || back.length > 0
+            var creators = p.creators || [], todo = p.files > 0
             return {text: page.source.name + " → " + target.name + "：" + (todo
-                        ? creators.length + " 个博主，复制 " + p.files + " 个文件（" + page.gb(p.bytes) + "），合并下载记录 " + archives.length + " 个；"
-                          + target.name + " 上 " + back.length + " 个博主的下载记录补回 " + page.source.name + page.creatorsText(creators)
+                        ? creators.length + " 个博主，复制 " + p.files + " 个文件（" + page.gb(p.bytes) + "）" + page.creatorsText(creators)
                         : "没有要补充的。"),
                     warn: page.conflictsText(p.conflicts || []), start: todo ? "开始补充" : "", action: "copy", body: {to: target.library_id}}
         })
     }
     function planPhone() {
         plan("phone-plan", {}, "正在连接手机、读取手机上的文件清单（文件多时要十几秒）…", function (p) {
-            var back = p.back || [], archives = p.archives || [], creators = p.creators || []
-            var todo = p.files > 0 || archives.length > 0 || back.length > 0
+            var creators = p.creators || [], todo = p.files > 0
             return {text: page.source.name + " → 手机：" + (todo
-                        ? creators.length + " 个博主，复制 " + p.files + " 个文件（" + page.gb(p.bytes) + "）；手机上 " + back.length + " 个博主的下载记录补回 "
-                          + page.source.name + "，再把合并好的 " + archives.length + " 个下载记录推到手机，两边一致" + page.creatorsText(creators)
+                        ? creators.length + " 个博主，复制 " + p.files + " 个文件（" + page.gb(p.bytes) + "）" + page.creatorsText(creators)
                           + "\n传输时别拔线；断了重新点一次，从断点接着传。"
-                        : "手机上已经都有了，下载记录也一致。"),
+                        : "手机上已经都有了。"),
                     warn: [p.phone_free && p.bytes > p.phone_free - 10 * 1073741824
-                              ? "手机只剩 " + page.gb(p.phone_free) + "，放不下这次的 " + page.gb(p.bytes) + "：会传到手机剩 10 GB 左右时停下（下载记录照样同步），没传的下次接着传。"
+                              ? "手机只剩 " + page.gb(p.phone_free) + "，放不下这次的 " + page.gb(p.bytes) + "：会传到手机剩 10 GB 左右时停下，没传的下次接着传。"
                               : p.phone_free ? "手机剩余 " + page.gb(p.phone_free) + "。" : "",
                            page.conflictsText(p.conflicts || [])].filter(function (x) { return x !== "" }).join("\n"),
                     start: todo ? "开始同步到手机" : "", action: "phone", body: {}}
@@ -150,7 +146,7 @@ ColumnLayout {
                 text: page.source ? "新下载的视频在「" + page.source.name + "」，这里只做中转：不生成缩略图、不入库图集。每个按钮先列出要做的事，确认后才执行；中断后再点一次接着做。\n"
                     + "只处理浏览器插件下载的平台（抖音、快手、TikTok、小红书），MV 等不动。\n"
                     + "• 补到 SD 卡：只补 SD 卡已有的博主。• 补到手机：所有博主都补（手机放全量）；数据线断了会等手机重新连上接着传，重新点一次也从断点接着传。目标没有的文件才复制，写完核对大小再放进去；同名但大小不同的不覆盖，只列出来；不删除目标的任何文件。\n"
-                    + "• downloaded.txt 两边合并，目标上的记录也补回「" + page.source.name + "」（浏览器插件按它判断下过没有）；同步手机后两边内容一致。\n"
+                    + "• downloaded.txt 只留在「" + page.source.name + "」（浏览器插件按它判断下过没有），不复制到 SD 卡和手机。\n"
                     + "• 清理：手机上有同名同大小的文件、且 SD 卡已有的博主那边也补上了，才移进回收站；downloaded.txt 全部保留。" : ""
             }
             Label { visible: page.reviewLoading !== ""; text: page.reviewLoading; color: "#c9d1d9"; font.pixelSize: 12 }

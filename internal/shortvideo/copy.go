@@ -9,14 +9,14 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 )
 
-// ArchiveFile 是下载器在博主目录里记录已下载作品的清单（每行一个作品），同步时两边合并而不是覆盖。
+// ArchiveFile 是浏览器插件在博主目录里记录已下载作品的清单（每行一个作品）。插件只读来源库（SSD）里的，
+// 暂存区导入时合并进来源库；补充到其他库和手机时不复制它（那边用不到）。
 const ArchiveFile = "downloaded.txt"
 
 // partSuffix 是同步时正在写入的临时文件后缀；写完、落盘后才改成正式文件名。
@@ -27,8 +27,6 @@ type CopyPlan struct {
 	Files     []CopyFile `json:"-"`
 	Count     int        `json:"files"`
 	Bytes     int64      `json:"bytes"`
-	Archives  []string   `json:"archives"`             // 要合并进目标的 downloaded.txt
-	Back      []string   `json:"back"`                 // 目标里有、来源缺记录的 downloaded.txt：合并回来源，让来源的记录保持完整
 	Creators  []string   `json:"creators"`             // 有内容要补的博主
 	Conflicts []string   `json:"conflicts"`            // 两边同名、大小不同的文件：不覆盖，只报告
 	Skipped   int        `json:"skipped"`              // 目标里没有的博主（只补已有博主时）
@@ -44,18 +42,14 @@ type CopyFile struct {
 
 // CopyResult 是执行结果。
 type CopyResult struct {
-	Copied   int   `json:"copied"`
-	Bytes    int64 `json:"bytes"`
-	Archives int   `json:"archives"` // 合并后有新增行的 downloaded.txt
-	Back     int   `json:"back"`     // 合并回来源的 downloaded.txt
+	Copied int   `json:"copied"`
+	Bytes  int64 `json:"bytes"`
 }
 
 // PlanCopy 比较 src 与 dst 两个 shortvideo/ 目录，列出 dst 缺少的文件。
 // existingOnly 时只处理 dst 里已有的博主；否则 src 的博主全部补过去，平台目录下的文件（如 collection.json）也补。
-// 规则：dst 没有的文件复制；同名同大小视为已有；downloaded.txt 两边合并；同名不同大小的只报告。
-// 下载记录是浏览器插件判断「下过没有」的依据，src 要保存全部记录：dst 所有博主的 downloaded.txt 里 src 没有的行
-// 也合并回 src（src 没有这个博主时只建目录放 downloaded.txt，扫描不会把它当成博主）。
-// 不复制数据库、隐藏文件、下载中的半截文件和软链接，也从不删除 dst 的任何东西。
+// 规则：dst 没有的文件复制；同名同大小视为已有；同名不同大小的只报告。
+// 不复制 downloaded.txt、数据库、隐藏文件、下载中的半截文件和软链接，也从不删除 dst 的任何东西。
 // platforms 不为空时只处理这些平台目录（浏览器插件下载的平台），其他目录和 shortvideo/ 下的文件都不碰。
 func PlanCopy(src, dst string, existingOnly bool, platforms []string) (CopyPlan, error) {
 	return planCopy(src, localTarget(dst), existingOnly, platforms)
@@ -74,8 +68,6 @@ func inPlatforms(rel string, platforms []string) bool {
 type target interface {
 	isDir(rel string) bool
 	size(rel string) (int64, bool)
-	records(rel string) ([]string, error) // 某个 downloaded.txt 的记录行（没有时为空）
-	recordFiles() ([]string, error)       // 所有 <平台>/<博主>/downloaded.txt
 }
 
 type localTarget string
@@ -93,15 +85,6 @@ func (t localTarget) size(rel string) (int64, bool) {
 		return 0, false
 	}
 	return st.Size(), true
-}
-func (t localTarget) records(rel string) ([]string, error) { return archiveLines(t.path(rel)) }
-func (t localTarget) recordFiles() ([]string, error) {
-	found, err := filepath.Glob(filepath.Join(string(t), "*", "*", ArchiveFile))
-	for i, f := range found {
-		r, _ := filepath.Rel(string(t), f)
-		found[i] = filepath.ToSlash(r)
-	}
-	return found, err
 }
 
 func planCopy(src string, dst target, existingOnly bool, platforms []string) (CopyPlan, error) {
@@ -167,26 +150,6 @@ func planCopy(src string, dst target, existingOnly bool, platforms []string) (Co
 			}
 		}
 	}
-	back, err := dst.recordFiles()
-	if err != nil {
-		return plan, err
-	}
-	for _, rel := range back {
-		if !inPlatforms(rel, platforms) {
-			continue
-		}
-		theirs, err := dst.records(rel)
-		if err != nil {
-			return plan, err
-		}
-		have, err := archiveLines(filepath.Join(src, filepath.FromSlash(rel)))
-		if err != nil {
-			return plan, err
-		}
-		if len(linesMissing(theirs, have)) > 0 {
-			plan.Back = append(plan.Back, rel)
-		}
-	}
 	for c := range creators {
 		if c != "" {
 			plan.Creators = append(plan.Creators, c)
@@ -198,7 +161,7 @@ func planCopy(src string, dst target, existingOnly bool, platforms []string) (Co
 }
 
 func skipName(name string) bool {
-	if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".part") || strings.HasSuffix(name, ".ytdl") || strings.HasSuffix(name, partSuffix) {
+	if name == ArchiveFile || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".part") || strings.HasSuffix(name, ".ytdl") || strings.HasSuffix(name, partSuffix) {
 		return true
 	}
 	for _, db := range DatabaseFiles {
@@ -226,28 +189,15 @@ func (plan *CopyPlan) add(src string, dst target, rel string, creators map[strin
 		plan.Files = append(plan.Files, CopyFile{rel, st.Size()})
 		plan.Bytes += st.Size()
 		creators[creator] = true
-	case path.Base(rel) == ArchiveFile:
-		mine, _ := archiveLines(from)
-		theirs, _ := dst.records(rel)
-		if len(linesMissing(mine, theirs)) > 0 {
-			plan.Archives = append(plan.Archives, rel)
-			creators[creator] = true
-		}
 	case have != st.Size():
 		plan.Conflicts = append(plan.Conflicts, rel)
 	}
 }
 
-// RunCopy 按计划复制文件、合并 downloaded.txt。每个文件先写成临时文件并落盘，大小核对无误再改名，
+// RunCopy 按计划复制文件。每个文件先写成临时文件并落盘，大小核对无误再改名，
 // 中断只会留下临时文件（下次同步时覆盖重写），不会出现半截的正式文件。progress 在每个文件完成后调用。
 func RunCopy(ctx context.Context, src, dst string, plan CopyPlan, progress func(done int, bytes int64)) (CopyResult, error) {
 	var res CopyResult
-	for _, rel := range plan.Back {
-		if _, err := MergeArchive(filepath.Join(dst, filepath.FromSlash(rel)), filepath.Join(src, filepath.FromSlash(rel))); err != nil {
-			return res, fmt.Errorf("%s：%w", rel, err)
-		}
-		res.Back++
-	}
 	for _, f := range plan.Files {
 		if err := ctx.Err(); err != nil {
 			return res, err
@@ -259,15 +209,6 @@ func RunCopy(ctx context.Context, src, dst string, plan CopyPlan, progress func(
 		res.Bytes += f.Size
 		if progress != nil {
 			progress(res.Copied, res.Bytes)
-		}
-	}
-	for _, rel := range plan.Archives {
-		added, err := MergeArchive(filepath.Join(src, filepath.FromSlash(rel)), filepath.Join(dst, filepath.FromSlash(rel)))
-		if err != nil {
-			return res, fmt.Errorf("%s：%w", rel, err)
-		}
-		if added > 0 {
-			res.Archives++
 		}
 	}
 	return res, nil
