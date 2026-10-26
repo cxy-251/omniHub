@@ -25,7 +25,7 @@ function chapterName(c: Chapter, i: number) {
 
 // ---------- 打开与停靠 ----------
 // 阅读器不属于某个标签页：书架里点开一本书后，它挂在页面最外层。
-//   宽屏（电脑）：默认停靠在右侧，竖屏小窗、宽度可拖动，左边照常浏览 omniHub 的其他页面；也可以铺满整个页面。
+//   宽屏（电脑、Deck，至少 720 像素）：默认停靠在右侧，竖屏小窗、宽度可拖动，左边照常浏览 omniHub 的其他页面；也可以铺满整个页面。
 //   窄屏（手机）：全屏沉浸阅读。
 // 当前打开的书存在浏览器里，刷新后还在。
 const openKey = 'omnihub.manga.open';
@@ -35,7 +35,8 @@ export function openManga(book: Book) {
 }
 
 function useWide() {
-  const query = '(min-width: 1024px)';
+  // 窗口至少 720 像素宽才停靠（Deck 1280 宽，浏览器缩放到 150% 也有 853）；更窄的当手机，全屏阅读
+  const query = '(min-width: 720px)';
   const [wide, setWide] = useState(() => globalThis.matchMedia(query).matches);
   useEffect(() => {
     const list = globalThis.matchMedia(query);
@@ -52,6 +53,8 @@ export function MangaDock() {
   const [full, setFull] = useState(() => stored('omnihub.manga.full', false));
   useEffect(() => store('omnihub.manga.full', full), [full]);
   const [width, setWidth] = useState(() => stored('omnihub.manga.dockWidth', 480));
+  // 窗口变窄时小窗最多占 80%，左边至少留一些给其他页面
+  const dockWidth = Math.round(Math.max(320, Math.min(width, globalThis.innerWidth * 0.8)));
   useEffect(() => store('omnihub.manga.dockWidth', width), [width]);
   const docked = !!book && wide && !full;
   useEffect(() => {
@@ -61,10 +64,10 @@ export function MangaDock() {
   }, []);
   // 停靠时把页面右边让出来（App 的最外层按 --manga-dock 留白）；铺满时锁住底下页面的滚动
   useEffect(() => {
-    document.documentElement.style.setProperty('--manga-dock', docked ? `${width}px` : '0px');
+    document.documentElement.style.setProperty('--manga-dock', docked ? `${dockWidth}px` : '0px');
     document.body.style.overflow = book && !docked ? 'hidden' : '';
     return () => { document.documentElement.style.setProperty('--manga-dock', '0px'); document.body.style.overflow = ''; };
-  }, [book, docked, width]);
+  }, [book, docked, dockWidth]);
   if (!book) return null;
   const close = () => {
     store(openKey, undefined); setBook(undefined);
@@ -78,7 +81,7 @@ export function MangaDock() {
     document.body.style.userSelect = 'none';
     globalThis.addEventListener('mousemove', move); globalThis.addEventListener('mouseup', up);
   }
-  return <div className={docked ? 'fixed bottom-0 right-0 top-0 z-40 border-l border-line' : 'fixed inset-0 z-50'} style={docked ? { width } : undefined}>
+  return <div className={docked ? 'fixed bottom-0 right-0 top-0 z-40 border-l border-line' : 'fixed inset-0 z-50'} style={docked ? { width: dockWidth } : undefined}>
     {docked ? <div className="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize hover:bg-[#58a6ff]/40" title="拖动调整宽度" onMouseDown={resize} /> : null}
     <BookReader key={book.logical_path} book={book} docked={docked} wide={wide} onClose={close} onToggleDock={() => setFull(f => !f)} />
   </div>;
