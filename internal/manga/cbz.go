@@ -153,6 +153,31 @@ func (r *CBZReader) PageWindow(offset, limit int) ([]PageEntry, int, error) {
 	return append([]PageEntry(nil), r.pages[offset:min(offset+limit, len(r.pages))]...), len(r.pages), nil
 }
 
+// ChapterRange 是包里的一个子文件夹（卷、话）：Title 为文件夹路径，FirstPage 为它的第一页，Pages 为页数。
+// 图片直接放在包根目录的书只有一个 Title 为空的章节。
+type ChapterRange struct {
+	Title     string `json:"title"`
+	FirstPage int    `json:"first_page"`
+	Pages     int    `json:"pages"`
+}
+
+// Chapters 按阅读顺序列出各卷/话（与 PageEntry.ChapterIndex 对应）。
+func (r *CBZReader) Chapters() []ChapterRange {
+	var out []ChapterRange
+	for _, p := range r.pages {
+		if p.ChapterIndex >= len(out) {
+			name, _ := DecodeEntry(p.Entry)
+			dir := path.Dir(name)
+			if dir == "." {
+				dir = ""
+			}
+			out = append(out, ChapterRange{Title: dir, FirstPage: p.Index})
+		}
+		out[p.ChapterIndex].Pages++
+	}
+	return out
+}
+
 // Version identifies the currently leased container by size and modification time.
 // This is a metadata revision, not a content hash.
 func (r *CBZReader) Version() (string, error) {

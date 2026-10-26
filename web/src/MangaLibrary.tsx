@@ -6,11 +6,22 @@ import { MangaWindow } from './mangaWindow';
 
 type Book = { metadata_error?: string; title: string; logical_path: string; library_name: string; read_only: boolean; total_pages: number };
 type Page = { index: number; chapter_index: number; entry: string };
-type PageList = { pages: Page[]; total: number; file_version: string };
+type Chapter = { title: string; first_page: number; pages: number };
+type PageList = { pages: Page[]; total: number; file_version: string; chapters?: Chapter[] };
+
+// 卷/话的显示名：包里子文件夹的最后一段，常见写法换成「第 N 卷」「第 N 话」，其余原样。
+function chapterName(c: Chapter, i: number) {
+  const name = c.title.split('/').pop() ?? '';
+  const vol = /^(?:vol(?:ume)?|v)[ ._-]*0*(\d+)$/i.exec(name) ?? /^第\s*0*(\d+)\s*卷$/.exec(name);
+  if (vol) return `第 ${vol[1]} 卷`;
+  const ch = /^(?:ch(?:apter)?|c|ep(?:isode)?)[ ._-]*0*(\d+)$/i.exec(name) ?? /^第\s*0*(\d+)\s*[话話回]$/.exec(name);
+  if (ch) return `第 ${ch[1]} 话`;
+  return name || `第 ${i + 1} 部分`;
+}
 type Position = { page_index: number; chapter_index: number; scroll_offset_ratio: number; position_mode?: string };
 type Mode = 'strip' | 'single' | 'double';
 type Recent = { title: string; logical_path: string; page_index: number };
-type Boot = { total: number; version: string; userID: number };
+type Boot = { total: number; version: string; userID: number; chapters: Chapter[] };
 const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
 
 function BookReader({ book, active, onBack }: { book: Book; active: boolean; onBack(): void }) {
@@ -66,7 +77,7 @@ function BookReader({ book, active, onBack }: { book: Book; active: boolean; onB
       }
       for (const page of list.pages) pages.current.set(page.index, page);
       restore.current = target; selectedPage.current = target.page;
-      setFocusRow(target.page); setBoot({ total: list.total, version: list.file_version, userID: status.user.id });
+      setFocusRow(target.page); setBoot({ total: list.total, version: list.file_version, userID: status.user.id, chapters: list.chapters ?? [] });
     }).catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
   }, [active, book.logical_path, boot]);
@@ -235,11 +246,21 @@ function BookReader({ book, active, onBack }: { book: Book; active: boolean; onB
 
   const pageIndex = position?.page_index ?? selectedPage.current;
   const currentPage = pages.current.get(pageIndex);
+  // 当前所在的卷/话：按页码在各卷起始页里找（页信息可能还没取到）
+  const chapters = boot?.chapters ?? [];
+  const chapterIndex = chapters.reduce((found, c, i) => c.first_page <= pageIndex ? i : found, 0);
   const visibleEnd = model && viewport.current ? model.locate(viewport.current.scrollTop + viewport.current.clientHeight).row + 1 : focusRow + 2;
   return <section className="space-y-3">
     <div className="flex flex-wrap items-center gap-3"><button className={button} onClick={onBack}>返回书架</button><h3 className="break-all font-semibold">{book.title}</h3>
       <select disabled={!boot} className="rounded border border-line bg-surface p-2 text-sm" aria-label="漫画阅读模式" value={mode} onChange={event => goTo(pageIndex, event.target.value as Mode)}><option value="strip">条漫</option><option value="single">单页</option><option value="double">双页</option></select>
       {boot ? <><button className={button} disabled={Math.floor(pageIndex / columns) === 0} onClick={() => goTo(pageIndex - columns)}>上一页</button><button className={button} disabled={pageIndex + columns >= boot.total} onClick={() => goTo(pageIndex + columns)}>下一页</button>
+        {chapters.length > 1 ? <>
+          <button className={button} disabled={chapterIndex === 0} onClick={() => goTo(chapters[chapterIndex - 1].first_page)}>上一{chapterName(chapters[0], 0).endsWith('卷') ? '卷' : '话'}</button>
+          <select className="max-w-[45vw] rounded border border-line bg-surface p-2 text-sm" aria-label="跳到卷/话" value={chapterIndex} onChange={e => goTo(chapters[Number(e.target.value)].first_page)}>
+            {chapters.map((c, i) => <option key={i} value={i}>{chapterName(c, i)}（{c.pages} 页）</option>)}
+          </select>
+          <button className={button} disabled={chapterIndex >= chapters.length - 1} onClick={() => goTo(chapters[chapterIndex + 1].first_page)}>下一{chapterName(chapters[0], 0).endsWith('卷') ? '卷' : '话'}</button>
+        </> : null}
         <label className="flex items-center gap-2 text-sm">跳至<input key={pageIndex} className="w-20 rounded border border-line bg-surface p-2" type="number" min={1} max={boot.total} defaultValue={pageIndex + 1} onBlur={event => { const page = Number(event.target.value); if (Number.isInteger(page) && page >= 1 && page <= boot.total) goTo(page - 1); }} />/ {boot.total} 页</label></> : null}
       {boot?.userID && !book.read_only ? <><button className={button} disabled={coverPending} onClick={() => void setCover()}>当前页设为封面</button><button className={button} disabled={coverPending} onClick={() => void setCover(true)}>默认封面</button></> : null}
       {boot && currentPage ? <a className={button} target="_blank" rel="noopener noreferrer" href={`/api/media/manga/page?${new URLSearchParams({ path: book.logical_path, entry: currentPage.entry, version: boot.version })}`}>打开原图</a> : null}
@@ -267,7 +288,7 @@ function BookReader({ book, active, onBack }: { book: Book; active: boolean; onB
       {mode !== 'single' ? <div style={{ height: model.total() - model.prefix(window.end) }} /> : null}
       <div style={{ height: viewport.current?.clientHeight ?? 600 }} />
     </div> : null}
-    {position ? <p className="text-sm text-muted">第 {position.chapter_index + 1} 组 · 第 {position.page_index + 1} 页 · 页内 {(position.scroll_offset_ratio * 100).toFixed(1)}%</p> : null}
+    {position ? <p className="text-sm text-muted">{chapters.length > 1 ? `${chapterName(chapters[chapterIndex], chapterIndex)} 第 ${position.page_index - chapters[chapterIndex].first_page + 1}/${chapters[chapterIndex].pages} 页 · 全书` : ''}第 {position.page_index + 1} 页 · 页内 {(position.scroll_offset_ratio * 100).toFixed(1)}%</p> : null}
   </section>;
 }
 

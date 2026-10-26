@@ -37,10 +37,16 @@ func (r *Router) handleMangaPageList(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "book version unavailable", 503)
 		return
 	}
+	// 第一次取（offset 为 0）时附上卷/话列表，阅读器用它按卷跳转
+	var chapters []manga.ChapterRange
+	if offset == 0 {
+		chapters = lease.Reader.Chapters()
+	}
 	writeJSON(w, 200, struct {
-		Pages       []manga.PageEntry `json:"pages"`
-		Total       int               `json:"total"`
-		Offset      int               `json:"offset"`
-		FileVersion string            `json:"file_version"`
-	}{pages, total, offset, version})
+		Pages       []manga.PageEntry    `json:"pages"`
+		Total       int                  `json:"total"`
+		Offset      int                  `json:"offset"`
+		FileVersion string               `json:"file_version"`
+		Chapters    []manga.ChapterRange `json:"chapters,omitempty"`
+	}{pages, total, offset, version, chapters})
 }
