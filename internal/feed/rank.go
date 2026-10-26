@@ -10,14 +10,19 @@ package feed
 
 import (
 	"hash/fnv"
+	"log"
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
-// MaxTags 是每个条目最多的标签数。
-const MaxTags = 5
+var tooManyTags sync.Once
+
+// MaxTags 是每个条目最多的标签数。短视频现在用到 6 个（博主、平台、类型、权限、时长、编码）；
+// 以前是 5，编码标签被丢掉，网页端按编码筛选时把所有视频都筛没了。
+const MaxTags = 8
 
 // Item 是一个候选条目。Group 与 Tags 是 Catalog.Names 里的编号（-1 表示空）。
 type Item struct {
@@ -58,8 +63,11 @@ func (c *Catalog) Lookup(name string) int32 {
 	return -1
 }
 
-// Add 追加一个条目；tags 超过 MaxTags 的部分忽略。
+// Add 追加一个条目；tags 超过 MaxTags 的部分忽略（并在日志里提醒一次：丢掉的标签会让按标签筛选悄悄失效）。
 func (c *Catalog) Add(id, lib, group string, tags []string, date int64, ratio int) {
+	if len(tags) > MaxTags {
+		tooManyTags.Do(func() { log.Printf("feed: %s has %d tags, only %d kept: %v", id, len(tags), MaxTags, tags) })
+	}
 	it := Item{ID: id, Lib: lib, Group: c.Intern(group), Date: date, Ratio: int32(ratio)}
 	for k := range it.Tags {
 		it.Tags[k] = -1
