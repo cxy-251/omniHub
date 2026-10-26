@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	_ "image/jpeg"
+	"image/jpeg"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+
+	_ "golang.org/x/image/webp"
 
 	"omnihub/internal/platform"
 	"omnihub/internal/storage"
@@ -78,6 +80,9 @@ func (s *Store) MakeThumbnail(ctx context.Context, dir string, p Post) error {
 	if s.readOnly {
 		return errors.New("read-only library")
 	}
+	if data, w, h := legacyThumbnail(dir, p); data != nil {
+		return s.saveThumbnail(p, w, h, data)
+	}
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return ErrToolMissing
 	}
@@ -115,15 +120,53 @@ func (s *Store) MakeThumbnail(ctx context.Context, dir string, p Post) error {
 			width, height = cfg.Width, cfg.Height
 		}
 	}
-	failed := err != nil || width == 0
+	if err != nil || width == 0 {
+		width, height, data = 0, 0, nil
+	}
+	return s.saveThumbnail(p, width, height, data)
+}
+
+// saveThumbnail 写入封面；data 为空表示生成失败（源文件不变时不再重试）。
+func (s *Store) saveThumbnail(p Post, width, height int, data []byte) error {
+	failed := len(data) == 0
 	if failed {
 		data = []byte{}
 	}
-	_, err = s.thumbs.Exec(`INSERT INTO thumbnails (post_id, source_size, source_mtime, width, height, failed, data) VALUES (?,?,?,?,?,?,?)
+	_, err := s.thumbs.Exec(`INSERT INTO thumbnails (post_id, source_size, source_mtime, width, height, failed, data) VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(post_id) DO UPDATE SET source_size=excluded.source_size, source_mtime=excluded.source_mtime,
 		width=excluded.width, height=excluded.height, failed=excluded.failed, data=excluded.data`,
 		p.ID, p.Size, p.MTime, width, height, failed, data)
 	return err
+}
+
+// legacyThumbnail 读取 z6x hub 以前生成的封面（作品旁边的 .thumbs/<文件名>.webp，360 像素宽），
+// 转成 JPEG 返回，省掉在手机上重新跑 ffmpeg。封面比作品旧、读不了或解码失败时返回 nil。
+func legacyThumbnail(dir string, p Post) (data []byte, width, height int) {
+	rel := filepath.FromSlash(p.ID) // 视频是文件，磁盘上的图集是文件夹，封面名都是「名字.webp」
+	if !filepath.IsLocal(rel) {
+		return nil, 0, 0
+	}
+	path := filepath.Join(dir, rel)
+	legacy := filepath.Join(filepath.Dir(path), ".thumbs", filepath.Base(path)+".webp")
+	st, err := os.Stat(legacy)
+	if err != nil || st.ModTime().UnixNano() < p.MTime || st.Size() > 4<<20 {
+		return nil, 0, 0
+	}
+	f, err := os.Open(legacy)
+	if err != nil {
+		return nil, 0, 0
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return nil, 0, 0
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 82}); err != nil {
+		return nil, 0, 0
+	}
+	b := img.Bounds()
+	return buf.Bytes(), b.Dx(), b.Dy()
 }
 
 // ffmpegFrame 输出 480px 宽 JPEG。input 为 "pipe:0" 时从 stdin 读取图片字节。

@@ -9,6 +9,7 @@ omniHub 安卓版（arm64，只含服务端与网页端）
    ~/omniHub/omnihub.sh start
    ~/omniHub/omnihub.sh boot-on
    其他命令：omnihub.sh stop | status | log | boot-off
+   开机脚本也会启动 SSH（装了 openssh 时），方便从电脑更新。
 4. 手机浏览器打开 http://127.0.0.1:8998/ 登录；在「设置 → 资源库」添加资源库目录（目录结构与 Deck 上的相同）。
    同一 Wi-Fi 的其他设备打开 http://<手机 IP>:8998/ 。
    短视频缩略图要用 ffmpeg：pkg install ffmpeg

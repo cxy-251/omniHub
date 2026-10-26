@@ -136,11 +136,10 @@ func (r *Router) runShortVideoWorker() {
 			continue
 		default:
 		}
-		// 探测编码/尺寸开销小（只读文件头），始终进行；缩略图受开关控制。
-		if r.probePass() > 0 {
-			continue
-		}
-		if w.thumbsEnabled() && r.thumbnailPass() > 0 {
+		// 探测编码/尺寸开销小（只读文件头），始终进行；缩略图受开关控制。两者交替进行：
+		// 手机上有 8 万个视频要探测，等探测全部做完才开始缩略图要好几个小时。
+		probed := r.probePass()
+		if w.thumbsEnabled() && r.thumbnailPass() > 0 || probed > 0 {
 			continue
 		}
 		select {
@@ -475,7 +474,8 @@ func (r *Router) thumbnailPass() int {
 	stores, dirs, _ := r.writableStores(true)
 	processed := 0
 	for i, s := range stores {
-		pending, err := s.PendingThumbnails(8)
+		// 每次取一批要把全部作品和缩略图记录读一遍，手机上有 10 万个作品，批小了会反复全表读取
+		pending, err := s.PendingThumbnails(256)
 		if err != nil {
 			w.finish("thumbnails", "", err)
 			continue

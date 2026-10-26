@@ -27,6 +27,8 @@ case "${1:-status}" in
     cat > "$boot" <<EOF
 #!/data/data/com.termux/files/usr/bin/sh
 # omniHub 开机启动（由 $dir/omnihub.sh boot-on 生成）。
+# SSH 用来从电脑更新 omniHub（adb 进不了 Termux 自己的目录）；没装 openssh 时跳过
+command -v sshd > /dev/null && sshd
 "$dir/omnihub.sh" start
 # 不退出：开机脚本是 Termux 的一个后台任务，脚本结束后 Termux 可被系统回收，连同 omniHub 一起被结束。
 # 一直挂着让服务保持运行（通知栏显示 Termux 有 1 个任务）。
