@@ -9,7 +9,10 @@ omniHub 安卓版（arm64，只含服务端与网页端）
    ~/omniHub/omnihub.sh start
    ~/omniHub/omnihub.sh boot-on
    其他命令：omnihub.sh stop | status | log | boot-off
-   开机脚本也会启动 SSH（装了 openssh 时），方便从电脑更新。
+   开机脚本也会启动 SSH（装了 openssh 时，端口 8022），方便从电脑更新。SSH 不归「只在家里的网络上对外服务」管，
+   在外面的 Wi-Fi 上也开着，所以只允许密钥登录、不设密码：把电脑的公钥加进 ~/.ssh/authorized_keys，再运行
+   printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' > $PREFIX/etc/ssh/sshd_config.d/key-only.conf
+   （没有 sshd_config.d 目录先 mkdir -p 建一个），然后 pkill -HUP sshd。设置 → 网络 页会显示是否只允许密钥登录。
 4. 手机浏览器打开 http://127.0.0.1:8998/ 登录；在「设置 → 资源库」添加资源库目录（目录结构与 Deck 上的相同）。
    同一 Wi-Fi 的其他设备打开 http://<手机 IP>:8998/ 。
    短视频缩略图要用 ffmpeg：pkg install ffmpeg

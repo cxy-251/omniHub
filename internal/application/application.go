@@ -765,7 +765,7 @@ func (a *Application) writeHome(w http.ResponseWriter, fresh bool) {
 		trusted = []config.TrustedNetwork{}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": a.Gate.Status(fresh), "networks": trusted})
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": a.Gate.Status(fresh), "networks": trusted, "ssh": network.TermuxSSH()})
 }
 
 // WANEnabled 返回保存的广域网开关（main 启动时据此拉起隧道）。

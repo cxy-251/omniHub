@@ -6,6 +6,7 @@ type NetState = { ip: string; fingerprint: string };
 type Home = {
   status: { home_only: boolean; serving: string; reason?: string; current: NetState; trusted: boolean };
   networks: { fingerprint: string; name: string }[];
+  ssh: { running: boolean; key_only: boolean } | null; // 只在 Termux（手机）里有
 };
 const input = 'rounded-md border border-line bg-background px-3 py-2 text-sm';
 
@@ -148,6 +149,9 @@ function HomeSection() {
         <label className="text-sm">名称 <input className={input} maxLength={32} value={name} onChange={e => setName(e.target.value)} /></label>
         <button className={primaryButton} disabled={pending}>把当前网络加为可信</button>
       </form> : null}
+      {home.ssh ? <p className={`text-sm ${home.ssh.running && !home.ssh.key_only ? 'text-danger' : 'text-muted'}`}>
+        SSH（8022 端口，用来从电脑更新 omniHub）{home.ssh.running ? '正在运行' : '没有运行'}，{home.ssh.key_only ? '只允许密钥登录、没有密码' : '还允许密码或键盘交互登录'}。它不归这个开关管，在外面的 Wi-Fi 上也开着{home.ssh.key_only ? '；只认密钥，外人进不来' : '：请按安装说明改成只允许密钥登录'}。能登录的密钥记在 Termux 的 ~/.ssh/authorized_keys。
+      </p> : null}
       <div className="space-y-2">
         <h3 className="font-semibold">可信网络</h3>
         {home.networks.length ? home.networks.map(n => <div key={n.fingerprint} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line p-3 text-sm">
