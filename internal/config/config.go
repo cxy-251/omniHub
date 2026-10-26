@@ -31,6 +31,33 @@ type ServerConfig struct {
 	// 与 ~/.cloudflared/config.yml。
 	Cloudflared       string `json:"cloudflared,omitempty"`
 	CloudflaredConfig string `json:"cloudflared_config,omitempty"`
+	// HomeOnly 为 true 时局域网只在 TrustedNetworks 里的网络上开放（本机地址一直可用），
+	// 连到别的 Wi-Fi 或移动数据时自动停止对外服务。不填时安卓上开、其他系统上关（见 HomeOnlyEnabled）。
+	HomeOnly        *bool            `json:"home_only,omitempty"`
+	TrustedNetworks []TrustedNetwork `json:"trusted_networks,omitempty"`
+}
+
+// TrustedNetwork 是一个可信网络：指纹由路由器的 UPnP 设备标识算出，Name 只用于显示。
+type TrustedNetwork struct {
+	Fingerprint string `json:"fingerprint"`
+	Name        string `json:"name"`
+}
+
+// HomeOnlyEnabled 返回是否只在可信网络上对外服务：手机会被带出门，安卓上默认开。
+func (s ServerConfig) HomeOnlyEnabled() bool {
+	if s.HomeOnly != nil {
+		return *s.HomeOnly
+	}
+	return runtime.GOOS == "android"
+}
+
+// TrustedFingerprints 返回可信网络的指纹列表。
+func (s ServerConfig) TrustedFingerprints() []string {
+	out := make([]string, 0, len(s.TrustedNetworks))
+	for _, n := range s.TrustedNetworks {
+		out = append(out, n.Fingerprint)
+	}
+	return out
 }
 
 // Config 是 omniHub 的根配置结构体。

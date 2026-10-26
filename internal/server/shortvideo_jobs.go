@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"omnihub/internal/auth"
 	"omnihub/internal/library"
@@ -480,7 +481,7 @@ func (r *Router) thumbnailPass() int {
 			continue
 		}
 		for _, p := range pending {
-			if !w.thumbsEnabled() || len(w.requests) > 0 || w.ctx.Err() != nil {
+			if !w.thumbsEnabled() || len(w.requests) > 0 || w.ctx.Err() != nil || !r.coolDown() {
 				return processed
 			}
 			ctx := w.begin("thumbnails", 0)
@@ -501,6 +502,43 @@ func (r *Router) thumbnailPass() int {
 		}
 	}
 	return processed
+}
+
+// 缩略图的温度阈值（°C）：机身达到 thumbsHot 时暂停，降到 thumbsResume 以下再继续。
+// 数值沿用 z6x hub 在这台手机上用的（36～40°C，暂停后降到 37°C 继续）。
+const (
+	thumbsHot    = 40
+	thumbsResume = 37
+)
+
+// coolDown 在机身过热时暂停生成缩略图（手机上用；读不到温度的设备如 Deck 不受影响），
+// 暂停期间每 5 秒看一次温度。返回 false 表示等待时来了别的任务、开关被关掉或服务在退出。
+func (r *Router) coolDown() bool {
+	w := r.svJobs
+	t, ok := platform.DeviceTemp()
+	if !ok || t < thumbsHot {
+		return true
+	}
+	defer func() {
+		w.mu.Lock()
+		w.detail = ""
+		w.mu.Unlock()
+	}()
+	for ok && t >= thumbsResume {
+		w.mu.Lock()
+		w.detail = fmt.Sprintf("机身 %.1f°C，缩略图暂停，降到 %d°C 以下继续", t, thumbsResume)
+		w.mu.Unlock()
+		select {
+		case <-w.ctx.Done():
+			return false
+		case <-time.After(5 * time.Second):
+		}
+		if len(w.requests) > 0 || !w.thumbsEnabled() {
+			return false
+		}
+		t, ok = platform.DeviceTemp()
+	}
+	return true
 }
 
 // probePass 为各库探测一小批视频的编码、尺寸与时长；有显式任务等待时提前返回。

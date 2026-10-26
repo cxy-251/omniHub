@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -106,11 +107,10 @@ func run(options launchOptions) (result error) {
 	if port != cfg.Server.Port {
 		log.Printf("Port %d occupied, auto-fallback to %d", cfg.Server.Port, port)
 	}
-	defer func() {
-		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			result = errors.Join(result, fmt.Errorf("close HTTP listener: %w", err))
-		}
-	}()
+	// 端口只在这里探测；真正的监听交给 gate（按网络开关局域网监听，被系统作废后重新监听）。
+	if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return fmt.Errorf("close probe listener: %w", err)
+	}
 
 	// 本机客户端通过受限配置文件发现服务与免密凭证，凭证不通过 HTTP 下发。
 	localInfo, err := json.Marshal(map[string]interface{}{"url": fmt.Sprintf("http://127.0.0.1:%d", port), "token": localToken})
@@ -138,8 +138,9 @@ func run(options launchOptions) (result error) {
 			}
 		}
 	}
-	setMDNS(app.LANEnabled())
-	app.OnLANChanged = setMDNS
+	// 局域网开关打开、并且 gate 正在对外服务时才广播。
+	var serving atomic.Bool
+	app.OnLANChanged = func(enabled bool) { setMDNS(enabled && serving.Load()) }
 	defer setMDNS(false)
 
 	// 广域网：按保存的开关托管 cloudflared 隧道（用户自己的命名隧道配置），退出时结束它。
@@ -151,13 +152,14 @@ func run(options launchOptions) (result error) {
 	app.Tunnel.SetEnabled(app.WANEnabled())
 	defer app.Tunnel.SetEnabled(false)
 
-	httpServer := &http.Server{
-		Addr:              fmt.Sprintf("%s:%d", cfg.Server.Host, port),
-		Handler:           app,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    32 * 1024,
+	newServer := func() *http.Server {
+		return &http.Server{
+			Handler:           app,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    32 * 1024,
+		}
 	}
 
 	// 8. 优雅退出控制
@@ -165,11 +167,17 @@ func run(options launchOptions) (result error) {
 	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(stopChan)
 
-	serveError := make(chan error, 1)
-	go func() {
-		log.Printf("omniHub server listening on http://%s:%d", cfg.Server.Host, port)
-		serveError <- httpServer.Serve(listener)
-	}()
+	gate := network.NewGate(app.GateConfig(), port, newServer)
+	gate.OnExternal = func(on bool) {
+		serving.Store(on)
+		setMDNS(on && app.LANEnabled())
+	}
+	app.Gate = gate
+	stopGate := make(chan struct{})
+	if err := gate.Start(15*time.Second, stopGate); err != nil {
+		return fmt.Errorf("bind HTTP port: %w", err)
+	}
+	log.Printf("omniHub server listening on port %d", port)
 	// Connection discovery is written and HTTP is serving before opening Qt.
 	// Closing/yielding the GUI must not terminate LAN access or an owned game.
 	if options.desktop {
@@ -178,13 +186,7 @@ func run(options launchOptions) (result error) {
 		}
 	}
 
-	select {
-	case <-stopChan:
-	case err := <-serveError:
-		if !errors.Is(err, http.ErrServerClosed) {
-			result = fmt.Errorf("serve HTTP: %w", err)
-		}
-	}
+	<-stopChan
 	stopWatcher()
 	log.Println("Shutting down omniHub server...")
 	if err := app.Close(); err != nil {
@@ -194,12 +196,13 @@ func run(options launchOptions) (result error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := httpServer.Shutdown(ctx); err != nil {
-		log.Printf("Server forced shutdown: %v", err)
-		if err := httpServer.Close(); err != nil {
-			result = errors.Join(result, fmt.Errorf("close HTTP server: %w", err))
+	close(stopGate) // 先停掉定时检查，免得关闭过程中又重新监听
+	for _, srv := range gate.Servers() {
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("Server forced shutdown: %v", err)
 		}
 	}
+	gate.Close()
 	log.Println("omniHub server exited gracefully.")
 	return result
 }

@@ -10,7 +10,9 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,6 +58,8 @@ type Application struct {
 	// Tunnel 是 main 创建的 cloudflared 隧道；nil 表示不支持广域网。
 	Tunnel     *network.Tunnel
 	wanEnabled atomic.Bool
+	// Gate 是 main 创建的监听管理（只在可信网络上对外服务）；nil 表示不支持。
+	Gate *network.Gate
 }
 
 // New 创建服务生命周期控制器。全局状态暂不可用时返回离线实例，不创建替代账号。
@@ -238,6 +242,11 @@ func (a *Application) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	case "/api/network/wan":
 		a.handleWAN(w, req)
+		return
+	case "/api/network/home":
+		if a.authorize(w, req) {
+			a.handleHome(w, req)
+		}
 		return
 	}
 	if isManagementPath(req.URL.Path) {
@@ -633,6 +642,108 @@ func (a *Application) handleWAN(w http.ResponseWriter, req *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(a.Tunnel.Status())
+}
+
+// GateConfig 返回保存的对外服务范围（main 启动时用）。
+func (a *Application) GateConfig() network.GateConfig { return gateConfig(a.cfg) }
+
+func gateConfig(cfg *config.Config) network.GateConfig {
+	return network.GateConfig{Host: cfg.Server.Host, HomeOnly: cfg.Server.HomeOnlyEnabled(), Trusted: cfg.Server.TrustedFingerprints()}
+}
+
+// handleHome：只在可信网络上对外服务。本机客户端或局域网管理员可以操作（authorize 已检查）。
+//   - GET：状态、可信网络列表和当前网络；
+//   - POST {"home_only": bool}：开关；
+//   - POST {"trust": "名称"}：把当前网络加为可信；
+//   - POST {"untrust": "指纹"}：移除一个可信网络。
+//
+// 不会把发请求的人关在外面：局域网里的管理员打开开关时，当前网络必须已经可信。
+func (a *Application) handleHome(w http.ResponseWriter, req *http.Request) {
+	if a.Gate == nil {
+		http.Error(w, "network gate unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if req.Method == http.MethodPost {
+		var in struct {
+			HomeOnly *bool  `json:"home_only"`
+			Trust    string `json:"trust"`
+			Untrust  string `json:"untrust"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 4096)).Decode(&in); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		local := auth.IsLoopbackDirect(req)
+		var current network.NetState
+		if in.Trust != "" || !local && (in.HomeOnly != nil && *in.HomeOnly || in.Untrust != "") {
+			current = a.Gate.Current()
+		}
+		if !a.operation.TryLock() {
+			http.Error(w, "configuration change in progress; retry later", http.StatusConflict)
+			return
+		}
+		next, err := cloneConfig(a.cfg)
+		status := http.StatusInternalServerError
+		if err == nil {
+			s := &next.Server
+			switch {
+			case in.Trust != "":
+				if current.Fingerprint == "" {
+					err, status = errors.New("读不到当前网络的标识：没有连接局域网，或路由器没有打开 UPnP"), http.StatusConflict
+				} else if !slices.ContainsFunc(s.TrustedNetworks, func(n config.TrustedNetwork) bool { return n.Fingerprint == current.Fingerprint }) {
+					s.TrustedNetworks = append(s.TrustedNetworks, config.TrustedNetwork{Fingerprint: current.Fingerprint, Name: strings.TrimSpace(in.Trust)})
+				}
+			case in.Untrust != "":
+				if !local && s.HomeOnlyEnabled() && in.Untrust == current.Fingerprint {
+					err, status = errors.New("这是你现在所在的网络，移除后你会连不上：先关掉「只在可信网络上对外服务」，或在这台设备自己的浏览器里操作"), http.StatusConflict
+					break
+				}
+				s.TrustedNetworks = slices.DeleteFunc(s.TrustedNetworks, func(n config.TrustedNetwork) bool { return n.Fingerprint == in.Untrust })
+			case in.HomeOnly != nil:
+				if *in.HomeOnly && !local && !slices.Contains(s.TrustedFingerprints(), current.Fingerprint) {
+					err, status = errors.New("当前网络还不是可信网络，打开后你会连不上：先把当前网络加为可信"), http.StatusConflict
+				}
+				s.HomeOnly = in.HomeOnly
+			default:
+				err, status = errors.New("nothing to change"), http.StatusBadRequest
+			}
+		}
+		if err == nil {
+			if err = config.Save(next); err != nil && config.WriteWasCommitted(err) {
+				err = nil
+			}
+		}
+		if err == nil {
+			a.cfg = next
+		}
+		a.operation.Unlock()
+		if err != nil {
+			http.Error(w, err.Error(), status)
+			return
+		}
+		// 先回复再切换监听：切换会断开旧监听上的连接，包括这个请求自己的。回复里是切换前的状态，网页随后重新读取。
+		a.writeHome(w, false)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		if err := a.Gate.SetConfig(gateConfig(next)); err != nil {
+			log.Printf("network gate: %v", err)
+		}
+		return
+	} else if req.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	a.writeHome(w, true)
+}
+
+func (a *Application) writeHome(w http.ResponseWriter, fresh bool) {
+	trusted := slices.Clone(a.cfg.Server.TrustedNetworks)
+	if trusted == nil {
+		trusted = []config.TrustedNetwork{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": a.Gate.Status(fresh), "networks": trusted})
 }
 
 // WANEnabled 返回保存的广域网开关（main 启动时据此拉起隧道）。
