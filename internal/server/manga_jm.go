@@ -29,6 +29,66 @@ type jmState struct {
 	mu       sync.Mutex
 	fetching map[string]bool // 正在下载封面的本子 ID
 	ids      map[string]jmCBZ
+	active   map[string]string // 正在下载的本子 ID → 任务 ID
+}
+
+// jmTrack 记下一个下载任务里的本子，任务结束时去掉。
+func (r *Router) jmTrack(job string, ids []string, done <-chan struct{}) {
+	r.jm.mu.Lock()
+	if r.jm.active == nil {
+		r.jm.active = map[string]string{}
+	}
+	nums := make([]string, len(ids))
+	for i, id := range ids {
+		nums[i] = jmAlbumNumber(id)
+		r.jm.active[nums[i]] = job
+	}
+	r.jm.mu.Unlock()
+	go func() {
+		<-done
+		r.jm.mu.Lock()
+		for _, id := range nums {
+			if r.jm.active[id] == job {
+				delete(r.jm.active, id)
+			}
+		}
+		r.jm.mu.Unlock()
+	}()
+}
+
+// jmNotActive 去掉已经在下载任务里的本子（任务里 ID 可能写成网址，按其中的数字比）。
+func (r *Router) jmNotActive(ids []string) []string {
+	r.jm.mu.Lock()
+	defer r.jm.mu.Unlock()
+	var out []string
+	for _, id := range ids {
+		if _, busy := r.jm.active[jmAlbumNumber(id)]; !busy {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func (r *Router) jmActive(id string) bool {
+	r.jm.mu.Lock()
+	defer r.jm.mu.Unlock()
+	_, ok := r.jm.active[id]
+	return ok
+}
+
+// jmAlbumNumber 从本子编号或网址里取出数字编号（认不出时原样返回）。
+func jmAlbumNumber(s string) string {
+	s = strings.TrimSpace(s)
+	for _, key := range []string{"/album/", "/photo/"} {
+		if i := strings.Index(s, key); i >= 0 {
+			s = s[i+len(key):]
+			if j := strings.IndexFunc(s, func(r rune) bool { return r < '0' || r > '9' }); j >= 0 {
+				s = s[:j]
+			}
+			return s
+		}
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(s, "JM"), "jm")
 }
 
 // jmCBZ 记着一个 CBZ 的本子 ID，按文件大小和修改时间判断要不要重读。
@@ -46,6 +106,7 @@ type jmAlbum struct {
 	Chapters   int      `json:"chapters,omitempty"`
 	Error      string   `json:"error,omitempty"`
 	Downloaded string   `json:"downloaded,omitempty"` // 已下载时为所在资源库的名字
+	Active     bool     `json:"active,omitempty"`     // 正在下载任务里
 }
 
 func (r *Router) handleJM(w http.ResponseWriter, req *http.Request) {
@@ -119,6 +180,7 @@ func (r *Router) jmList(w http.ResponseWriter, req *http.Request, args ...string
 	ids := make([]string, 0, len(out.Results))
 	for i := range out.Results {
 		out.Results[i].Downloaded = have[out.Results[i].ID]
+		out.Results[i].Active = r.jmActive(out.Results[i].ID)
 		if out.Results[i].Tags == nil {
 			out.Results[i].Tags = []string{}
 		}

@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import omniHub.Media 1.0
 
-// 暂存区：各资源库根目录下的 staging/。新下载的内容先放这里，按批次预览、删掉不要的，再「移入资源库」。
+// 暂存区：各资源库的 media_library/staging/。新下载的内容先放这里，按批次预览、删掉不要的，再「移入资源库」。
 // 暂存区不属于任何分类，扫描和索引都不碰它；移入时同一块盘上只是改名。
 // 文件都在本机，预览直接读本机路径（图片用 Image，视频与音频用内嵌 mpv）。
 Item {

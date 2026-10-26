@@ -87,6 +87,7 @@ type dlPlan struct {
 	resource string   // 写入的目标目录（互斥锁）
 	lib      *library.Library
 	after    func(ctx context.Context) error // 脚本成功后在服务端执行（如更新漫画索引）
+	albums   []string                        // 18comic 漫画任务下载的本子（任务结束前在搜索结果里标成「下载中」）
 }
 
 type dlState struct {
@@ -192,9 +193,26 @@ func (r *Router) downloadKinds() []*dlKind {
 				if len(ids) == 0 || len(ids) > 100 {
 					return dlPlan{}, errors.New("请粘贴 1–100 个本子")
 				}
+				// 已经在别的任务里下载的本子去掉：同一本两个任务一起下会抢同一个临时目录
+				ids = r.jmNotActive(ids)
+				if len(ids) == 0 {
+					return dlPlan{}, errors.New("这些本子都已经在下载了")
+				}
 				lib, err := r.writableLibrary(p.text("library"))
 				if err != nil {
 					return dlPlan{}, err
+				}
+				// 别的资源库里已经有的本子不再下（脚本只查要放进去的那个库，同一本会在两个库各下一份）；
+				// 目标库里已有的留给脚本判断线上有没有新章节
+				have := r.jmDownloaded(context.Background())
+				kept := ids[:0]
+				for _, id := range ids {
+					if where, ok := have[jmAlbumNumber(id)]; !ok || where == lib.Name {
+						kept = append(kept, id)
+					}
+				}
+				if ids = kept; len(ids) == 0 {
+					return dlPlan{}, errors.New("这些本子在别的资源库里都已经有了")
 				}
 				// 18comic 的本子都是 NSFW，直接放进 manga/nsfw/（漫画按子目录分级，见 manga_layout.go）
 				root := filepath.Join(lib.RootPath, "media_library", "manga")
@@ -204,7 +222,7 @@ func (r *Router) downloadKinds() []*dlKind {
 				}
 				args := append([]string{"scripts/manga.py"}, ids...)
 				args = append(args, "--dest", dest, "--work", filepath.Join(root, ".omnihub-download"))
-				return dlPlan{title: fmt.Sprintf("18comic 漫画 · %d 本", len(ids)), args: args, resource: root, lib: lib,
+				return dlPlan{title: fmt.Sprintf("18comic 漫画 · %d 本", len(ids)), args: args, resource: root, lib: lib, albums: ids,
 					after: func(ctx context.Context) error {
 						_, err := scanner.ScanMangaContext(ctx, root, root)
 						return err
@@ -578,6 +596,9 @@ func (r *Router) startDownload(kindID string, params dlParams) (dlJob, error) {
 	r.downloads.mu.Lock()
 	r.downloads.kinds[id] = kind.ID
 	r.downloads.mu.Unlock()
+	if len(plan.albums) > 0 {
+		r.jmTrack(id, plan.albums, t.Done())
+	}
 	if plan.after != nil {
 		go func() {
 			<-t.Done()

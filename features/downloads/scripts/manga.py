@@ -133,6 +133,7 @@ def download_album(client, aid, dest, work_root):
     title = detail.name
     photos = list(detail)
     online = len(photos)
+    book = download_album.book  # (第几本, 共几本)，任务进度按本算，步骤里再写到第几章
     log(f"《{title}》共 {online} 章")
     existing = find_existing(dest, aid)
     if existing:
@@ -151,7 +152,7 @@ def download_album(client, aid, dest, work_root):
     failed = []
     for i, photo in enumerate(photos, 1):
         log(f"[{i}/{online}] {chapter_dirname(photo)}")
-        progress(i - 1, online, f"《{title}》第 {i}/{online} 章")
+        progress(book[0] - 1, book[1], f"第 {book[0]}/{book[1]} 本《{title}》第 {i}/{online} 章")
         for attempt in range(1, 4):
             try:
                 jmcomic.download_photo(photo.photo_id, option=opt)
@@ -186,6 +187,7 @@ def download_album(client, aid, dest, work_root):
 
 
 download_album.saved = []
+download_album.book = (1, 1)
 
 
 def parse_ids(specs):
@@ -322,10 +324,13 @@ def main():
     ok = 0
     for n, aid in enumerate(ids, 1):
         log(f"\n=== {n}/{len(ids)} 本子 {aid} ===")
+        download_album.book = (n, len(ids))
+        progress(n - 1, len(ids), f"第 {n}/{len(ids)} 本：读取本子信息")
         try:
             ok += bool(download_album(client, aid, args.dest, args.work))
         except Exception as e:
             log(f"失败：{e}")
+    progress(len(ids), len(ids), f"{ok}/{len(ids)} 本完成")
     log(f"\n{ok}/{len(ids)} 本完成")
     result(path=args.dest, saved=[os.path.basename(x) for x in download_album.saved], ok=ok == len(ids))
     sys.exit(0 if ok == len(ids) else 1)

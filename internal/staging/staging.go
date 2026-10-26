@@ -24,8 +24,46 @@ import (
 	"omnihub/internal/shortvideo"
 )
 
-// Dir 是暂存区在资源库根目录下的名字。
-const Dir = "staging"
+// Dir 是暂存区相对资源库根目录的位置。以前放在根目录的 staging/，和 media_library、standalone_games 并列，
+// 不像资源；现在放进 media_library/（见 migrateLegacy）。
+const Dir = "media_library/staging"
+
+// legacyDir 是以前的位置。
+const legacyDir = "staging"
+
+// migrateLegacy 把旧位置里 omniHub 建的批次（有 batch.json 的文件夹）搬到新位置（同一个盘上改名）。
+// 别的东西不碰（2026-10-26 那里还有别的程序在写的日志和下载目录）；旧文件夹空了才删掉。
+func migrateLegacy(root string) error {
+	old := filepath.Join(root, legacyDir)
+	entries, err := os.ReadDir(old)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(old, e.Name(), manifest)); err != nil {
+			continue
+		}
+		dst := filepath.Join(root, Dir, e.Name())
+		if _, err := os.Lstat(dst); err == nil {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Join(root, Dir), 0o755); err != nil {
+			return err
+		}
+		if err := os.Rename(filepath.Join(old, e.Name()), dst); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	_ = os.Remove(old) // 只有空了才删得掉
+	return errors.Join(errs...)
+}
 
 const manifest = "batch.json"
 
@@ -116,8 +154,11 @@ func Resolve(root, batch, rel string) (string, error) {
 	return filepath.Join(dir, filepath.FromSlash(clean[1:])), nil
 }
 
-// List 列出资源库的全部批次（新的在前）。
+// List 列出资源库的全部批次（新的在前）。旧位置里的批次先搬过来。
 func List(root string) ([]Batch, error) {
+	if err := migrateLegacy(root); err != nil {
+		return nil, fmt.Errorf("暂存区搬到 media_library/staging 时出错：%w", err)
+	}
 	entries, err := os.ReadDir(filepath.Join(root, Dir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return []Batch{}, nil

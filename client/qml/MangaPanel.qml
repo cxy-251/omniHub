@@ -19,7 +19,7 @@ ColumnLayout {
     function saveQueue(list) { queue = list; store.queueJson = JSON.stringify(list) }
     function queued(id) { return queue.some(function (q) { return q.id === id }) }
     function toggle(album) {
-        if (album.downloaded) return
+        if (album.downloaded || album.active) return
         if (queued(album.id)) saveQueue(queue.filter(function (q) { return q.id !== album.id }))
         else saveQueue(queue.concat([{id: album.id, title: album.title}]))
     }
@@ -50,7 +50,7 @@ ColumnLayout {
 
     Label {
         Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 12
-        text: "搜索 18comic（禁漫）的本子，点封面加进右边的下载列表，再「开始下载」。一本一本下，整本下好后封成 CBZ 放进漫画库的 nsfw/。已经下载过的会标出来，不能再加；下载时已有的跳过，线上出了新章节的整本更新。"
+        text: "搜索 18comic（禁漫）的本子，点封面加进右边的下载列表，再「开始下载」。一本一本下，整本下好后封成 CBZ 放进漫画库的 nsfw/。已经下载过的、正在下载的会标出来，不能再加；下载时已有的跳过，线上出了新章节的整本更新。"
     }
 
     RowLayout {
@@ -99,8 +99,8 @@ ColumnLayout {
                 }
                 Chip {
                     text: "本页全部加入"
-                    visible: panel.shown.some(function (a) { return !a.downloaded && !panel.queued(a.id) })
-                    onClicked: panel.saveQueue(panel.queue.concat(panel.shown.filter(function (a) { return !a.downloaded && !panel.queued(a.id) }).map(function (a) { return {id: a.id, title: a.title} })))
+                    visible: panel.shown.some(function (a) { return !a.downloaded && !a.active && !panel.queued(a.id) })
+                    onClicked: panel.saveQueue(panel.queue.concat(panel.shown.filter(function (a) { return !a.downloaded && !a.active && !panel.queued(a.id) }).map(function (a) { return {id: a.id, title: a.title} })))
                 }
                 Chip { text: "上一页"; enabled: !panel.busy && panel.page > 1; onClicked: panel.load(panel.source, panel.query, panel.page - 1) }
                 Chip { text: "下一页"; enabled: !panel.busy && !!panel.result && panel.page < panel.result.page_count; onClicked: panel.load(panel.source, panel.query, panel.page + 1) }
@@ -134,15 +134,15 @@ ColumnLayout {
                             fillMode: Image.PreserveAspectCrop
                             asynchronous: true
                             source: backendApi.apiUrl("/api/downloads/manga/cover?id=" + cell.modelData.id)
-                            opacity: cell.modelData.downloaded ? 0.45 : 1
+                            opacity: cell.modelData.downloaded || cell.modelData.active ? 0.45 : 1
                         }
                         Label { anchors.centerIn: cover; visible: cover.status !== Image.Ready; text: cover.status === Image.Error ? "无封面" : "…"; color: "#6e7681" }
                         Label {
-                            visible: !!cell.modelData.downloaded || cell.inQueue
+                            visible: !!cell.modelData.downloaded || !!cell.modelData.active || cell.inQueue
                             anchors.left: cover.left; anchors.top: cover.top; anchors.margins: 6
                             padding: 4; font.pixelSize: 11; color: "#ffffff"
-                            text: cell.modelData.downloaded ? "已下载 · " + cell.modelData.downloaded : "✓ 在下载列表"
-                            background: Rectangle { radius: 4; color: cell.modelData.downloaded ? "#2d333b" : "#1f6feb" }
+                            text: cell.modelData.downloaded ? "已下载 · " + cell.modelData.downloaded : cell.modelData.active ? "下载中" : "✓ 在下载列表"
+                            background: Rectangle { radius: 4; color: cell.modelData.downloaded ? "#2d333b" : cell.modelData.active ? "#9e6a03" : "#1f6feb" }
                         }
                         Column {
                             anchors.left: parent.left; anchors.right: parent.right; anchors.top: cover.bottom; anchors.margins: 6
@@ -154,7 +154,7 @@ ColumnLayout {
                             id: mouse
                             anchors.fill: parent
                             hoverEnabled: true
-                            cursorShape: cell.modelData.downloaded ? Qt.ArrowCursor : Qt.PointingHandCursor
+                            cursorShape: cell.modelData.downloaded || cell.modelData.active ? Qt.ArrowCursor : Qt.PointingHandCursor
                             onClicked: panel.toggle(cell.modelData)
                             ToolTip.visible: containsMouse && (cell.modelData.tags || []).length > 0
                             ToolTip.text: (cell.modelData.tags || []).join("、")

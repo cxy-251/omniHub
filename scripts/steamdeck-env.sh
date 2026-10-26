@@ -22,6 +22,16 @@ export CMAKE_PREFIX_PATH="$OH_TOOLS/qt6/usr:$OH_TOOLS/libmpv-sdk/usr"
 export OH_SYSROOT="$OH_TOOLS/gcc"
 export QT_PLUGIN_PATH="$OH_TOOLS/qt6/usr/lib/qt6/plugins"
 export QML_IMPORT_PATH="$OH_TOOLS/qt6/usr/lib/qt6/qml"
+# 中文输入：自带的 Qt 没有 fcitx5 的输入法插件，客户端里切不出输入法。系统的 Qt 和自带的同一版本（6.9.1）时，
+# 只把系统的 fcitx5 插件链接进一个单独的插件目录（不把整个系统插件目录加进来，免得加载系统的主题等插件），并指定用它。
+_im="/usr/lib/qt6/plugins/platforminputcontexts/libfcitx5platforminputcontextplugin.so"
+if [ -f "$_im" ] && [ -e /usr/lib/libQt6Core.so.6.9.1 ] && [ -e "$OH_TOOLS/qt6/usr/lib/libQt6Core.so.6.9.1" ]; then
+    _imdir="${XDG_CACHE_HOME:-$HOME/.cache}/omnihub/qt-im"
+    mkdir -p "$_imdir/platforminputcontexts" && ln -sf "$_im" "$_imdir/platforminputcontexts/"
+    QT_PLUGIN_PATH="$QT_PLUGIN_PATH:$_imdir"
+    case "${XMODIFIERS:-}" in *fcitx*) export QT_IM_MODULE="${QT_IM_MODULE:-fcitx}" ;; esac
+fi
+unset _im _imdir
 # 使用 --sysroot 后，链接器在 sysroot 下找系统库（libproxy、libpulse 的私有依赖）的 RUNPATH，找不到；显式指定。
 export LDFLAGS="-Wl,-rpath-link,/usr/lib/libproxy -Wl,-rpath-link,/usr/lib/pulseaudio${LDFLAGS:+ $LDFLAGS}"
 
