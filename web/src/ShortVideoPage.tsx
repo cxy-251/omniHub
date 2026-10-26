@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { usePaged } from './paged';
 import VirtualGrid from './VirtualGrid';
 import ChannelBar from './ChannelBar';
@@ -89,6 +89,11 @@ function Viewer({ post, liked, onLike, onTrash, onClose, onPrev, onNext }: {
   const [notice, setNotice] = useState('');
   const [armed, setArmed] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
+  // 静音和音量跨视频记住（存在浏览器里）：在一个视频上点了静音，后面的视频也静音
+  const [sound, setSound] = useState(() => stored('omnihub.sv.sound', { muted: false, volume: 1 }));
+  useEffect(() => store('omnihub.sv.sound', sound), [sound]);
+  const applySound = (el: HTMLMediaElement | null) => { if (el) { el.muted = sound.muted; el.volume = sound.volume; } };
+  const keepSound = (el: HTMLMediaElement) => setSound({ muted: el.muted, volume: el.volume });
   const shown = useRef<{ post: Post; at: number; pages: number } | undefined>(undefined);
   const pages = post?.image_count ?? 0;
   const finish = () => {
@@ -134,6 +139,29 @@ function Viewer({ post, liked, onLike, onTrash, onClose, onPrev, onNext }: {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
+  // 点画面：左边三分之一上一个、右边三分之一下一个（图集先翻图片，翻到头再换作品），中间暂停/继续（图集翻下一张）。
+  // 滑动：左滑下一个、右滑上一个、下滑返回。视频底部留出原生进度条，不盖住。
+  const press = useRef<{ x: number; y: number } | undefined>(undefined);
+  const prevPage = () => { if (page > 1) setPage(page - 1); else onPrev?.(); };
+  const nextPage = () => { if (page < pages) setPage(page + 1); else onNext?.(); };
+  function release(e: ReactPointerEvent<HTMLDivElement>) {
+    const start = press.current;
+    press.current = undefined;
+    if (!start || !post) return;
+    const dx = e.clientX - start.x, dy = e.clientY - start.y;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.2) { if (dx < 0) onNext?.(); else onPrev?.(); return; }
+    if (dy > 90 && dy > Math.abs(dx) * 1.2) { onClose(); return; }
+    if (Math.abs(dx) > 12 || Math.abs(dy) > 12) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const isVideo = post.kind === 'video';
+    if (x < 1 / 3) { if (isVideo) onPrev?.(); else prevPage(); }
+    else if (x > 2 / 3) { if (isVideo) onNext?.(); else nextPage(); }
+    else if (isVideo) { const v = video.current; if (v) { if (v.paused) void v.play(); else v.pause(); } }
+    else nextPage();
+  }
+  const gestures = <div className={`absolute inset-x-0 top-0 z-10 touch-none ${post?.kind === 'video' ? 'bottom-16' : 'bottom-14'}`}
+    onPointerDown={e => { press.current = { x: e.clientX, y: e.clientY }; }} onPointerUp={release} onPointerCancel={() => { press.current = undefined; }} />;
   return <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex flex-col bg-black/95 text-white">
     <div className="flex flex-wrap items-center gap-2 p-2">
       <p className="min-w-0 flex-1 truncate text-sm">{post ? `${post.creator_id.split('/').slice(1).join(' / ')} · ${post.published} · ${post.title}` : '加载中…'}</p>
@@ -148,12 +176,14 @@ function Viewer({ post, liked, onLike, onTrash, onClose, onPrev, onNext }: {
       {!post ? <p>加载中…</p> : post.kind === 'video' && !canPlayCodec(post.codec)
         ? <p className="max-w-md text-center">这个视频是 {post.codec?.toUpperCase()} 编码，当前浏览器无法解码。请在 Deck 上的 omniHub 客户端中播放。</p>
         : post.kind === 'video'
-        ? <video ref={video} key={post.id} className="max-h-full max-w-full" src={`/api/media/shortvideo/stream?${query(post)}`} controls autoPlay playsInline
-            onEnded={() => { sendEvent('shortvideo', post.id, 'complete'); shown.current = undefined; onNext?.(); }} />
+        ? <>{gestures}<video ref={el => { video.current = el; applySound(el); }} key={post.id} className="max-h-full max-w-full" src={`/api/media/shortvideo/stream?${query(post)}`} controls autoPlay playsInline
+            onVolumeChange={e => keepSound(e.currentTarget)}
+            onEnded={() => { sendEvent('shortvideo', post.id, 'complete'); shown.current = undefined; onNext?.(); }} /></>
         : <>
-          <img key={post.id + page} className="max-h-full max-w-full object-contain" src={`/api/media/shortvideo/album/image?${query(post, { index: String(page) })}`} alt={`${page}/${pages}`} onClick={() => setPage(p => p < pages ? p + 1 : 1)} />
-          {post.music ? <audio key={post.id} src={`/api/media/shortvideo/stream?${query(post, { music: '1' })}`} autoPlay loop controls className="absolute bottom-3 left-3 h-8" /> : null}
-          <div className="absolute bottom-3 right-3 flex items-center gap-2">
+          {gestures}
+          <img key={post.id + page} className="max-h-full max-w-full object-contain" src={`/api/media/shortvideo/album/image?${query(post, { index: String(page) })}`} alt={`${page}/${pages}`} />
+          {post.music ? <audio key={post.id} ref={applySound} onVolumeChange={e => keepSound(e.currentTarget)} src={`/api/media/shortvideo/stream?${query(post, { music: '1' })}`} autoPlay loop controls className="absolute bottom-3 left-3 z-20 h-8" /> : null}
+          <div className="absolute bottom-3 right-3 z-20 flex items-center gap-2">
             <button className={button} disabled={page <= 1} onClick={() => setPage(p => p - 1)}>上一张</button>
             <span className="text-sm">{page} / {pages}</span>
             <button className={button} disabled={page >= pages} onClick={() => setPage(p => p + 1)}>下一张</button>

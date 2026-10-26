@@ -88,6 +88,8 @@ type dlPlan struct {
 	lib      *library.Library
 	after    func(ctx context.Context) error // 脚本成功后在服务端执行（如更新漫画索引）
 	albums   []string                        // 18comic 漫画任务下载的本子（任务结束前在搜索结果里标成「下载中」）
+	// albumTitles 是本子编号 → 书名（没下完时记下来，下次加回下载列表用）
+	albumTitles map[string]string
 }
 
 type dlState struct {
@@ -222,7 +224,13 @@ func (r *Router) downloadKinds() []*dlKind {
 				}
 				args := append([]string{"scripts/manga.py"}, ids...)
 				args = append(args, "--dest", dest, "--work", filepath.Join(root, ".omnihub-download"))
-				return dlPlan{title: fmt.Sprintf("18comic 漫画 · %d 本", len(ids)), args: args, resource: root, lib: lib, albums: ids,
+				titles := map[string]string{}
+				for i, t := range p.lines("titles") {
+					if i < len(p.lines("ids")) {
+						titles[jmAlbumNumber(p.lines("ids")[i])] = t
+					}
+				}
+				return dlPlan{title: fmt.Sprintf("18comic 漫画 · %d 本", len(ids)), args: args, resource: root, lib: lib, albums: ids, albumTitles: titles,
 					after: func(ctx context.Context) error {
 						_, err := scanner.ScanMangaContext(ctx, root, root)
 						return err
@@ -598,6 +606,7 @@ func (r *Router) startDownload(kindID string, params dlParams) (dlJob, error) {
 	r.downloads.mu.Unlock()
 	if len(plan.albums) > 0 {
 		r.jmTrack(id, plan.albums, t.Done())
+		r.jmRemember(id, plan, t)
 	}
 	if plan.after != nil {
 		go func() {

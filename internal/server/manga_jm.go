@@ -18,6 +18,7 @@ import (
 
 	dlassets "omnihub/features/downloads"
 	"omnihub/internal/platform"
+	"omnihub/internal/tasks"
 )
 
 // 18comic（禁漫）漫画下载的联网部分：搜索、榜单、本子详情和封面（只给桌面端下载页用，路径在 /api/downloads/ 下，
@@ -146,6 +147,8 @@ func (r *Router) handleJM(w http.ResponseWriter, req *http.Request) {
 		_, _ = w.Write(out)
 	case "cover":
 		r.jmCover(w, req, q.Get("id"))
+	case "unfinished":
+		writeJSON(w, http.StatusOK, r.jmUnfinished(req.Context()))
 	case "downloaded":
 		// 已下载过的本子 ID（下载列表加书时过滤用）
 		ids := r.jmDownloaded(req.Context())
@@ -384,4 +387,96 @@ func cbzAlbumID(path string) string {
 		return ""
 	}
 	return ""
+}
+
+// 没下完的 18comic 任务记在 cacheDir/jm-unfinished.json（服务端重启后任务列表就没了，下载列表开始下载时也清空了）。
+// 任务成功结束时去掉；失败、被停止或服务端重启打断的留着，下载页提示「上次有 N 本没下完」，一键加回下载列表。
+
+type jmUnfinishedJob struct {
+	IDs     []string          `json:"ids"`
+	Titles  map[string]string `json:"titles"`
+	Library string            `json:"library"`
+}
+
+func (r *Router) jmUnfinishedPath() string { return filepath.Join(r.cacheDir, "jm-unfinished.json") }
+
+func (r *Router) jmLoadUnfinished() map[string]jmUnfinishedJob {
+	out := map[string]jmUnfinishedJob{}
+	if data, err := os.ReadFile(r.jmUnfinishedPath()); err == nil {
+		_ = json.Unmarshal(data, &out)
+	}
+	return out
+}
+
+func (r *Router) jmSaveUnfinished(jobs map[string]jmUnfinishedJob) {
+	data, _ := json.MarshalIndent(jobs, "", "  ")
+	_ = os.MkdirAll(filepath.Dir(r.jmUnfinishedPath()), 0o755)
+	_ = os.WriteFile(r.jmUnfinishedPath(), data, 0o644)
+}
+
+// jmRemember 记下任务要下的本子；任务成功结束（退出码 0）时去掉。
+func (r *Router) jmRemember(job string, plan dlPlan, t *tasks.Task) {
+	r.jm.mu.Lock()
+	jobs := r.jmLoadUnfinished()
+	ids := make([]string, len(plan.albums))
+	for i, id := range plan.albums {
+		ids[i] = jmAlbumNumber(id)
+	}
+	jobs[job] = jmUnfinishedJob{IDs: ids, Titles: plan.albumTitles, Library: plan.lib.ID}
+	r.jmSaveUnfinished(jobs)
+	r.jm.mu.Unlock()
+	go func() {
+		<-t.Done()
+		if _, _, _, code := t.State(); code != 0 {
+			return
+		}
+		r.jm.mu.Lock()
+		jobs := r.jmLoadUnfinished()
+		delete(jobs, job)
+		r.jmSaveUnfinished(jobs)
+		r.jm.mu.Unlock()
+	}()
+}
+
+type jmPending struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Library string `json:"library"`
+}
+
+// jmUnfinished 返回以前的任务里还没下好、现在也没在下的本子；全部下好的记录顺手删掉。
+func (r *Router) jmUnfinished(ctx context.Context) []jmPending {
+	have := r.jmDownloaded(ctx)
+	r.jm.mu.Lock()
+	defer r.jm.mu.Unlock()
+	jobs := r.jmLoadUnfinished()
+	out := []jmPending{}
+	seen := map[string]bool{}
+	changed := false
+	for job, j := range jobs {
+		left := 0
+		for _, id := range j.IDs {
+			if _, done := have[id]; done {
+				continue
+			}
+			left++
+			if _, busy := r.jm.active[id]; busy || seen[id] {
+				continue
+			}
+			seen[id] = true
+			title := j.Titles[id]
+			if title == "" {
+				title = "JM" + id
+			}
+			out = append(out, jmPending{ID: id, Title: title, Library: j.Library})
+		}
+		if left == 0 {
+			delete(jobs, job)
+			changed = true
+		}
+	}
+	if changed {
+		r.jmSaveUnfinished(jobs)
+	}
+	return out
 }

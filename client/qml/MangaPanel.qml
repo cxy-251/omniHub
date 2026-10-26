@@ -35,8 +35,14 @@ ColumnLayout {
     readonly property var libraryField: (kind.fields || []).find(function (f) { return f.name === "library" }) || null
     readonly property string library: !libraryField ? "" : libraryField.options.some(function (o) { return o.value === store.library }) ? store.library : (libraryField.default || "")
 
+    // 以前的任务没下完（被停止、失败或服务端重启打断）的本子：提示一键加回下载列表
+    property var unfinished: []
+    function loadUnfinished() { api.getJSON("/api/downloads/manga/unfinished", function (list) { panel.unfinished = list.filter(function (a) { return !panel.queued(a.id) }) }) }
     // 再打开这页时接着显示上次的搜索或榜单（第一页）
-    Component.onCompleted: if (store.lastSource) { searchField.text = store.lastQuery; load(store.lastSource, store.lastQuery, 1) }
+    Component.onCompleted: {
+        loadUnfinished()
+        if (store.lastSource) { searchField.text = store.lastQuery; load(store.lastSource, store.lastQuery, 1) }
+    }
     function load(src, q, p) {
         source = src; query = q; page = p; busy = true; error = ""
         store.lastSource = src; store.lastQuery = q
@@ -51,6 +57,25 @@ ColumnLayout {
     Label {
         Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 12
         text: "搜索 18comic（禁漫）的本子，点封面加进右边的下载列表，再「开始下载」。一本一本下，整本下好后封成 CBZ 放进漫画库的 nsfw/。已经下载过的、正在下载的会标出来，不能再加；下载时已有的跳过，线上出了新章节的整本更新。"
+    }
+
+    Rectangle {
+        visible: panel.unfinished.length > 0
+        Layout.fillWidth: true
+        implicitHeight: unfinishedRow.implicitHeight + 12
+        radius: 6; color: "#2d2410"; border.color: "#9e6a03"
+        RowLayout {
+            id: unfinishedRow
+            anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; anchors.margins: 8
+            Label {
+                Layout.fillWidth: true; elide: Text.ElideRight; color: "#e3b341"; font.pixelSize: 12
+                text: "上次有 " + panel.unfinished.length + " 本没下完：" + panel.unfinished.slice(0, 3).map(function (a) { return a.title }).join("、") + (panel.unfinished.length > 3 ? " 等" : "")
+            }
+            Chip {
+                text: "加回下载列表"
+                onClicked: { panel.saveQueue(panel.queue.concat(panel.unfinished.map(function (a) { return {id: a.id, title: a.title} }))); panel.unfinished = [] }
+            }
+        }
     }
 
     RowLayout {
@@ -214,7 +239,8 @@ ColumnLayout {
                     text: "开始下载（" + panel.queue.length + " 本）"
                     enabled: panel.queue.length > 0 && panel.queue.length <= 100
                     onClicked: {
-                        panel.run({ids: panel.queue.map(function (q) { return q.id }).join("\n"), library: panel.library})
+                        panel.run({ids: panel.queue.map(function (q) { return q.id }).join("\n"),
+                                   titles: panel.queue.map(function (q) { return q.title.replace(/\n/g, " ") }).join("\n"), library: panel.library})
                         panel.saveQueue([])
                     }
                 }

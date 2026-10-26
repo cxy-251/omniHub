@@ -32,7 +32,10 @@ FocusScope {
     // 顶栏：进入后显示 3 秒；之后鼠标移到顶边出现，离开 1.5 秒收起；📌 固定后常显。
     property bool barPinned: false
     property bool barShown: true
-    readonly property bool barVisible: barPinned || barShown || barHover.hovered || topEdge.hovered
+    // 顶栏里的下拉框展开时，列表在顶栏外面，鼠标移到列表上也不能收起；收起列表后重新计时
+    readonly property bool barMenuOpen: channelBox.popup.visible || albumBox.popup.visible
+    onBarMenuOpenChanged: if (!barMenuOpen) revealBar()
+    readonly property bool barVisible: barPinned || barShown || barHover.hovered || topEdge.hovered || barMenuOpen
     Timer { id: barTimer; interval: 3000; running: true; onTriggered: matrix.barShown = false }
     function revealBar() { barShown = true; barTimer.interval = 1500; barTimer.restart() }
     function setAllPlaying(on) {
@@ -204,6 +207,7 @@ FocusScope {
                 Rectangle { width: 1; height: 20; color: "#30363d" }
                 Label { text: "屏 " + (matrix.focused + 1); color: "#58a6ff"; font.pixelSize: 13 }
                 ComboBox {
+                    id: channelBox
                     Layout.fillWidth: true
                     Layout.maximumWidth: 280
                     Layout.minimumWidth: 120
@@ -236,6 +240,7 @@ FocusScope {
                 }
                 // 伴听：选一张音声专辑，从上次听到的地方接着放；选「关」暂停。底部播放条可切集、调倍速。
                 ComboBox {
+                    id: albumBox
                     visible: !!matrix.audioEngine && matrix.audioAlbums.length > 0
                     Layout.preferredWidth: 160
                     implicitHeight: 28

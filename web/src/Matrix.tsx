@@ -139,7 +139,17 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
   const [barShown, setBarShown] = useState(true);
   const [pinned, setPinned] = useState(false);
   const hideTimer = useRef<number | undefined>(undefined);
-  const revealBar = (ms = 1500) => { setBarShown(true); window.clearTimeout(hideTimer.current); hideTimer.current = window.setTimeout(() => setBarShown(false), ms); };
+  // 顶栏到时间自动收起，但鼠标还在顶栏上、或顶栏里的下拉框/输入框还在用（下拉列表展开时鼠标在列表上，
+  // 不算在顶栏里）时不收；离开或用完（失去焦点）后再重新计时。
+  const bar = useRef<HTMLDivElement>(null);
+  const overBar = useRef(false);
+  const revealBar = (ms = 1500) => {
+    setBarShown(true); window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => {
+      if (overBar.current || bar.current?.contains(document.activeElement)) return;
+      setBarShown(false);
+    }, ms);
+  };
   useEffect(() => { revealBar(3000); return () => window.clearTimeout(hideTimer.current); }, []);
   useEffect(() => { if (!toast) return; const t = window.setTimeout(() => setToast(''), 2200); return () => window.clearTimeout(t); }, [toast]);
   useEffect(() => { if (!trashArmed) return; const t = window.setTimeout(() => setTrashArmed(false), 3000); return () => window.clearTimeout(t); }, [trashArmed]);
@@ -198,8 +208,11 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
   // 铺满整个窗口（omniHub 顶栏也盖住），不随页面滚动；工具条藏在顶边。漫画阅读器停靠在右侧时让出它的宽度。
   return <div ref={container} className="fixed inset-y-0 left-0 z-30 flex flex-col bg-black" style={{ right: 'var(--manga-dock, 0px)' }}>
     <div className="absolute inset-x-0 top-0 z-10 h-3" onMouseEnter={() => revealBar()} onClick={() => revealBar()} />
-    <div className={`absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-1.5 bg-panel/95 px-2 py-1 ${pinned || barShown ? '' : 'hidden'}`}
-      onMouseEnter={() => { setBarShown(true); window.clearTimeout(hideTimer.current); }} onMouseLeave={() => revealBar()}>
+    <div ref={bar} className={`absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-1.5 bg-panel/95 px-2 py-1 ${pinned || barShown ? '' : 'hidden'}`}
+      onMouseEnter={() => { overBar.current = true; setBarShown(true); window.clearTimeout(hideTimer.current); }}
+      onMouseLeave={() => { overBar.current = false; revealBar(); }}
+      onBlur={() => revealBar()}
+      onChange={e => { if (e.target instanceof HTMLSelectElement) { e.target.blur(); revealBar(2500); } }}>
       <button className={chip(false)} onClick={onExit}>浏览</button>
       <button className={chip(prefs.screens === 2)} onClick={() => { setPrefs(p => ({ ...p, screens: 2 })); setFocused(f => Math.min(f, 1)); }}>2 屏</button>
       <button className={chip(prefs.screens === 3)} onClick={() => setPrefs(p => ({ ...p, screens: 3 }))}>3 屏</button>
