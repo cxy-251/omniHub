@@ -16,7 +16,8 @@ Item {
     property bool matrixWindowOpen: false
     property var audioEngine: null        // 全局音声引擎，交给多联放映做伴听
     signal matrixWindowRequested()
-    Settings { id: viewPrefs; category: "shortvideo"; property string mode: "browse"; property string channel: "recommend"; property string platform: "" }
+    // muted / volume：查看作品时的静音与音量，换下一个作品也沿用
+    Settings { id: viewPrefs; category: "shortvideo"; property string mode: "browse"; property string channel: "recommend"; property string platform: ""; property bool muted: false; property real volume: 100 }
     property alias channel: viewPrefs.channel
     property alias platform: viewPrefs.platform
 
@@ -207,7 +208,9 @@ Item {
         sourceComponent: Component { Viewer { post: view.postAt(view.openIndex) } }
     }
 
-    // Viewer：全屏查看一个作品。←/→ 切作品，↑/↓ 翻图，空格暂停，Esc 返回。
+    // Viewer：全屏查看一个作品。←/→ 切作品，↑/↓ 翻图，空格暂停，M 静音，Esc 返回。
+    // 点画面：左边三分之一上一个、右边三分之一下一个（图集先翻图片，翻到头再换作品），中间暂停/继续（图集翻下一张）；
+    // 拖动/滑动：左滑下一个、右滑上一个、下滑返回。底部控件条不在点按区域里。
     component Viewer: Rectangle {
         id: viewer
         required property var post   // 所在页未到达时为 null
@@ -260,6 +263,7 @@ Item {
             else if (event.key === Qt.Key_Down) page = Math.min(post?.image_count ?? 1, page + 1)
             else if (event.key === Qt.Key_Up) page = Math.max(1, page - 1)
             else if (event.key === Qt.Key_Space && isVideo) video.playing ? video.pause() : video.play()
+            else if (event.key === Qt.Key_M) viewPrefs.muted = !viewPrefs.muted
             else if (event.key === Qt.Key_Z && post) view.toggleLike(post)
             else if (event.key === Qt.Key_Delete && post) trash()
             else return
@@ -272,8 +276,8 @@ Item {
             anchors.bottomMargin: 0
             visible: viewer.isVideo
             source: viewer.isVideo ? view.localFile(viewer.post, viewer.post.id) : ""
+            volume: viewPrefs.muted ? 0 : viewPrefs.volume
             onPlaybackEnded: { feed.event(viewer.post, "complete"); viewer.shown = null; viewer.next() }
-            TapHandler { onTapped: video.playing ? video.pause() : video.play() }
         }
         Image {
             anchors.fill: parent
@@ -282,14 +286,41 @@ Item {
             fillMode: Image.PreserveAspectFit
             asynchronous: true
             source: viewer.post && !viewer.isVideo ? view.apiQuery("/api/media/shortvideo/album/image", viewer.post, "&index=" + viewer.page) : ""
-            TapHandler { onTapped: viewer.page = viewer.page < (viewer.post?.image_count ?? 1) ? viewer.page + 1 : 1 }
             BusyIndicator { anchors.centerIn: parent; running: parent.status === Image.Loading }
         }
         // 图集背景音乐：音频不需要画面，用 1 像素透明播放器播放磁盘上的 mp3。
         MpvItem {
             width: 1; height: 1; opacity: 0
             source: viewer.post && !viewer.isVideo && viewer.post.music ? view.localFile(viewer.post, viewer.post.music) : ""
+            volume: viewPrefs.muted ? 0 : viewPrefs.volume
             onPlaybackEnded: restart()
+        }
+        Item {
+            id: gestures
+            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+            anchors.bottom: parent.bottom; anchors.bottomMargin: 92
+            property point drag: Qt.point(0, 0)
+            function prevPage() { if (viewer.page > 1) viewer.page--; else viewer.prev() }
+            function nextPage() { if (viewer.page < (viewer.post?.image_count ?? 1)) viewer.page++; else viewer.next() }
+            TapHandler {
+                onTapped: function (point) {
+                    var x = point.position.x / gestures.width
+                    if (x < 1 / 3) { if (viewer.isVideo) viewer.prev(); else gestures.prevPage() }
+                    else if (x > 2 / 3) { if (viewer.isVideo) viewer.next(); else gestures.nextPage() }
+                    else if (viewer.isVideo) { if (video.playing) video.pause(); else video.play() }
+                    else gestures.nextPage()
+                }
+            }
+            DragHandler {
+                target: null
+                onActiveTranslationChanged: gestures.drag = activeTranslation
+                onActiveChanged: if (!active) {
+                    var dx = gestures.drag.x, dy = gestures.drag.y
+                    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.2) { if (dx < 0) viewer.next(); else viewer.prev() }
+                    else if (dy > 90 && dy > Math.abs(dx) * 1.2) view.openIndex = -1
+                    gestures.drag = Qt.point(0, 0)
+                }
+            }
         }
 
         // 底部渐变控件条（与外部播放器同一套控件）
@@ -330,6 +361,18 @@ Item {
                         text: Math.floor(video.position / 60) + ":" + ("0" + Math.floor(video.position % 60)).slice(-2) + " / " + Math.floor(video.duration / 60) + ":" + ("0" + Math.floor(video.duration % 60)).slice(-2)
                     }
                     Item { Layout.fillWidth: true }
+                    IconButton {
+                        visible: viewer.isVideo || !!viewer.post?.music
+                        glyph: viewPrefs.muted || viewPrefs.volume === 0 ? "mute" : "volume"
+                        onClicked: viewPrefs.muted = !viewPrefs.muted
+                        ToolTip.text: viewPrefs.muted ? "取消静音（M）" : "静音（M），之后的作品也静音"
+                    }
+                    SeekBar {
+                        visible: viewer.isVideo || !!viewer.post?.music
+                        Layout.preferredWidth: 90
+                        from: 0; to: 100; value: viewPrefs.muted ? 0 : viewPrefs.volume
+                        onMoved: { viewPrefs.volume = value; viewPrefs.muted = value === 0 }
+                    }
                     Label { text: video.error; visible: viewer.isVideo && text.length > 0; color: "#f85149" }
                     IconButton {
                         glyph: view.isLiked(viewer.post) ? "favorite-fill" : "favorite"
