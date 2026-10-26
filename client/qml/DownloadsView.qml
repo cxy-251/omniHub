@@ -28,7 +28,7 @@ Item {
         }
         return null
     }
-    readonly property string stagingLibrary: !libraryField ? "" : libraryField.options.some(function (o) { return o.value === prefs.library }) ? prefs.library : (libraryField.default || "")
+    readonly property string stagingLibrary: !libraryField ? "" : (libraryField.options || []).some(function (o) { return o.value === prefs.library }) ? prefs.library : (libraryField.default || "")
     ApiClient { id: api; onErrorChanged: if (error) view.say(error, true) }
 
     function say(text, isError) { message = text; messageIsError = !!isError }
@@ -82,7 +82,7 @@ Item {
                 visible: !!view.libraryField && !!view.currentKind && !!view.currentKind.scheme
                 implicitHeight: 28; implicitWidth: 130; font.pixelSize: 12
                 textRole: "label"; valueRole: "value"
-                model: view.libraryField ? view.libraryField.options : []
+                model: view.libraryField ? (view.libraryField.options || []) : []
                 currentIndex: Math.max(0, model.findIndex(function (o) { return o.value === view.stagingLibrary }))
                 onActivated: prefs.library = currentValue
                 ToolTip.visible: hovered; ToolTip.text: "下载先放进这个资源库的暂存区；移入时同一块盘上只是改名"

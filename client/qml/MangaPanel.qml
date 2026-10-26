@@ -33,7 +33,7 @@ ColumnLayout {
     ApiClient { id: api }
 
     readonly property var libraryField: (kind.fields || []).find(function (f) { return f.name === "library" }) || null
-    readonly property string library: !libraryField ? "" : libraryField.options.some(function (o) { return o.value === store.library }) ? store.library : (libraryField.default || "")
+    readonly property string library: !libraryField ? "" : (libraryField.options || []).some(function (o) { return o.value === store.library }) ? store.library : (libraryField.default || "")
 
     // 以前的任务没下完（被停止、失败或服务端重启打断）的本子：提示一键加回下载列表
     property var unfinished: []
@@ -229,7 +229,7 @@ ColumnLayout {
                     ComboBox {
                         Layout.fillWidth: true; implicitHeight: 28; font.pixelSize: 12
                         textRole: "label"; valueRole: "value"
-                        model: panel.libraryField ? panel.libraryField.options : []
+                        model: panel.libraryField ? (panel.libraryField.options || []) : []
                         currentIndex: Math.max(0, model.findIndex(function (o) { return o.value === panel.library }))
                         onActivated: store.library = currentValue
                     }
