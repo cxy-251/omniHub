@@ -8,31 +8,36 @@ import (
 	"sync"
 )
 
-var thermalZones = sync.OnceValue(func() []string {
-	var out []string
+// 温度传感器：优先用电池温度（手摸到的冷热、对电池寿命要紧的都是它）；没有电池传感器时用机身的 quiet_therm。
+// quiet_therm 在主板上，持续工作时比电池高 2°C 左右（2026-10-26 手机实测 32.5 / 30.4°C），
+// 以前两者取高，机身 40°C 就暂停，电池其实才 38°C 左右，手机摸着并不热。Deck 上没有这两个传感器。
+var thermalZone = sync.OnceValue(func() string {
+	found := map[string]string{}
 	dirs, _ := filepath.Glob("/sys/class/thermal/thermal_zone*")
 	for _, d := range dirs {
-		t, err := os.ReadFile(filepath.Join(d, "type"))
-		// 机身与电池温度：安卓手机上普通应用（Termux）也能读；Deck 上没有这两个传感器
-		if err == nil && (strings.TrimSpace(string(t)) == "quiet_therm" || strings.TrimSpace(string(t)) == "battery") {
-			out = append(out, filepath.Join(d, "temp"))
+		if t, err := os.ReadFile(filepath.Join(d, "type")); err == nil {
+			found[strings.TrimSpace(string(t))] = filepath.Join(d, "temp")
 		}
 	}
-	return out
+	if z := found["battery"]; z != "" {
+		return z
+	}
+	return found["quiet_therm"]
 })
 
-// DeviceTemp 返回机身温度（°C，机身与电池传感器取较高者）；读不到时 ok 为 false。
+// DeviceTemp 返回机身温度（°C，见 thermalZone）；读不到时 ok 为 false。
 func DeviceTemp() (temp float64, ok bool) {
-	for _, z := range thermalZones() {
-		data, err := os.ReadFile(z)
-		if err != nil {
-			continue
-		}
-		if v, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
-			if t := float64(v) / 1000; !ok || t > temp {
-				temp, ok = t, true
-			}
-		}
+	z := thermalZone()
+	if z == "" {
+		return 0, false
 	}
-	return temp, ok
+	data, err := os.ReadFile(z)
+	if err != nil {
+		return 0, false
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, false
+	}
+	return float64(v) / 1000, true
 }

@@ -82,7 +82,7 @@ export default function ShortVideoAdmin() {
     <div className="space-y-3 rounded-lg border border-line bg-panel p-4">
       <label className="flex items-center gap-3"><input type="checkbox" checked={!!w?.thumbnails_enabled} disabled={!w} onChange={e => void act('thumbnails', { enabled: e.target.checked })} />
         <span>生成缩略图</span></label>
-      <p className="text-sm text-muted">开启后在后台逐个生成（低优先级，480px 宽），存入各库的 shortvideo/thumbnails.db；作品旁边有 z6x hub 以前生成的封面（.thumbs/）时直接转存，不再跑 ffmpeg。手机机身温度到 40°C 暂停，降到 37°C 以下继续。关闭后立即停止，只显示已有缩略图。</p>
+      <p className="text-sm text-muted">开启后在后台逐个生成（低优先级，480px 宽），存入各库的 shortvideo/thumbnails.db；作品旁边有 z6x hub 以前生成的封面（.thumbs/）时直接转存，不再跑 ffmpeg。手机电池温度到 40°C 暂停，降到 37°C 以下继续。关闭后立即停止，只显示已有缩略图。</p>
       <div className="flex flex-wrap gap-2">
         <button className={button} disabled={busy} onClick={() => void act('scan')}>重新扫描</button>
         <button className={button} disabled={busy || importable <= 0} onClick={() => void act('import')}>图集入库（{importable}）</button>

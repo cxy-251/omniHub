@@ -25,8 +25,8 @@ function chapterName(c: Chapter, i: number) {
 
 // ---------- 打开与停靠 ----------
 // 阅读器不属于某个标签页：书架里点开一本书后，它挂在页面最外层。
-//   宽屏（电脑、Deck，至少 720 像素）：默认停靠在右侧，竖屏小窗、宽度可拖动，左边照常浏览 omniHub 的其他页面；也可以铺满整个页面。
-//   窄屏（手机）：全屏沉浸阅读。
+//   窗口放得下小窗（至少 320 像素）就能停靠在右侧，竖屏小窗、宽度可拖动，左边照常浏览 omniHub 的其他页面；也可以铺满整个页面。
+//   窗口比 720 窄（手机竖屏）时默认全屏沉浸阅读，也能手动切成小窗。
 // 当前打开的书存在浏览器里，刷新后还在。
 const openKey = 'omnihub.manga.open';
 export function openManga(book: Book) {
@@ -34,29 +34,32 @@ export function openManga(book: Book) {
   globalThis.dispatchEvent(new CustomEvent('omnihub-manga-open', { detail: book }));
 }
 
-function useWide() {
-  // 窗口至少 720 像素宽才停靠（Deck 1280 宽，浏览器缩放到 150% 也有 853）；更窄的当手机，全屏阅读
-  const query = '(min-width: 720px)';
-  const [wide, setWide] = useState(() => globalThis.matchMedia(query).matches);
+// 小窗最窄 320 像素（拖动宽度的下限）。窗口能放下它就可以切成小窗，不看是什么设备；
+// 窗口比 720 窄时默认全屏（手机竖屏），更宽默认小窗。手动切过的按窄窗、宽窗分别记住。
+const minDock = 320;
+function useWindowWidth() {
+  const [width, setWidth] = useState(() => globalThis.innerWidth);
   useEffect(() => {
-    const list = globalThis.matchMedia(query);
-    const change = () => setWide(list.matches);
-    list.addEventListener('change', change);
-    return () => list.removeEventListener('change', change);
+    const resize = () => setWidth(globalThis.innerWidth);
+    globalThis.addEventListener('resize', resize);
+    return () => globalThis.removeEventListener('resize', resize);
   }, []);
-  return wide;
+  return width;
 }
 
 export function MangaDock() {
   const [book, setBook] = useState<Book | undefined>(() => stored<Book | undefined>(openKey, undefined));
-  const wide = useWide();
-  const [full, setFull] = useState(() => stored('omnihub.manga.full', false));
-  useEffect(() => store('omnihub.manga.full', full), [full]);
+  const windowWidth = useWindowWidth();
+  const canDock = windowWidth >= minDock;
+  const fullKey = windowWidth < 720 ? 'omnihub.manga.full.narrow' : 'omnihub.manga.full.wide';
+  const [fullPrefs, setFullPrefs] = useState<Record<string, boolean>>(() => ({}));
+  const full = fullPrefs[fullKey] ?? stored(fullKey, windowWidth < 720);
+  const toggleFull = () => { store(fullKey, !full); setFullPrefs(p => ({ ...p, [fullKey]: !full })); };
   const [width, setWidth] = useState(() => stored('omnihub.manga.dockWidth', 480));
   // 窗口变窄时小窗最多占 80%，左边至少留一些给其他页面
-  const dockWidth = Math.round(Math.max(320, Math.min(width, globalThis.innerWidth * 0.8)));
+  const dockWidth = Math.round(Math.max(minDock, Math.min(width, windowWidth * 0.8)));
   useEffect(() => store('omnihub.manga.dockWidth', width), [width]);
-  const docked = !!book && wide && !full;
+  const docked = !!book && canDock && !full;
   useEffect(() => {
     const open = (event: Event) => setBook((event as CustomEvent<Book>).detail);
     globalThis.addEventListener('omnihub-manga-open', open);
@@ -76,18 +79,18 @@ export function MangaDock() {
   };
   function resize(event: ReactMouseEvent<HTMLDivElement>) {
     event.preventDefault();
-    const move = (e: MouseEvent) => setWidth(Math.round(Math.max(320, Math.min(globalThis.innerWidth * 0.8, globalThis.innerWidth - e.clientX))));
+    const move = (e: MouseEvent) => setWidth(Math.round(Math.max(minDock, Math.min(globalThis.innerWidth * 0.8, globalThis.innerWidth - e.clientX))));
     const up = () => { globalThis.removeEventListener('mousemove', move); globalThis.removeEventListener('mouseup', up); document.body.style.userSelect = ''; };
     document.body.style.userSelect = 'none';
     globalThis.addEventListener('mousemove', move); globalThis.addEventListener('mouseup', up);
   }
   return <div className={docked ? 'fixed bottom-0 right-0 top-0 z-40 border-l border-line' : 'fixed inset-0 z-50'} style={docked ? { width: dockWidth } : undefined}>
     {docked ? <div className="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize hover:bg-[#58a6ff]/40" title="拖动调整宽度" onMouseDown={resize} /> : null}
-    <BookReader key={book.logical_path} book={book} docked={docked} wide={wide} onClose={close} onToggleDock={() => setFull(f => !f)} />
+    <BookReader key={book.logical_path} book={book} docked={docked} canDock={canDock} onClose={close} onToggleDock={toggleFull} />
   </div>;
 }
 
-function BookReader({ book, docked, wide, onClose, onToggleDock }: { book: Book; docked: boolean; wide: boolean; onClose(): void; onToggleDock(): void }) {
+function BookReader({ book, docked, canDock, onClose, onToggleDock }: { book: Book; docked: boolean; canDock: boolean; onClose(): void; onToggleDock(): void }) {
   // 阅读器挂在全局的停靠层里（见 MangaDock），一直处于显示状态。
   const active = true;
   const prefsKey = `omnihub.manga.book.${book.logical_path}`;
@@ -401,7 +404,7 @@ function BookReader({ book, docked, wide, onClose, onToggleDock }: { book: Book;
       <div className={`${bar} flex items-center gap-1 border-b border-white/10 px-1 py-1`}>
         <button className={iconButton} onClick={onClose} title="返回书架（Esc）">←</button>
         <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold" title={book.title}>{book.title}</p>{chapterLabel ? <p className="truncate text-xs text-[#8b949e]">{chapterLabel}</p> : null}</div>
-        {wide ? <button className={iconButton} onClick={onToggleDock} title={docked ? '铺满整个页面阅读' : '缩成右侧小窗，左边照常浏览'}>{docked ? '⤢' : '⤡'}</button> : null}
+        {canDock ? <button className={iconButton} onClick={onToggleDock} title={docked ? '铺满整个页面阅读' : '缩成右侧小窗，左边照常浏览'}>{docked ? '⤢' : '⤡'}</button> : null}
         <button className={iconButton} onClick={() => setSheet(sheet === 'more' ? '' : 'more')} title="更多工具">⋯</button>
       </div>
       <div className={`${bar} space-y-1 border-t border-white/10 px-2 pb-2 pt-1`}>

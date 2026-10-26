@@ -115,6 +115,8 @@ function Screen({ domain, slot, index, focused, playing, audible, slideSeconds, 
 
 export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): void }) {
   const isVideo = domain === 'shortvideo';
+  // 多联放映盖住整个窗口，底下的页面不跟着滚
+  useEffect(() => { document.body.style.overflow = 'hidden'; return () => { document.body.style.overflow = ''; }; }, []);
   const storeKey = isVideo ? 'omnihub.matrix' : 'omnihub.matrix.gallery';
   const [prefs, setPrefs] = useState<Prefs>(() => {
     const saved = stored<Prefs | null>(storeKey, null);
@@ -193,7 +195,8 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  return <div ref={container} className="relative flex h-[calc(100vh-6rem)] flex-col bg-black">
+  // 铺满整个窗口（omniHub 顶栏也盖住），不随页面滚动；工具条藏在顶边。漫画阅读器停靠在右侧时让出它的宽度。
+  return <div ref={container} className="fixed inset-y-0 left-0 z-30 flex flex-col bg-black" style={{ right: 'var(--manga-dock, 0px)' }}>
     <div className="absolute inset-x-0 top-0 z-10 h-3" onMouseEnter={() => revealBar()} onClick={() => revealBar()} />
     <div className={`absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-1.5 bg-panel/95 px-2 py-1 ${pinned || barShown ? '' : 'hidden'}`}
       onMouseEnter={() => { setBarShown(true); window.clearTimeout(hideTimer.current); }} onMouseLeave={() => revealBar()}>
