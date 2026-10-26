@@ -48,6 +48,7 @@ type Router struct {
 	gameRuns       *games.Manager
 	gameTools      games.Tools
 	sc2            sc2State
+	jm             jmState
 	stateDir       string
 	cacheDir       string // 可重新生成的数据（SC2 助手与虚拟环境、只读库的游戏日志），不放进主库的全局状态目录
 	webGames       *webGameGrants
@@ -374,6 +375,7 @@ func (r *Router) registerRoutes() {
 	// MEGA 客户端接口 (第 10.2 节)
 	r.mux.HandleFunc("/api/mega/", r.handleMega)
 	r.mux.HandleFunc("/api/downloads/", r.handleDownloads)
+	r.mux.HandleFunc("/api/downloads/manga/", r.handleJM)
 	r.mux.HandleFunc("/api/feed/", r.handleFeed)
 
 	// Legacy primary-only paths cannot safely host game scripts in the UI origin.

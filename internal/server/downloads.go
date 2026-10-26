@@ -181,7 +181,7 @@ func (r *Router) downloadKinds() []*dlKind {
 	mangaLibs, mangaDef := r.writableLibraryChoice("media_library/manga")
 	kinds := append(r.schemeKinds(), []*dlKind{
 		{
-			ID: "manga", Title: "漫画", Description: "按本子网址或 ID 整本下载，封成 CBZ 放进漫画库；已有的会自动检查更新。",
+			ID: "manga", Title: "18comic 漫画", Description: "18comic（禁漫）的本子：搜索、加进下载列表，整本下载后封成 CBZ 放进漫画库的 nsfw/；已下载的自动跳过，线上有新章节时整本更新。",
 			needs: []string{"uv"},
 			Fields: []dlField{
 				{Name: "ids", Label: "本子", Type: "lines", Required: true, Placeholder: "粘贴本子网址或 ID，一行一个", Help: "例如 https://18comic.vip/album/123456 或 123456"},
@@ -196,13 +196,15 @@ func (r *Router) downloadKinds() []*dlKind {
 				if err != nil {
 					return dlPlan{}, err
 				}
+				// 18comic 的本子都是 NSFW，直接放进 manga/nsfw/（漫画按子目录分级，见 manga_layout.go）
 				root := filepath.Join(lib.RootPath, "media_library", "manga")
-				if err := os.MkdirAll(root, 0o755); err != nil {
+				dest := filepath.Join(root, "nsfw")
+				if err := os.MkdirAll(dest, 0o755); err != nil {
 					return dlPlan{}, err
 				}
 				args := append([]string{"scripts/manga.py"}, ids...)
-				args = append(args, "--dest", root, "--work", filepath.Join(root, ".omnihub-download"))
-				return dlPlan{title: fmt.Sprintf("漫画 · %d 本", len(ids)), args: args, resource: root, lib: lib,
+				args = append(args, "--dest", dest, "--work", filepath.Join(root, ".omnihub-download"))
+				return dlPlan{title: fmt.Sprintf("18comic 漫画 · %d 本", len(ids)), args: args, resource: root, lib: lib,
 					after: func(ctx context.Context) error {
 						_, err := scanner.ScanMangaContext(ctx, root, root)
 						return err

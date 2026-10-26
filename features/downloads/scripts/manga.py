@@ -200,7 +200,117 @@ def parse_ids(specs):
     return out
 
 
+# ---------- 联网查询（服务端按需调用，结果以一行 JSON 输出到 stdout） ----------
+
+def album_brief(aid, info):
+    info = info or {}
+    tags = info.get("tags") or []
+    author = info.get("author") or ""
+    if isinstance(author, list):
+        author = ", ".join(author)
+    return {"id": str(aid), "title": str(info.get("name") or info.get("title") or f"JM{aid}"),
+            "author": str(author), "tags": [str(t) for t in tags][:12]}
+
+
+def page_json(page, number):
+    results = [album_brief(aid, info) for aid, info in page.content]
+    try:
+        page_count = int(page.page_count or 1)
+    except Exception:
+        page_count = 1
+    return {"results": results, "total": int(getattr(page, "total", len(results)) or len(results)),
+            "page": number, "page_count": page_count}
+
+
+def detail_json(client, aid):
+    d = client.get_album_detail(aid)
+    return {"id": str(aid), "title": d.name, "author": ", ".join(d.authors or []),
+            "tags": list(d.tags or []), "description": d.description or "",
+            "chapters": [chapter_dirname(p) for p in d]}
+
+
+def cmd_search(client, args):
+    """关键词搜索；只填编号或网址时直接取那本（多个编号逐个取详情）。"""
+    q = args.query.strip()
+    tokens = [t for t in re.split(r"[\s,，;；]+", q) if t]
+    ids = []
+    for t in tokens:
+        m = re.search(r"/(?:album|photo)/(\d+)", t) or re.fullmatch(r"(?:jm)?(\d+)", t, re.I)
+        if m:
+            ids.append(m.group(1))
+    if tokens and len(ids) == len(tokens):
+        results = []
+        for aid in dict.fromkeys(ids):
+            try:
+                d = detail_json(client, aid)
+                results.append({"id": d["id"], "title": d["title"], "author": d["author"], "tags": d["tags"][:12], "chapters": len(d["chapters"])})
+            except Exception as e:
+                results.append({"id": aid, "title": f"JM{aid}", "author": "", "tags": [], "error": str(e)})
+        return {"results": results, "total": len(results), "page": 1, "page_count": 1}
+    page = client.search_site(search_query=q, page=args.page, order_by=args.order or "mv")
+    return page_json(page, args.page)
+
+
+def cmd_ranking(client, args):
+    fn = {"day": client.day_ranking, "month": client.month_ranking}.get(args.type, client.week_ranking)
+    return page_json(fn(page=args.page), args.page)
+
+
+def cmd_covers(client, args):
+    """把还没缓存的封面下载到 --dir/<id>.jpg（4 个一起下；单个失败不影响别的）。"""
+    from concurrent.futures import ThreadPoolExecutor
+    os.makedirs(args.dir, exist_ok=True)
+
+    def one(aid):
+        target = os.path.join(args.dir, f"{aid}.jpg")
+        part = os.path.join(args.dir, f"{aid}.part.jpg")  # 按扩展名决定图片格式，临时文件也要 .jpg 结尾
+        if os.path.exists(target):
+            return True
+        try:
+            client.download_album_cover(aid, part)
+            if os.path.getsize(part) < 500:
+                raise RuntimeError("封面太小")
+            os.replace(part, target)
+            return True
+        except Exception as e:
+            log(f"封面 {aid}：{e}")
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            return False
+
+    with ThreadPoolExecutor(4) as pool:
+        ok = sum(pool.map(one, [i for i in args.ids if i.isdigit()]))
+    return {"ok": ok}
+
+
+def query_main(argv):
+    p = argparse.ArgumentParser(description="JM 联网查询")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("search"); s.add_argument("--query", required=True); s.add_argument("--page", type=int, default=1); s.add_argument("--order", default="mv")
+    r = sub.add_parser("ranking"); r.add_argument("--type", default="week"); r.add_argument("--page", type=int, default=1)
+    d = sub.add_parser("detail"); d.add_argument("id")
+    c = sub.add_parser("covers"); c.add_argument("--dir", required=True); c.add_argument("ids", nargs="+")
+    args = p.parse_args(argv)
+    setup()
+    client = option_for(os.path.join(os.getcwd(), ".jm-query")).new_jm_client()
+    try:
+        client.postman.meta_data["timeout"] = 15
+    except Exception:
+        pass
+    try:
+        out = {"search": cmd_search, "ranking": cmd_ranking, "covers": cmd_covers,
+               "detail": lambda c, a: detail_json(c, a.id)}[args.cmd](client, args)
+    except Exception as e:
+        out = {"error": f"{type(e).__name__}: {e}"}
+    print("OMNIHUB_JSON " + json.dumps(out, ensure_ascii=False), flush=True)
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("search", "ranking", "detail", "covers"):
+        query_main(sys.argv[1:])
+        return
     p = argparse.ArgumentParser(description="JM 漫画下载并封成 CBZ")
     p.add_argument("ids", nargs="+", help="本子 ID 或网址，可用空格、逗号或换行分隔")
     p.add_argument("--dest", required=True, help="漫画分类目录")

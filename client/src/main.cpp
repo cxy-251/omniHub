@@ -187,6 +187,18 @@ int main(int argc, char *argv[])
         startupMark("engine ready, loading QML");
         engine.load(url);
         startupMark("QML loaded");
+        // 开发验证：OMNIHUB_DEV_SHOT=<文件.png>:<毫秒> 过这么久后把主窗口存成图片并退出（配合 QT_QPA_PLATFORM=offscreen 检查界面）。
+        if (const QString shot = qEnvironmentVariable("OMNIHUB_DEV_SHOT"); !shot.isEmpty()) {
+            const qsizetype colon = shot.lastIndexOf(':');
+            const QString file = colon > 0 ? shot.left(colon) : shot;
+            const int delay = colon > 0 ? shot.mid(colon + 1).toInt() : 5000;
+            QTimer::singleShot(delay, &app, [&engine, file] {
+                const auto roots = engine.rootObjects();
+                if (auto *window = roots.isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(roots.first()))
+                    window->grabWindow().save(file);
+                QCoreApplication::exit(0);
+            });
+        }
         // 开发验证：OMNIHUB_DEV_STALLS=<秒> 在这段时间内每 20ms 打一次点，主线程被占住超过 100ms 时打印（界面点不动的时段）。
         if (const int seconds = qEnvironmentVariableIntValue("OMNIHUB_DEV_STALLS"); seconds > 0) {
             auto *tick = new QTimer(&app);

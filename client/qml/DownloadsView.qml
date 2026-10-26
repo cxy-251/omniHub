@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import QtQuick.Dialogs
 import QtCore
 
-// 下载页：MEGA 与各种脚本任务（音乐、YouTube、B 站、漫画……，由服务端声明，表单自动生成）。
+// 下载页：MEGA 与各种脚本任务（音乐、YouTube、B 站、18comic 漫画……，由服务端声明，表单自动生成）。
 // 任务卡片在右侧的悬浮面板里（可收起）：进度、当前步骤、结果，以及「去收听」「打开文件夹」「停止」「日志」。
 Item {
     id: view
@@ -138,8 +138,22 @@ Item {
             sourceComponent: Component { MegaPanel { } }
         }
 
+        // 18comic 漫画：搜索、下载列表，有自己的页面（通用表单是给视频图片下载的）
+        Loader {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            active: prefs.tab === "manga" && !!view.currentKind
+            visible: active
+            sourceComponent: Component {
+                MangaPanel {
+                    kind: view.currentKind
+                    onRun: function (params) { view.run("manga", params) }
+                }
+            }
+        }
+
         RowLayout {
-            visible: prefs.tab !== "mega" && prefs.tab !== "staging" && prefs.tab !== "cookies" && !!view.currentKind
+            visible: prefs.tab !== "mega" && prefs.tab !== "staging" && prefs.tab !== "cookies" && prefs.tab !== "manga" && !!view.currentKind
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 12
