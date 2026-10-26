@@ -12,6 +12,7 @@ const MangaLibrary = lazy(() => import('./MangaLibrary'));
 const GameLibrary = lazy(() => import('./GameLibrary'));
 const ToolsPage = lazy(() => import('./ToolsPage'));
 const AdminCenter = lazy(() => import('./AdminCenter'));
+const MangaDock = lazy(() => import('./MangaReader').then(m => ({ default: m.MangaDock })));
 
 // 导航与桌面端一致；只显示当前账号有权限的分区（服务端 /api/sections 决定）。
 const tabs = [
@@ -82,7 +83,8 @@ function Shell() {
 
   const tabStyle = (selected: boolean) => `shrink-0 rounded-md px-3 py-1 text-sm ${selected ? 'bg-panel text-primary' : 'text-muted hover:bg-panel hover:text-foreground'}`;
   const headerButton = 'rounded-md border border-line px-2.5 py-1 text-sm hover:border-primary';
-  return <div className="min-h-screen bg-background pb-16 text-foreground antialiased">
+  // 漫画阅读器停靠在右侧时（见 MangaReader）按 --manga-dock 让出宽度
+  return <div className="min-h-screen bg-background pb-16 text-foreground antialiased" style={{ paddingRight: 'var(--manga-dock, 0px)' }}>
     <header className="sticky top-0 z-30 border-b border-line bg-background">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1">
         <h1 className="text-lg font-semibold text-primary">omniHub</h1>
@@ -117,6 +119,7 @@ function Shell() {
         {current === 'admin' ? <AdminCenter /> : null}
       </Suspense>
     </main>
+    <Suspense fallback={null}><MangaDock /></Suspense>
     <Toast />
     <AudioBar onOpen={() => choose('audio')} />
   </div>;
