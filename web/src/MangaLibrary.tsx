@@ -341,16 +341,19 @@ export default function MangaLibrary({ active }: { active: boolean }) {
     return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 30);
   }, [all]);
   const needle = query.trim().toLowerCase();
-  const shown = all.filter(b => (filter === '' ? true : filter === '__liked' ? likes.has(b.logical_path) : filter === '__incomplete' ? b.is_complete === false : (b.tags ?? []).includes(filter))
+  const shown = all.filter(b => (filter === '' || filter === '__recent' ? true : filter === '__liked' ? likes.has(b.logical_path) : filter === '__incomplete' ? b.is_complete === false : (b.tags ?? []).includes(filter))
     && (!needle || b.title.toLowerCase().includes(needle) || (b.author ?? '').toLowerCase().includes(needle) || (b.tags ?? []).some(t => t.toLowerCase().includes(needle))));
   if (selected) return <BookReader key={selected.logical_path} book={selected} active={active} onBack={() => { setSelected(undefined); setRevision(value => value + 1); }} />;
   const incomplete = all.filter(b => b.is_complete === false).length;
+  // 分类（一般 / NSFW）与文本页的小说/文档一样放在工具条最前面，用竖线隔开；再点一次已选的分类回到全部。
+  const shownRecent = recent.filter(r => !folder || folderOf(r.logical_path) === folder);
   return <section className="space-y-2">
-    {folders.length > 1 ? <div className="flex flex-wrap items-center gap-1.5">
-      <button className={chip(!folder || !folders.some(([f]) => f === folder))} onClick={() => setFolder('')}>全部分类 {shelf.length}</button>
-      {folders.map(([f, n]) => <button key={f} className={chip(folder === f)} onClick={() => setFolder(f)}>{folderNames[f] ?? f} {n}</button>)}
-    </div> : null}
     <div className="flex flex-wrap items-center gap-1.5">
+      {folders.length > 1 ? <>
+        {folders.map(([f, n]) => <button key={f} className={chip(folder === f)} title={folder === f ? '再点一次显示全部分类' : undefined} onClick={() => setFolder(folder === f ? '' : f)}>{folderNames[f] ?? f} <span className="text-xs">{n}</span></button>)}
+        <span className={divider} />
+      </> : null}
+      {recent.length ? <button className={chip(filter === '__recent')} onClick={() => setFilter('__recent')}>继续阅读 {shownRecent.length}</button> : null}
       <button className={chip(filter === '')} onClick={() => setFilter('')}>全部 {all.length}</button>
       <button className={chip(filter === '__liked')} onClick={() => setFilter('__liked')}>♥ 我的点赞 {likes.size}</button>
       {incomplete ? <button className={chip(filter === '__incomplete')} onClick={() => setFilter('__incomplete')}>连载/未完 {incomplete}</button> : null}
@@ -358,21 +361,21 @@ export default function MangaLibrary({ active }: { active: boolean }) {
       {/* 标签条与上面同一行（窄屏时单独一行） */}
       <div className="order-last min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-0"><div className="flex gap-1.5 overflow-x-auto pb-0.5">
         {tagCounts.map(([t, n]) => <button key={t} className={chip(filter === t)} onClick={() => setFilter(filter === t ? '' : t)}>🏷 {t} <span className="text-xs">{n}</span></button>)}
-        {filter && !['__liked', '__incomplete'].includes(filter) && !tagCounts.some(([t]) => t === filter) ? <button className={chip(true)} onClick={() => setFilter('')}>🏷 {filter} ✕</button> : null}
+        {filter && !['__liked', '__incomplete', '__recent'].includes(filter) && !tagCounts.some(([t]) => t === filter) ? <button className={chip(true)} onClick={() => setFilter('')}>🏷 {filter} ✕</button> : null}
       </div></div>
       <input className={`${select} w-44`} placeholder="搜索书名、作者、标签" value={query} onChange={e => setQuery(e.target.value)} />
       <button className={button} onClick={() => setRevision(value => value + 1)}>刷新</button>
     </div>
     {error ? <p role="alert" className="text-danger">{error}</p> : null}
     {!books && !error ? <p role="status">正在读取书架…</p> : null}
-    {recent.length && !filter && !needle ? <div className="space-y-1"><p className="text-sm text-muted">继续阅读</p>
-      <div className="flex gap-2 overflow-x-auto pb-1">{recent.map(r => <button key={r.logical_path} className="w-24 shrink-0 overflow-hidden rounded-lg border border-line bg-panel text-left hover:border-primary"
+    {filter === '__recent' ? <div className="space-y-1">{!shownRecent.length ? <p className="text-sm text-muted">这个分类里还没有读过的漫画。</p> : null}
+      <div className="flex flex-wrap gap-2">{shownRecent.map(r => <button key={r.logical_path} className="w-32 shrink-0 overflow-hidden rounded-lg border border-line bg-panel text-left hover:border-primary"
         onClick={() => setSelected({ title: r.title, logical_path: r.logical_path, library_name: '', read_only: true, total_pages: 0 })}>
         <img className="aspect-[3/4] w-full object-cover" loading="lazy" decoding="async" src={`/api/media/manga/cover?path=${encodeURIComponent(r.logical_path)}&revision=${revision}`} alt="" />
         <span className="block truncate px-1.5 pt-1 text-xs">{r.title}</span><span className="block px-1.5 pb-1 text-xs text-muted">第 {r.page_index + 1} 页</span>
       </button>)}</div></div> : null}
-    {books && (filter || needle) ? <p className="text-xs text-muted">{shown.length} 本</p> : null}
-    <VirtualGrid total={shown.length} minColumnWidth={150} aspect={3 / 4} extraHeight={64} render={i => {
+    {books && filter !== '__recent' && (filter || needle) ? <p className="text-xs text-muted">{shown.length} 本</p> : null}
+    {filter === '__recent' ? null : <VirtualGrid total={shown.length} minColumnWidth={150} aspect={3 / 4} extraHeight={64} render={i => {
       const book = shown[i];
       const liked = likes.has(book.logical_path);
       return <div className="relative flex h-full flex-col overflow-hidden rounded-lg border border-line bg-panel hover:border-primary">
@@ -387,7 +390,7 @@ export default function MangaLibrary({ active }: { active: boolean }) {
           <div className="flex gap-1 overflow-hidden">{(book.tags ?? []).slice(0, 3).map(t => <button key={t} className="shrink-0 rounded bg-background px-1 text-[11px] text-muted hover:text-primary" onClick={() => setFilter(t)}>{t}</button>)}</div>
         </div>
       </div>;
-    }} />
+    }} />}
     {books && !shown.length ? <p className="text-muted">{filter === '__liked' ? '还没有点赞的漫画。' : '没有匹配的漫画。'}</p> : null}
   </section>;
 }
