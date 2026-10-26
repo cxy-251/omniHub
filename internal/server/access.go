@@ -47,6 +47,14 @@ func (r *Router) protectRoutes(next http.Handler) http.Handler {
 				return
 			}
 		}
+		// 漫画按子目录分级（manga/nsfw 默认仅管理员）：按路径取内容的接口在这里统一检查；POST 的在各自处理函数里查。
+		if strings.HasPrefix(path, "/api/media/manga/") {
+			for _, key := range []string{"path", "manga_id"} {
+				if id := req.URL.Query().Get(key); id != "" && !r.allowPath(w, req, id) {
+					return
+				}
+			}
+		}
 		if (strings.HasPrefix(path, "/api/games/") || strings.HasPrefix(path, "/standalone_games/")) && !r.checkSectionAccess(w, req, "games", auth.TargetAll) {
 			return
 		}

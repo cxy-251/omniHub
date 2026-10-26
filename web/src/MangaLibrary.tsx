@@ -277,6 +277,14 @@ function BookReader({ book, active, onBack }: { book: Book; active: boolean; onB
 type ShelfBook = Book & { author?: string; tags?: string[] | null; is_complete?: boolean };
 let shelfCache: ShelfBook[] | undefined;
 
+// 漫画按子目录分级：manga/standard/（一般）与 manga/nsfw/；旧布局直接放在 manga/ 下的算 NSFW（服务端会自动搬进 nsfw/）。
+// 没有权限的子目录服务端不列出，所以按钮只出现在能看到的分类上。
+const folderOf = (logical: string) => {
+  const rest = logical.slice(logical.indexOf('media_library/manga/') + 'media_library/manga/'.length);
+  return rest.includes('/') ? rest.slice(0, rest.indexOf('/')) : 'nsfw';
+};
+const folderNames: Record<string, string> = { standard: '一般', nsfw: 'NSFW' };
+
 async function loadShelf(signal: AbortSignal) {
   const all: ShelfBook[] = [];
   for (let offset = 0; ; offset += 100) {
@@ -297,6 +305,8 @@ export default function MangaLibrary({ active }: { active: boolean }) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState(() => stored('omnihub.manga.filter', ''));   // '' 全部 | '__liked' | '__incomplete' | 标签
   useEffect(() => store('omnihub.manga.filter', filter), [filter]);
+  const [folder, setFolder] = useState(() => stored('omnihub.manga.folder', ''));   // '' 全部 | standard | nsfw | 其他子目录
+  useEffect(() => store('omnihub.manga.folder', folder), [folder]);
   useEffect(() => {
     if (!active || selected) return;
     const controller = new AbortController();
@@ -317,7 +327,14 @@ export default function MangaLibrary({ active }: { active: boolean }) {
       .then(() => setLikes(old => { const s = new Set(old); if (next) s.add(book.logical_path); else s.delete(book.logical_path); return s; }))
       .catch((e: Error) => notify(explain(e, '点赞')));
   };
-  const all = books ?? [];
+  const shelf = books ?? [];
+  const folders = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const b of shelf) counts.set(folderOf(b.logical_path), (counts.get(folderOf(b.logical_path)) ?? 0) + 1);
+    return [...counts].sort((a, b) => (a[0] === 'standard' ? -1 : b[0] === 'standard' ? 1 : a[0].localeCompare(b[0])));
+  }, [shelf]);
+  // 所选分类没有了（权限变了、库拔了）就回到全部
+  const all = folder && folders.some(([f]) => f === folder) ? shelf.filter(b => folderOf(b.logical_path) === folder) : shelf;
   const tagCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const b of all) for (const t of b.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
@@ -329,6 +346,10 @@ export default function MangaLibrary({ active }: { active: boolean }) {
   if (selected) return <BookReader key={selected.logical_path} book={selected} active={active} onBack={() => { setSelected(undefined); setRevision(value => value + 1); }} />;
   const incomplete = all.filter(b => b.is_complete === false).length;
   return <section className="space-y-2">
+    {folders.length > 1 ? <div className="flex flex-wrap items-center gap-1.5">
+      <button className={chip(!folder || !folders.some(([f]) => f === folder))} onClick={() => setFolder('')}>全部分类 {shelf.length}</button>
+      {folders.map(([f, n]) => <button key={f} className={chip(folder === f)} onClick={() => setFolder(f)}>{folderNames[f] ?? f} {n}</button>)}
+    </div> : null}
     <div className="flex flex-wrap items-center gap-1.5">
       <button className={chip(filter === '')} onClick={() => setFilter('')}>全部 {all.length}</button>
       <button className={chip(filter === '__liked')} onClick={() => setFilter('__liked')}>♥ 我的点赞 {likes.size}</button>

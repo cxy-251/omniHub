@@ -8,7 +8,7 @@ import (
 
 // 子分类分级：nsfw 默认仅管理员，单独设置优先，其余沿用大分类等级。
 func TestSubsectionAccess(t *testing.T) {
-	c := &accessChecker{level: 0, stored: map[string]int{"text": 0, "audio": 2}, memo: map[string]bool{}}
+	c := &accessChecker{level: 0, stored: map[string]int{"text": 0, "audio": 2, "manga": 0}, memo: map[string]bool{}}
 	cases := []struct {
 		path string
 		want bool
@@ -19,6 +19,9 @@ func TestSubsectionAccess(t *testing.T) {
 		{"lib:media_library/audio/standard/x/1.mp3", false}, // 音频大分类要求等级 2
 		{"lib:media_library/docs/readme.md", true},
 		{"media_library/novels/nsfw/a.epub", false}, // 不带库前缀的路径
+		{"lib:media_library/manga/nsfw/a.cbz", false},
+		{"lib:media_library/manga/a.cbz", false}, // 旧布局平铺的漫画按 NSFW
+		{"lib:media_library/manga/standard/a.cbz", true},
 	}
 	for _, tc := range cases {
 		if got := c.allows(tc.path); got != tc.want {

@@ -117,6 +117,17 @@ func (c *Catalog) Page(ctx context.Context, root string, limit, offset int) ([]s
 	return append([]string{}, snapshot.files[offset:end]...), total, nil
 }
 
+// Files 返回全部文件的相对路径副本（稳定排序）；用于需要先按路径筛选再分页的列表。
+func (c *Catalog) Files(ctx context.Context, root string) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	snapshot, err := c.snapshotLocked(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	return append([]string{}, snapshot.files...), nil
+}
+
 // DirectoryPage 分页返回含匹配文件的目录，用于嵌套音频专辑等视图。
 func (c *Catalog) DirectoryPage(ctx context.Context, root string, limit, offset int) ([]Directory, int, error) {
 	if limit < 1 || limit > 200 || offset < 0 {

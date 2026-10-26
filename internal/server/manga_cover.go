@@ -65,6 +65,9 @@ func (r *Router) handleMangaCustomCover(w http.ResponseWriter, req *http.Request
 	}
 	payload.Entry = entry
 	logical, lib, err := r.mangaIdentity(payload.Path)
+	if err == nil && !r.allowPath(w, req, logical) {
+		return
+	}
 	if err != nil {
 		http.Error(w, "book unavailable", 404)
 		return

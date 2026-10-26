@@ -238,6 +238,15 @@ func (d *DB) ListMangasPage(limit, offset int) ([]*Manga, error) {
 	return d.listMangas(limit, offset)
 }
 
+// ListAllMangas 返回索引里的全部漫画（书名排序）。
+func (d *DB) ListAllMangas() ([]*Manga, error) { return d.listMangas(0, 0) }
+
+// RenamePath 把索引里一本书的相对路径换成新路径（文件在库里搬了位置时用；ID、自定义封面不变）。
+func (d *DB) RenamePath(ctx context.Context, from, to string) error {
+	_, err := d.db.ExecContext(ctx, "UPDATE mangas SET rel_path=? WHERE rel_path=?", to, from)
+	return err
+}
+
 func (d *DB) listMangas(limit, offset int) ([]*Manga, error) {
 	query := `
 		SELECT id, title, author, description, tags_json, chapter_count,

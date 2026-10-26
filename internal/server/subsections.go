@@ -19,15 +19,18 @@ import (
 // 没有单独设置的子分类沿用大分类的等级；名为 nsfw 的目录、说明文件（collection.json）标了 NSFW 的目录默认仅管理员可见。
 // 文档的一级目录是主题（C++、Graphic…）而不是分级，所以只有 nsfw 目录单独分级，其余跟随「文本」。
 // 短视频的一级目录是平台（shortvideo/X）；相册的子分类是各图库（gallery/<图库>，根目录的相册跟随「相册」），不按路径，见 nsfwMarks。
+// rootFiles 不为空时，直接放在分类根目录下的文件算作这个子分类：漫画以前平铺在 manga/ 下、全是 NSFW，
+// 现在分成 manga/nsfw/ 与 manga/standard/；可写库会自动搬家（见 migrateMangaLayout），只读库或没搬动的仍按 NSFW 对待。
 var subsectionRoots = []struct {
 	category, section, prefix string
 	nsfwOnly                  bool
+	rootFiles                 string
 }{
-	{"media_library/novels", "text", "text/novels", false},
-	{"media_library/docs", "text", "text/docs", true},
-	{"media_library/audio", "audio", "audio", false},
-	{"media_library/manga", "manga", "manga", false},
-	{shortVideoCategory, "shortvideo", "shortvideo", false},
+	{"media_library/novels", "text", "text/novels", false, ""},
+	{"media_library/docs", "text", "text/docs", true, ""},
+	{"media_library/audio", "audio", "audio", false, ""},
+	{"media_library/manga", "manga", "manga", false, "nsfw"},
+	{shortVideoCategory, "shortvideo", "shortvideo", false, ""},
 }
 
 // nsfwMarks 缓存标了 NSFW 的子分类（短视频平台目录、相册图库），30 秒内不重复读说明文件（缩略图请求很密）。
@@ -76,7 +79,10 @@ func subsectionOf(logical string) (section, sub string) {
 	for _, root := range subsectionRoots {
 		if rest, ok := strings.CutPrefix(rel, root.category+"/"); ok {
 			// 一级目录本身（如以目录为单位的音频专辑 audio/nsfw）同样属于该子分类。
-			dir, _, _ := strings.Cut(rest, "/")
+			dir, _, nested := strings.Cut(rest, "/")
+			if !nested && root.rootFiles != "" {
+				dir = root.rootFiles
+			}
 			if root.nsfwOnly && dir != "nsfw" {
 				return root.section, ""
 			}

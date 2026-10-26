@@ -2,9 +2,12 @@ package server
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -70,98 +73,112 @@ func (r *Router) queryLibraries(w http.ResponseWriter, req *http.Request) ([]*li
 	return selected, true
 }
 
+// listMangaLibraries 合并列出各库的漫画。以磁盘上的 CBZ 为准（索引 manga.db 是手动更新的，可能缺新放进来的书），
+// 索引里有的书用索引的书名、作者等，没有的打开文件读（只读当前这一页的）。按子目录分级：
+// 没有权限的子目录（如 manga/nsfw）整个不列出。可写库在这里顺便把旧的平铺目录搬成 nsfw/ 子目录。
 func (r *Router) listMangaLibraries(w http.ResponseWriter, req *http.Request) {
 	limit, offset, err := pageBounds(req)
 	if err != nil {
 		http.Error(w, "invalid page bounds", 400)
 		return
 	}
-	items := make([]mangaItem, 0, limit+1)
 	libraries, ok := r.queryLibraries(w, req)
 	if !ok {
 		return
 	}
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", 503)
+		return
+	}
+	type entry struct {
+		lib      *library.Library
+		relative string
+		book     *manga.Manga // 索引里没有时为 nil
+	}
+	var entries []entry
 	for _, lib := range libraries {
 		dir, err := r.moduleDirectory(lib.RootPath, "media_library/manga", "manga.db")
 		if err != nil {
 			http.Error(w, "manga storage boundary invalid", 503)
 			return
 		}
-		if _, err := os.Stat(filepath.Join(dir, "manga.db")); errors.Is(err, os.ErrNotExist) {
-			if _, err = os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-				continue
-			} else if err != nil {
-				http.Error(w, "manga directory unavailable", 503)
-				return
-			}
-			paths, total, err := r.mangaCatalog.Page(req.Context(), dir, limit+1-len(items), offset)
-			if err != nil {
-				http.Error(w, "manga catalog unavailable or exceeds capacity", 503)
-				return
-			}
-			if offset >= total {
-				offset -= total
-				continue
-			}
-			offset = 0
-			select {
-			case r.mediaReads <- struct{}{}:
-			case <-req.Context().Done():
-				return
-			}
-			rows, readErr := r.discoverMangaPage(req, lib, paths)
-			<-r.mediaReads
-			if readErr != nil {
-				http.Error(w, "manga metadata unavailable: "+readErr.Error(), 503)
-				return
-			}
-			items = append(items, rows...)
-			if len(items) > limit {
-				break
-			}
+		if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {
-			http.Error(w, "manga index unavailable", 503)
+			http.Error(w, "manga directory unavailable", 503)
 			return
 		}
-		db, err := r.getMangaDB(lib.RootPath)
+		if !lib.ReadOnly {
+			if err := r.migrateMangaLayout(req.Context(), lib, dir); err != nil {
+				log.Printf("manga layout %s: %v", lib.Name, err)
+			}
+		}
+		files, err := r.mangaCatalog.Files(req.Context(), dir)
 		if err != nil {
-			http.Error(w, "manga index unavailable", 503)
+			http.Error(w, "manga catalog unavailable or exceeds capacity", 503)
 			return
 		}
-		if offset > 0 {
-			count, err := db.CountMangas()
+		indexed := map[string]*manga.Manga{}
+		if _, err := os.Stat(filepath.Join(dir, "manga.db")); err == nil {
+			db, err := r.getMangaDB(lib.RootPath)
 			if err != nil {
-				http.Error(w, "manga count unavailable", 503)
+				http.Error(w, "manga index unavailable", 503)
 				return
 			}
-			if offset >= count {
-				offset -= count
+			books, err := db.ListAllMangas()
+			if err != nil {
+				http.Error(w, "manga query failed", 503)
+				return
+			}
+			for _, book := range books {
+				indexed[filepath.ToSlash(book.RelPath)] = book
+			}
+		}
+		start := len(entries)
+		for _, relative := range files {
+			if !filepath.IsLocal(filepath.FromSlash(relative)) || strings.ContainsAny(relative, "\\\x00:") {
 				continue
 			}
+			if !access.allows(lib.ID + ":media_library/manga/" + relative) {
+				continue
+			}
+			entries = append(entries, entry{lib: lib, relative: relative, book: indexed[relative]})
 		}
-		rows, err := db.ListMangasPage(limit+1-len(items), offset)
-		if err != nil {
-			http.Error(w, "manga query failed", 503)
+		title := func(e entry) string {
+			if e.book != nil {
+				return e.book.Title
+			}
+			return strings.TrimSuffix(path.Base(e.relative), path.Ext(e.relative))
+		}
+		part := entries[start:]
+		sort.SliceStable(part, func(i, j int) bool { return title(part[i]) < title(part[j]) })
+	}
+	if offset > len(entries) {
+		offset = len(entries)
+	}
+	page := entries[offset:min(len(entries), offset+limit)]
+	items := make([]mangaItem, 0, len(page))
+	for _, e := range page {
+		logical := e.lib.ID + ":media_library/manga/" + e.relative
+		if e.book != nil {
+			items = append(items, mangaItem{Manga: e.book, LibraryID: e.lib.ID, LibraryName: e.lib.Name, LogicalPath: logical, ReadOnly: e.lib.ReadOnly})
+			continue
+		}
+		select {
+		case r.mediaReads <- struct{}{}:
+		case <-req.Context().Done():
 			return
 		}
-		offset = 0
-		for _, book := range rows {
-			if !filepath.IsLocal(filepath.FromSlash(book.RelPath)) || strings.ContainsAny(book.RelPath, "\\\x00:") {
-				http.Error(w, "invalid manga index path", 503)
-				return
-			}
-			items = append(items, mangaItem{Manga: book, LibraryID: lib.ID, LibraryName: lib.Name, LogicalPath: lib.ID + ":media_library/manga/" + filepath.ToSlash(book.RelPath), ReadOnly: lib.ReadOnly})
+		rows, readErr := r.discoverMangaPage(req, e.lib, []string{e.relative})
+		<-r.mediaReads
+		if readErr != nil {
+			http.Error(w, "manga metadata unavailable: "+readErr.Error(), 503)
+			return
 		}
-		if len(items) > limit {
-			break
-		}
+		items = append(items, rows...)
 	}
-	more := len(items) > limit
-	if more {
-		items = items[:limit]
-	}
-	w.Header().Set("X-Has-More", strconv.FormatBool(more))
+	w.Header().Set("X-Has-More", strconv.FormatBool(offset+limit < len(entries)))
 	writeJSON(w, http.StatusOK, items)
 }
 

@@ -72,6 +72,9 @@ func (r *Router) handleMangaProgress(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "book unavailable", 404)
 		return
 	}
+	if !r.allowPath(w, req, canonical) {
+		return
+	}
 	user := auth.UserFromContext(req.Context())
 	if user.ID <= 0 {
 		if req.Method == http.MethodGet {
