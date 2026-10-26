@@ -36,24 +36,36 @@ type TunnelStatus struct {
 // 打开时启动并在退出后 3～30 秒退避重启；关闭或服务退出时结束进程。
 type Tunnel struct {
 	binary, config string
+	configured     string // 配置里指定的 cloudflared 路径（可为空）
 	mu             sync.Mutex
 	cancel         context.CancelFunc
 	done           chan struct{}
 	status         TunnelStatus
 }
 
-// NewTunnel 记下 cloudflared 程序与配置文件位置；binary 为空表示没找到。
-func NewTunnel(binary, config string) *Tunnel {
-	t := &Tunnel{binary: binary, config: config}
-	t.status.Binary, t.status.Config = binary, config
+// NewTunnel 记下 cloudflared 程序（configured 为配置里指定的路径，可为空，见 FindCloudflared）与配置文件位置。
+func NewTunnel(configured, config string) *Tunnel {
+	t := &Tunnel{configured: configured, config: config}
+	t.status.Config = config
+	t.findLocked()
 	t.status.Domain, t.status.Service = ingress(config)
 	return t
+}
+
+// findLocked 在还没找到 cloudflared 时再找一次：服务运行中才装上的（如 Termux 里 pkg install cloudflared）
+// 不用重启就能认出来。调用时持有 t.mu（构造时除外）。
+func (t *Tunnel) findLocked() {
+	if t.binary == "" {
+		t.binary = FindCloudflared(t.configured)
+		t.status.Binary = t.binary
+	}
 }
 
 // Status 返回当前状态的副本。
 func (t *Tunnel) Status() TunnelStatus {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.findLocked()
 	s := t.status
 	s.Domain, s.Service = ingress(t.config) // 用户可能刚改过配置文件
 	return s
@@ -78,6 +90,7 @@ func (t *Tunnel) SetEnabled(enabled bool) {
 	if t.cancel != nil {
 		return
 	}
+	t.findLocked()
 	if t.binary == "" {
 		t.status.Error = "没有找到 cloudflared（放在 ~/Applications/cloudflared/cloudflared）"
 		return

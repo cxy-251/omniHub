@@ -36,7 +36,8 @@ func (t *Tunnel) SetDomain(ctx context.Context, host string) (string, error) {
 	if !ValidHostname(host) {
 		return "", errors.New("域名格式不对，例如 phone.example.com")
 	}
-	if t.binary == "" {
+	bin := t.Status().Binary
+	if bin == "" {
 		return "", errors.New("没有找到 cloudflared")
 	}
 	data, err := os.ReadFile(t.config)
@@ -61,7 +62,7 @@ func (t *Tunnel) SetDomain(ctx context.Context, host string) (string, error) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, t.binary, "--config", t.config, "tunnel", "route", "dns", tunnel, host).CombinedOutput()
+	out, err := exec.CommandContext(cctx, bin, "--config", t.config, "tunnel", "route", "dns", tunnel, host).CombinedOutput()
 	msg := strings.TrimSpace(string(out))
 	if err != nil {
 		return msg, fmt.Errorf("在 Cloudflare 上设置域名失败（配置没改）：%v %s", err, msg)

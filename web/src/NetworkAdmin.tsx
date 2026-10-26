@@ -44,6 +44,8 @@ function LanSection() {
   </section>;
 }
 
+const tunnelRole = <p className="text-sm text-muted">外网访问靠 cloudflared：它在被访问的设备上运行，主动连到 Cloudflare 并保持连接；外网的人打开域名时，Cloudflare 把请求顺着这条连接转给这台设备的 omniHub。所以只有要被外网访问的设备需要它，用浏览器访问的一方什么都不用装。</p>;
+
 // WanSection：广域网经 cloudflared 命名隧道从外网访问。域名可以改：服务端改隧道配置里的 hostname，
 // 在 Cloudflare 上把域名指向隧道，再经域名读回运行标识，确认指向的是这台设备。
 function WanSection() {
@@ -70,24 +72,31 @@ function WanSection() {
     finally { setChecking(false); }
   }
   if (!wan) return <section className="rounded-lg border border-line bg-panel p-4"><h2 className="text-lg">广域网</h2>{error ? <p role="alert" className="text-danger">{error}</p> : <p className="text-muted">正在读取…</p>}</section>;
-  const state = !wan.binary ? '这台设备上没有 cloudflared，不能从外网访问。'
-    : !wan.domain ? `隧道配置里没有域名：${wan.config}`
+  const state = !wan.domain ? `隧道配置里没有域名：${wan.config}`
     : !wan.enabled ? '关闭中：经隧道来的请求一律拒绝。'
     : wan.connections > 0 ? `已连通（${wan.connections} 条连接）：https://${wan.domain}`
     : wan.running ? `正在连接 Cloudflare…${wan.error ? `（${wan.error}）` : ''}` : `未运行${wan.error ? `：${wan.error}` : ''}`;
   const changed = domain.trim().toLowerCase() !== wan.domain;
+  if (!wan.binary) return <section className="space-y-3 rounded-lg border border-line bg-panel p-4">
+    <h2 className="text-lg">广域网</h2>
+    <p className="text-sm">这台设备不提供外网访问。</p>
+    {tunnelRole}
+    <p className="text-sm text-muted">没有 cloudflared 的影响：外网访问不到这台设备。局域网和这台设备自己的浏览器照常能用；这台设备也照样能用浏览器经外网访问装了 cloudflared 的设备（比如 Deck 的域名）。</p>
+    <p className="text-sm text-muted">需要时：把 cloudflared 放在 ~/Applications/cloudflared/cloudflared 或系统的 PATH 里（Termux 里是 pkg install cloudflared），再打开这一页就会认出来，不用重启 omniHub。另外要在这台设备上登录 Cloudflare、建好它自己的命名隧道（~/.cloudflared/config.yml），然后在这里填域名。手机随身带出门，一般不需要。</p>
+  </section>;
   return <section className="space-y-3 rounded-lg border border-line bg-panel p-4">
     <h2 className="text-lg">广域网</h2>
     <p className="text-sm text-muted">经 Cloudflare 隧道从外网访问（需要登录账号）。每台设备用自己的隧道和域名。</p>
+    {tunnelRole}
     {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
-    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={wan.enabled} disabled={!!pending || !wan.binary} onChange={e => void run('toggle', async () => { setWan(await post('/api/network/wan', { enabled: e.target.checked }) as Wan); })} />允许广域网访问</label>
-    <p className={`text-sm ${wan.enabled && wan.connections > 0 ? 'text-[#3fb950]' : 'text-muted'}`}>{state}</p>
-    {wan.binary ? <form className="flex flex-wrap items-end gap-2" onSubmit={e => { e.preventDefault(); void run('domain', async () => { setWan(await post('/api/network/wan', { domain: domain.trim() }) as Wan); await test(domain.trim()); }); }}>
-      <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">域名<input className={input} value={domain} onChange={e => setDomain(e.target.value)} placeholder="例如 phone.example.com" maxLength={253} /></label>
+    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={wan.enabled} disabled={!!pending} onChange={e => void run('toggle', async () => { setWan(await post('/api/network/wan', { enabled: e.target.checked }) as Wan); })} />允许广域网访问</label>
+    <p className={`break-all text-sm ${wan.enabled && wan.connections > 0 ? 'text-[#3fb950]' : 'text-muted'}`}>{state}</p>
+    {<form className="flex flex-wrap items-end gap-2" onSubmit={e => { e.preventDefault(); void run('domain', async () => { setWan(await post('/api/network/wan', { domain: domain.trim() }) as Wan); await test(domain.trim()); }); }}>
+      <label className="flex min-w-0 flex-1 basis-full flex-col gap-1 text-sm sm:basis-auto">域名<input className={input} value={domain} onChange={e => setDomain(e.target.value)} placeholder="例如 phone.example.com" maxLength={253} /></label>
       <button className={primaryButton} disabled={!!pending || !changed || !domain.trim()}>{pending === 'domain' ? '正在设置…' : '换成这个域名'}</button>
       <button type="button" className={button} disabled={checking || !domain.trim()} onClick={() => void test(domain.trim())}>{checking ? '正在检测…' : '检测'}</button>
-    </form> : null}
-    {changed && wan.binary ? <p className="text-sm text-muted">换域名会改这台设备的隧道配置（旧的存为 .bak），并在 Cloudflare 上把域名指向这条隧道；需要这台设备登录过 cloudflared（有 cert.pem）。</p> : null}
+    </form>}
+    {changed ? <p className="text-sm text-muted">换域名会改这台设备的隧道配置（旧的存为 .bak），并在 Cloudflare 上把域名指向这条隧道；需要这台设备登录过 cloudflared（有 cert.pem）。</p> : null}
     {check ? <p className={`text-sm ${check.ok ? 'text-[#3fb950]' : 'text-danger'}`}>{check.ok ? `https://${check.domain} 能访问，指向这台设备。` : `https://${check.domain}：${check.error}`}</p> : null}
   </section>;
 }

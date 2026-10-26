@@ -148,7 +148,7 @@ func run(options launchOptions) (result error) {
 	if tunnelConfig == "" {
 		tunnelConfig = network.DefaultTunnelConfig()
 	}
-	app.Tunnel = network.NewTunnel(network.FindCloudflared(cfg.Server.Cloudflared), tunnelConfig)
+	app.Tunnel = network.NewTunnel(cfg.Server.Cloudflared, tunnelConfig)
 	app.Tunnel.SetEnabled(app.WANEnabled())
 	defer app.Tunnel.SetEnabled(false)
 
