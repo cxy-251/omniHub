@@ -56,7 +56,7 @@ export default function LibraryManager({ onChanged }: { onChanged: (name?: strin
     {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
     {snapshot ? <div className="rounded-lg border border-line bg-panel p-4"><p>全局状态：{snapshot.state_ready ? '可用' : '离线，等待原库恢复'}</p><p className="mt-2 break-all text-sm text-muted">{snapshot.state_directory}</p>{snapshot.state_error ? <p className="mt-2 text-danger">{snapshot.state_error}</p> : null}</div> : <p role="status">正在读取配置…</p>}
     <form className="flex flex-wrap items-end gap-3 rounded-lg border border-line bg-panel p-4" onSubmit={add}>
-      <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm">资源库根目录<input className="rounded-md border border-line bg-background px-3 py-2" value={path} onChange={e => setPath(e.target.value)} required maxLength={4096} placeholder="点「浏览」选择，或输入绝对路径" /></label>
+      <label className="flex min-w-0 flex-1 basis-full flex-col gap-2 text-sm sm:basis-auto">资源库根目录<input className="rounded-md border border-line bg-background px-3 py-2" value={path} onChange={e => setPath(e.target.value)} required maxLength={4096} placeholder="点「浏览」选择，或输入绝对路径" /></label>
       <button type="button" className={button} onClick={() => setPicking(value => !value)}>浏览…</button>
       <label className="flex items-center gap-2 py-2 text-sm"><input type="checkbox" checked={readOnly} onChange={e => setReadOnly(e.target.checked)} />只读挂载</label>
       <button className={button} disabled={pending || !path}>添加资源库</button>

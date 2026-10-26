@@ -1,6 +1,6 @@
 // 开发验证：驱动一个已启动的无头 Chrome（--remote-debugging-port=9333），按步骤操作页面后截图。不装任何依赖（Node 自带 WebSocket）。
 // 用法：node scripts/dev-cdp.mjs <起始网址> <截图.png> <结束前等待毫秒> [步骤…]
-// 步骤：nav:<网址>  wait:<毫秒>  click:<x>:<y>  key:<key>:<code>:<keyCode>  shot:<文件>  其余按 JS 在页面里执行（可返回 Promise）。
+// 步骤：nav:<网址>  viewport:<宽>:<高>（按手机屏幕模拟）  wait:<毫秒>  click:<x>:<y>  key:<key>:<code>:<keyCode>  shot:<文件>  其余按 JS 在页面里执行（可返回 Promise）。
 // 页面的 console 与未捕获异常会打印出来。
 import { writeFileSync } from 'node:fs';
 
@@ -28,6 +28,7 @@ await sleep(3000);
 for (const step of steps) {
   const [kind, ...rest] = step.split(':');
   if (kind === 'nav') { await send('Page.navigate', { url: step.slice(4) }); await sleep(3000); }
+  else if (kind === 'viewport') await send('Emulation.setDeviceMetricsOverride', { width: Number(rest[0]), height: Number(rest[1]), deviceScaleFactor: 2, mobile: true });
   else if (kind === 'wait') await sleep(Number(rest[0]));
   else if (kind === 'shot') await shot(step.slice(5));
   else if (kind === 'click') {

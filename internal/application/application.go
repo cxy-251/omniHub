@@ -243,6 +243,15 @@ func (a *Application) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	case "/api/network/wan":
 		a.handleWAN(w, req)
 		return
+	case "/api/network/identity":
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": network.InstanceID})
+		return
+	case "/api/network/wan/check":
+		if a.authorize(w, req) {
+			a.handleWANCheck(w, req)
+		}
+		return
 	case "/api/network/home":
 		if a.authorize(w, req) {
 			a.handleHome(w, req)
@@ -512,18 +521,10 @@ func (a *Application) saveShortVideoThumbnails(enabled bool) error {
 // LANEnabled 返回当前是否允许局域网访问。
 func (a *Application) LANEnabled() bool { return a.lanEnabled.Load() }
 
-// handleLAN：GET 返回局域网开关；POST {"enabled": bool} 修改并保存。只允许本机客户端操作，
-// 免得局域网里的设备把自己关在外面或替本机打开。
+// handleLAN：GET 返回局域网开关；POST {"enabled": bool} 修改并保存。本机客户端或局域网管理员可以操作
+// （手机上没有桌面客户端，只能用网页）；关闭只能在本机做，免得局域网里的管理员把自己关在外面。
 func (a *Application) handleLAN(w http.ResponseWriter, req *http.Request) {
-	g, ok := a.enter()
-	if !ok {
-		http.Error(w, "service reconfiguration in progress", http.StatusServiceUnavailable)
-		return
-	}
-	trusted := auth.NewMiddleware(g.authDB, a.localToken).IsTrustedLocal(req)
-	a.leave()
-	if !trusted {
-		http.Error(w, "只能在 Deck 本机修改", http.StatusForbidden)
+	if !a.authorize(w, req) {
 		return
 	}
 	if req.Method == http.MethodPost {
@@ -532,6 +533,10 @@ func (a *Application) handleLAN(w http.ResponseWriter, req *http.Request) {
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1024)).Decode(&in); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		if !in.Enabled && !auth.IsLoopbackDirect(req) {
+			http.Error(w, "从局域网关掉局域网访问后你自己也会连不上：请在这台设备自己的浏览器或客户端里关", http.StatusConflict)
 			return
 		}
 		if !a.operation.TryLock() {
@@ -590,17 +595,10 @@ func isTunneled(req *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// handleWAN：GET 返回广域网隧道状态；POST {"enabled": bool} 保存开关并启停 cloudflared。只允许本机客户端操作。
+// handleWAN：GET 返回广域网隧道状态；POST {"enabled": bool} 保存开关并启停 cloudflared，
+// POST {"domain": "x.example.com"} 换隧道的域名（见 Tunnel.SetDomain）。本机客户端或局域网管理员可以操作。
 func (a *Application) handleWAN(w http.ResponseWriter, req *http.Request) {
-	g, ok := a.enter()
-	if !ok {
-		http.Error(w, "service reconfiguration in progress", http.StatusServiceUnavailable)
-		return
-	}
-	trusted := auth.NewMiddleware(g.authDB, a.localToken).IsTrustedLocal(req)
-	a.leave()
-	if !trusted {
-		http.Error(w, "只能在 Deck 本机修改", http.StatusForbidden)
+	if !a.authorize(w, req) {
 		return
 	}
 	if a.Tunnel == nil {
@@ -609,10 +607,20 @@ func (a *Application) handleWAN(w http.ResponseWriter, req *http.Request) {
 	}
 	if req.Method == http.MethodPost {
 		var in struct {
-			Enabled bool `json:"enabled"`
+			Enabled bool   `json:"enabled"`
+			Domain  string `json:"domain"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1024)).Decode(&in); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		if in.Domain != "" {
+			if _, err := a.Tunnel.SetDomain(req.Context(), strings.ToLower(strings.TrimSpace(in.Domain))); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(a.Tunnel.Status())
 			return
 		}
 		if !a.operation.TryLock() {
@@ -642,6 +650,20 @@ func (a *Application) handleWAN(w http.ResponseWriter, req *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(a.Tunnel.Status())
+}
+
+// handleWANCheck：GET ?domain=x 经公网访问域名（不填时用隧道配置里的域名），看是否通、是否指向这台设备。
+func (a *Application) handleWANCheck(w http.ResponseWriter, req *http.Request) {
+	host := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("domain")))
+	if host == "" && a.Tunnel != nil {
+		host = a.Tunnel.Status().Domain
+	}
+	if host == "" {
+		http.Error(w, "没有要检测的域名", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(network.CheckDomain(req.Context(), host))
 }
 
 // GateConfig 返回保存的对外服务范围（main 启动时用）。

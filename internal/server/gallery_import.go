@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"omnihub/internal/auth"
 	"omnihub/internal/gallery"
 )
 
@@ -35,12 +34,8 @@ type galleryImportStatus struct {
 }
 
 // handleGalleryImport：GET 状态；POST {"library_id","path"} 开始导入；DELETE 取消。
-// 路径是本机文件夹，所以只接受本机客户端。
+// 路径是服务端所在设备上的文件夹；只有管理员能用，不接受经隧道来的请求（见 access.go）。
 func (r *Router) handleGalleryImport(w http.ResponseWriter, req *http.Request) {
-	if !auth.IsTrustedLocalFromContext(req.Context()) {
-		http.Error(w, "只能在 Deck 本机导入", http.StatusForbidden)
-		return
-	}
 	im := &r.galleryImport
 	switch req.Method {
 	case http.MethodGet:
