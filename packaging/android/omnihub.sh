@@ -6,17 +6,19 @@ cd "$(dirname "$0")" || exit 1
 dir=$(pwd)
 boot="$HOME/.termux/boot/omnihub-start.sh"
 pid() { p=$(cat omnihub.pid 2>/dev/null) && [ -r "/proc/$p/cmdline" ] && grep -q omnihub-server "/proc/$p/cmdline" && echo "$p"; }
+# 停止并等旧进程退出（最多 15 秒）：它退出前一直占着单实例锁，马上启动新的会失败
+halt() { p=$(pid) || return 0; kill "$p"; for _ in $(seq 30); do [ -r "/proc/$p/cmdline" ] || return 0; sleep 0.5; done; }
 
 case "${1:-status}" in
   start)
-    p=$(pid) && kill "$p" && sleep 1
+    halt
     # 不申请唤醒锁：持有唤醒锁约一小时后 HyperOS 会把 Termux 判为异常耗电并强制结束（z6x hub 2026-10-02 遇到过）
     nohup ./omnihub-server >> omnihub.log 2>&1 < /dev/null &
     echo $! > omnihub.pid
     sleep 2
     if p=$(pid); then echo "omniHub 已启动（PID $p）"; else echo "启动失败："; tail -5 omnihub.log; exit 1; fi ;;
   stop)
-    if p=$(pid); then kill "$p"; echo "omniHub 已停止"; else echo "omniHub 本来就没有运行"; fi
+    if pid > /dev/null; then halt; echo "omniHub 已停止"; else echo "omniHub 本来就没有运行"; fi
     rm -f omnihub.pid ;;
   status)
     if p=$(pid); then echo "omniHub 运行中（PID $p）"; else echo "omniHub 未运行"; exit 1; fi ;;
