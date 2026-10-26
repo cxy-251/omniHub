@@ -136,10 +136,14 @@ func (r *Router) runShortVideoWorker() {
 			continue
 		default:
 		}
-		// 探测编码/尺寸开销小（只读文件头），始终进行；缩略图受开关控制。两者交替进行：
-		// 手机上有 8 万个视频要探测，等探测全部做完才开始缩略图要好几个小时。
+		// 探测编码/尺寸开销小（只读文件头），始终进行，并且优先：网页端只列出探测过编码的视频
+		// （浏览器放不了的要筛掉），没探测的看不到。缩略图受开关控制，还有视频没探测时每轮只做一小批。
 		probed := r.probePass()
-		if w.thumbsEnabled() && r.thumbnailPass() > 0 || probed > 0 {
+		limit := 0
+		if probed > 0 {
+			limit = 16
+		}
+		if w.thumbsEnabled() && r.thumbnailPass(limit) > 0 || probed > 0 {
 			continue
 		}
 		select {
@@ -468,8 +472,8 @@ func (r *Router) cleanSyncedShortVideo() {
 	w.poke()
 }
 
-// thumbnailPass 为各库生成一小批缩略图，返回处理数量；有显式任务等待或开关关闭时提前返回。
-func (r *Router) thumbnailPass() int {
+// thumbnailPass 为各库生成一批缩略图（limit 大于 0 时最多这么多个），返回处理数量；有显式任务等待或开关关闭时提前返回。
+func (r *Router) thumbnailPass(limit int) int {
 	w := r.svJobs
 	stores, dirs, _ := r.writableStores(true)
 	processed := 0
@@ -481,7 +485,7 @@ func (r *Router) thumbnailPass() int {
 			continue
 		}
 		for _, p := range pending {
-			if !w.thumbsEnabled() || len(w.requests) > 0 || w.ctx.Err() != nil || !r.coolDown("缩略图", w.thumbsEnabled) {
+			if limit > 0 && processed >= limit || !w.thumbsEnabled() || len(w.requests) > 0 || w.ctx.Err() != nil || !r.coolDown("缩略图", w.thumbsEnabled) {
 				return processed
 			}
 			ctx := w.begin("thumbnails", 0)
@@ -547,7 +551,7 @@ func (r *Router) probePass() int {
 	stores, dirs, _ := r.writableStores(false)
 	processed := 0
 	for i, s := range stores {
-		pending, err := s.PendingProbes(16)
+		pending, err := s.PendingProbes(64)
 		if err != nil {
 			continue
 		}
