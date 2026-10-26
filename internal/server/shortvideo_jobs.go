@@ -481,7 +481,7 @@ func (r *Router) thumbnailPass() int {
 			continue
 		}
 		for _, p := range pending {
-			if !w.thumbsEnabled() || len(w.requests) > 0 || w.ctx.Err() != nil || !r.coolDown() {
+			if !w.thumbsEnabled() || len(w.requests) > 0 || w.ctx.Err() != nil || !r.coolDown("缩略图", w.thumbsEnabled) {
 				return processed
 			}
 			ctx := w.begin("thumbnails", 0)
@@ -504,19 +504,19 @@ func (r *Router) thumbnailPass() int {
 	return processed
 }
 
-// 缩略图的温度阈值（°C）：机身达到 thumbsHot 时暂停，降到 thumbsResume 以下再继续。
+// 后台任务（缩略图、读取视频信息）的温度阈值（°C）：机身达到 hotTemp 时暂停，降到 resumeTemp 以下再继续。
 // 数值沿用 z6x hub 在这台手机上用的（36～40°C，暂停后降到 37°C 继续）。
 const (
-	thumbsHot    = 40
-	thumbsResume = 37
+	hotTemp    = 40
+	resumeTemp = 37
 )
 
-// coolDown 在机身过热时暂停生成缩略图（手机上用；读不到温度的设备如 Deck 不受影响），
-// 暂停期间每 5 秒看一次温度。返回 false 表示等待时来了别的任务、开关被关掉或服务在退出。
-func (r *Router) coolDown() bool {
+// coolDown 在机身过热时暂停后台任务 what（手机上用；读不到温度的设备如 Deck 不受影响），
+// 暂停期间每 5 秒看一次温度。返回 false 表示等待时来了别的任务、still 返回 false 或服务在退出。
+func (r *Router) coolDown(what string, still func() bool) bool {
 	w := r.svJobs
 	t, ok := platform.DeviceTemp()
-	if !ok || t < thumbsHot {
+	if !ok || t < hotTemp {
 		return true
 	}
 	defer func() {
@@ -524,16 +524,16 @@ func (r *Router) coolDown() bool {
 		w.detail = ""
 		w.mu.Unlock()
 	}()
-	for ok && t >= thumbsResume {
+	for ok && t >= resumeTemp {
 		w.mu.Lock()
-		w.detail = fmt.Sprintf("机身 %.1f°C，缩略图暂停，降到 %d°C 以下继续", t, thumbsResume)
+		w.detail = fmt.Sprintf("机身 %.1f°C，%s暂停，降到 %d°C 以下继续", t, what, resumeTemp)
 		w.mu.Unlock()
 		select {
 		case <-w.ctx.Done():
 			return false
 		case <-time.After(5 * time.Second):
 		}
-		if len(w.requests) > 0 || !w.thumbsEnabled() {
+		if len(w.requests) > 0 || !still() {
 			return false
 		}
 		t, ok = platform.DeviceTemp()
@@ -552,7 +552,7 @@ func (r *Router) probePass() int {
 			continue
 		}
 		for _, p := range pending {
-			if len(w.requests) > 0 || w.ctx.Err() != nil {
+			if len(w.requests) > 0 || w.ctx.Err() != nil || !r.coolDown("读取视频信息", func() bool { return true }) {
 				return processed
 			}
 			if err := s.ProbeVideo(w.ctx, dirs[i], p); err != nil {
