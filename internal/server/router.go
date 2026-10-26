@@ -152,6 +152,8 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 	}
 	r.registerRoutes()
 	go r.runShortVideoWorker()
+	// 路由关闭时随短视频后台任务的上下文一起取消
+	go r.prewarmFeeds(r.svJobs.ctx)
 	r.startGalleryIndex() // 只放了原图分卷的图库：后台建索引
 	return r, nil
 }

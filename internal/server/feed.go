@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"math/rand/v2"
 	"net/http"
@@ -53,6 +54,7 @@ type feedOrder struct {
 type feedState struct {
 	mu        sync.Mutex
 	snapshots map[string]*feedSnapshot // domain → 条目列表
+	building  map[string]bool          // 正在后台重建的 domain
 	orders    []feedOrder              // 最近的排序结果（翻页、多联放映取片时复用）
 }
 
@@ -60,7 +62,9 @@ func (r *Router) feedSources() map[string]feedSource {
 	return map[string]feedSource{"shortvideo": svFeed{r}, "gallery": galleryFeed{r}}
 }
 
-// snapshot 返回某类内容的全部条目；10 分钟没人用就释放（相册 10 万条约十几 MB）。
+// snapshot 返回某类内容的全部条目；一小时没人用就释放（相册 10 万条约十几 MB）。
+// 索引变了（后台探测编码、生成缩略图时每秒都在写 index.db）时先用旧的，同时在后台重建一份：
+// 手机上建一次 10 万条要 8 秒左右，以前每个请求都重建，打开短视频页要等很久。只有还没有任何条目表时才当场建。
 func (r *Router) feedSnapshot(req *http.Request, domain string, src feedSource) (*feedSnapshot, error) {
 	key, err := src.snapshotKey(req)
 	if err != nil {
@@ -68,19 +72,27 @@ func (r *Router) feedSnapshot(req *http.Request, domain string, src feedSource) 
 	}
 	r.feed.mu.Lock()
 	if r.feed.snapshots == nil {
-		r.feed.snapshots = map[string]*feedSnapshot{}
+		r.feed.snapshots, r.feed.building = map[string]*feedSnapshot{}, map[string]bool{}
 	}
 	for d, s := range r.feed.snapshots {
-		if time.Since(s.used) > 10*time.Minute {
+		if time.Since(s.used) > time.Hour {
 			delete(r.feed.snapshots, d)
 		}
 	}
-	if s := r.feed.snapshots[domain]; s != nil && s.key == key {
+	if s := r.feed.snapshots[domain]; s != nil {
 		s.used = time.Now()
+		if s.key != key && !r.feed.building[domain] {
+			r.feed.building[domain] = true
+			go r.rebuildFeedSnapshot(req.WithContext(context.WithoutCancel(req.Context())), domain, src)
+		}
 		r.feed.mu.Unlock()
 		return s, nil
 	}
 	r.feed.mu.Unlock()
+	return r.buildFeedSnapshot(req, domain, src, key)
+}
+
+func (r *Router) buildFeedSnapshot(req *http.Request, domain string, src feedSource, key string) (*feedSnapshot, error) {
 	cat, err := src.items(req)
 	if err != nil {
 		return nil, err
@@ -92,6 +104,39 @@ func (r *Router) feedSnapshot(req *http.Request, domain string, src feedSource) 
 	r.feed.snapshots[domain] = s
 	r.feed.mu.Unlock()
 	return s, nil
+}
+
+func (r *Router) rebuildFeedSnapshot(req *http.Request, domain string, src feedSource) {
+	defer func() {
+		r.feed.mu.Lock()
+		r.feed.building[domain] = false
+		r.feed.mu.Unlock()
+	}()
+	key, err := src.snapshotKey(req)
+	if err == nil {
+		_, err = r.buildFeedSnapshot(req, domain, src, key)
+	}
+	if err != nil {
+		log.Printf("feed %s: rebuild: %v", domain, err)
+	}
+}
+
+// prewarmFeeds 在服务启动后先把短视频、相册的条目表建好，第一次打开页面不用等。
+func (r *Router) prewarmFeeds(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(20 * time.Second):
+	}
+	for domain, src := range r.feedSources() {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/api/feed/"+domain+"/items", nil)
+		if err != nil {
+			continue
+		}
+		if _, err := r.feedSnapshot(req, domain, src); err != nil && ctx.Err() == nil {
+			log.Printf("feed %s: prewarm: %v", domain, err)
+		}
+	}
 }
 
 type feedQuery struct {

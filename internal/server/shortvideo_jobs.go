@@ -484,25 +484,35 @@ func (r *Router) thumbnailPass(limit int) int {
 			w.finish("thumbnails", "", err)
 			continue
 		}
-		for _, p := range pending {
+		for len(pending) > 0 {
 			if limit > 0 && processed >= limit || !w.thumbsEnabled() || len(w.requests) > 0 || w.ctx.Err() != nil || !r.coolDown("缩略图", w.thumbsEnabled) {
 				return processed
 			}
+			batch := pending[:min(len(pending), parallelism())]
+			pending = pending[len(batch):]
 			ctx := w.begin("thumbnails", 0)
-			err := s.MakeThumbnail(ctx, dirs[i], p)
+			errs := make([]error, len(batch))
+			var wg sync.WaitGroup
+			for k, p := range batch {
+				wg.Add(1)
+				go func() { defer wg.Done(); errs[k] = s.MakeThumbnail(ctx, dirs[i], p) }()
+			}
+			wg.Wait()
 			w.mu.Lock()
 			w.cancelJob()
 			w.job, w.cancelJob = "", nil
 			w.mu.Unlock()
-			if errors.Is(err, shortvideo.ErrToolMissing) {
-				w.finish("thumbnails", "", err)
-				return 0
+			for _, err := range errs {
+				if errors.Is(err, shortvideo.ErrToolMissing) {
+					w.finish("thumbnails", "", err)
+					return 0
+				}
+				if err != nil && ctx.Err() == nil {
+					w.finish("thumbnails", "", err)
+					return processed
+				}
 			}
-			if err != nil && ctx.Err() == nil {
-				w.finish("thumbnails", "", err)
-				return processed
-			}
-			processed++
+			processed += len(batch)
 		}
 	}
 	return processed
@@ -514,6 +524,15 @@ const (
 	hotTemp    = 40
 	resumeTemp = 37
 )
+
+// parallelism 是后台同时跑几个 ffprobe / ffmpeg：手机电池低于 36°C 时 3 个（8 核大多闲着，z6x hub 也是这么跑的），
+// 否则 1 个。读不到温度的设备（Deck，可能正在玩游戏）一直 1 个。
+func parallelism() int {
+	if t, ok := platform.DeviceTemp(); ok && t < 36 {
+		return 3
+	}
+	return 1
+}
 
 // coolDown 在机身过热时暂停后台任务 what（手机上用；读不到温度的设备如 Deck 不受影响），
 // 暂停期间每 5 秒看一次温度。返回 false 表示等待时来了别的任务、still 返回 false 或服务在退出。
@@ -555,18 +574,29 @@ func (r *Router) probePass() int {
 		if err != nil {
 			continue
 		}
-		for _, p := range pending {
+		for len(pending) > 0 {
 			if len(w.requests) > 0 || w.ctx.Err() != nil || !r.coolDown("读取视频信息", func() bool { return true }) {
 				return processed
 			}
-			if err := s.ProbeVideo(w.ctx, dirs[i], p); err != nil {
+			batch := pending[:min(len(pending), parallelism())]
+			pending = pending[len(batch):]
+			errs := make([]error, len(batch))
+			var wg sync.WaitGroup
+			for k, p := range batch {
+				wg.Add(1)
+				go func() { defer wg.Done(); errs[k] = s.ProbeVideo(w.ctx, dirs[i], p) }()
+			}
+			wg.Wait()
+			for _, err := range errs {
 				if errors.Is(err, shortvideo.ErrToolMissing) {
 					w.finish("probe", "", err)
 					return 0
 				}
-				return processed
+				if err != nil {
+					return processed
+				}
 			}
-			processed++
+			processed += len(batch)
 		}
 	}
 	return processed
