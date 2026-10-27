@@ -86,32 +86,39 @@ FocusScope {
         return c.indexOf("/") >= 0 ? "group:" + c : "tag:platform:" + c
     }
     function newSlot() { return {channel: "recommend", shuffle: true, muted: false, seed: Math.floor(Math.random() * 1e9), index: 0, postId: "", pos: 0} }
+    // 各屏状态在内存里随时更新，写进设置文件最多每分钟一次（另外关掉多联放映时写一次）：
+    // Qt 写设置文件要等数据落盘，在界面线程上做；磁盘忙时（如星际争霸启动时大量读盘）一次能拖一两秒，
+    // 以前每切一个视频、每 10 秒记位置都写，就成了每隔几秒卡一下（2026-10-27 客户端卡顿记录）。
+    property var slots: []
+    Timer { id: persistSlots; interval: 60000; onTriggered: prefs.slots = matrix.slots }
     function slotConfig(i) {
-        var c = prefs.slots[i] || {channel: "recommend", shuffle: true, muted: false, seed: 0, index: 0, postId: "", pos: 0}
+        var c = matrix.slots[i] || {channel: "recommend", shuffle: true, muted: false, seed: 0, index: 0, postId: "", pos: 0}
         return c.channel === normChannel(c.channel) ? c : Object.assign({}, c, {channel: normChannel(c.channel)})
     }
     Component.onCompleted: {
-        if (prefs.slots.length < 3) {
-            var all = prefs.slots.slice()
+        var all = (prefs.slots || []).slice()
+        if (all.length < 3) {
             while (all.length < 3) all.push(newSlot())
             prefs.slots = all
         }
+        matrix.slots = all
         ready = true
         if (!prefs.shortcutsSeen) { say("按 ? 查看快捷键"); prefs.shortcutsSeen = true }
         feed.loadGroups()
         if (audioEngine) api.getJSON("/api/media/audio/albums?limit=100", function (list) { matrix.audioAlbums = list })
     }
     function setSlot(i, changes) {
-        var all = prefs.slots.slice()
+        var all = matrix.slots.slice()
         while (all.length <= i) all.push(newSlot())
         all[i] = Object.assign({}, slotConfig(i), changes)
-        prefs.slots = all
+        matrix.slots = all
+        if (!persistSlots.running) persistSlots.start()
     }
     // 关闭前记下各屏位置。
     function savePositions() {
         for (var i = 0; i < repeater.count; i++) { var item = repeater.itemAt(i); if (item) item.savePosition() }
     }
-    Component.onDestruction: savePositions()
+    Component.onDestruction: { savePositions(); prefs.slots = matrix.slots }
     Timer { interval: 10000; repeat: true; running: matrix.playing; onTriggered: matrix.savePositions() }
 
     // 快捷键（按焦点屏设计）。说明面板与按钮提示都从这张表生成，改键只改这里。

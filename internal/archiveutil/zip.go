@@ -17,7 +17,7 @@ import (
 var ErrCapacity = errors.New("archive exceeds read capacity")
 
 const maxDirectoryBytes = 16 << 20
-const maxEntries = 20000
+const maxEntries = 100000 // 合集类的本子有两万多页（2026-10-27 一本 20423 页）
 
 // Reader owns the file behind a validated, bounded ZIP directory.
 type Reader struct {

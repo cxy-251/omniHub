@@ -85,6 +85,8 @@ func ScanMangaContext(ctx context.Context, root, scope string) (count int, resul
 	if err != nil {
 		return count, err
 	}
+	// 读不了的书跳过，其余照常索引；最后把跳过的报出来（最多 5 本）
+	var skipped []error
 	for _, path := range paths {
 		if err = ctx.Err(); err != nil {
 			return count, err
@@ -92,7 +94,10 @@ func ScanMangaContext(ctx context.Context, root, scope string) (count int, resul
 		file := filepath.Join(scope, filepath.FromSlash(path))
 		book, err := manga.ScanMangaFromCBZContext(ctx, file)
 		if err != nil {
-			return count, fmt.Errorf("read %q: %w", path, err)
+			if len(skipped) < 5 {
+				skipped = append(skipped, fmt.Errorf("read %q: %w", path, err))
+			}
+			continue
 		}
 		rel, err := filepath.Rel(root, file)
 		if err != nil || !filepath.IsLocal(rel) {
@@ -104,5 +109,5 @@ func ScanMangaContext(ctx context.Context, root, scope string) (count int, resul
 		}
 		count++
 	}
-	return count, nil
+	return count, errors.Join(skipped...)
 }
