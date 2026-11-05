@@ -243,22 +243,37 @@ func countOriginals(path string) (int, error) {
 }
 
 func indexVolume(ctx context.Context, meta *MetaDB, db *sql.DB, volume string, created time.Time, res *IndexResult, step func()) error {
-	// 先取 ID 再逐张读原图，不一次把整卷读进内存
-	rows, err := db.QueryContext(ctx, "SELECT id FROM originals")
+	// 先取 ID（及可选的 rel_path）再逐张读原图，不一次把整卷读进内存
+	type entry struct{ id, name string }
+	hasRelPath := true
+	rows, err := db.QueryContext(ctx, "SELECT id, rel_path FROM originals")
+	if err != nil {
+		hasRelPath = false
+		rows, err = db.QueryContext(ctx, "SELECT id FROM originals")
+	}
 	if err != nil {
 		return err
 	}
-	var ids []string
+	var list []entry
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var e entry
+		if hasRelPath {
+			err = rows.Scan(&e.id, &e.name)
+		} else {
+			err = rows.Scan(&e.id)
+		}
+		if err != nil {
 			rows.Close()
 			return err
 		}
-		ids = append(ids, id)
+		if e.name == "" {
+			e.name = e.id
+		}
+		list = append(list, e)
 	}
 	rows.Close()
-	for _, id := range ids {
+	for _, e := range list {
+		id := e.id
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -268,6 +283,9 @@ func indexVolume(ctx context.Context, meta *MetaDB, db *sql.DB, volume string, c
 			return err
 		}
 		if exists > 0 {
+			if e.name != id {
+				_, _ = meta.db.Exec("UPDATE photos SET filename = ? WHERE id = ? AND filename = ?", e.name, id, id)
+			}
 			res.Known++
 			continue
 		}
@@ -285,7 +303,7 @@ func indexVolume(ctx context.Context, meta *MetaDB, db *sql.DB, volume string, c
 			res.fail(volume, id, err)
 			continue
 		}
-		if err := insertPhoto(meta, id, id, volume, len(data), d, created); err != nil {
+		if err := insertPhoto(meta, id, e.name, volume, len(data), d, created); err != nil {
 			return err
 		}
 		res.Added++

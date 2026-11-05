@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, post, request } from './api';
 import VirtualGrid from './VirtualGrid';
+import ChannelBar from './ChannelBar';
 import { chip, divider, explain, notify, select, store, stored } from './ui';
-import { openManga, type Book } from './MangaReader';
+import { openManga, type Book } from './mangaState';
 
 type Recent = { title: string; logical_path: string; page_index: number };
 const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-primary disabled:opacity-50';
@@ -10,7 +11,7 @@ const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-pri
 // MangaLibrary：书架一次取全（几百本，元数据很小，本页会话内缓存），在本地搜索与筛选：
 // 书名/作者/标签关键字、标签栏（出现最多的标签）、♥ 我的点赞、连载未完；卡片上的标签点一下即按它筛选。
 // 阅读器只挂载选中的那本，图片只加载可视区附近。
-type ShelfBook = Book & { author?: string; tags?: string[] | null; is_complete?: boolean };
+type ShelfBook = Book & { author?: string; tags?: string[] | null; is_complete?: boolean; completion_known?: boolean };
 let shelfCache: ShelfBook[] | undefined;
 
 // 漫画按子目录分级：manga/standard/（一般）与 manga/nsfw/；旧布局直接放在 manga/ 下的算 NSFW（服务端会自动搬进 nsfw/）。
@@ -83,9 +84,9 @@ export default function MangaLibrary({ active }: { active: boolean }) {
     return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 30);
   }, [all]);
   const needle = query.trim().toLowerCase();
-  const shown = all.filter(b => (filter === '' || filter === '__recent' ? true : filter === '__liked' ? likes.has(b.logical_path) : filter === '__incomplete' ? b.is_complete === false : (b.tags ?? []).includes(filter))
+  const shown = all.filter(b => (filter === '' || filter === '__recent' ? true : filter === '__liked' ? likes.has(b.logical_path) : filter === '__incomplete' ? b.completion_known && b.is_complete === false : (b.tags ?? []).includes(filter))
     && (!needle || b.title.toLowerCase().includes(needle) || (b.author ?? '').toLowerCase().includes(needle) || (b.tags ?? []).some(t => t.toLowerCase().includes(needle))));
-  const incomplete = all.filter(b => b.is_complete === false).length;
+  const incomplete = all.filter(b => b.completion_known && b.is_complete === false).length;
   // 分类（一般 / NSFW）与文本页的小说/文档一样放在工具条最前面，用竖线隔开；再点一次已选的分类回到全部。
   const shownRecent = recent.filter(r => !folder || folderOf(r.logical_path) === folder);
   return <section className="space-y-2">
@@ -99,14 +100,12 @@ export default function MangaLibrary({ active }: { active: boolean }) {
       <button className={chip(filter === '__liked')} onClick={() => setFilter('__liked')}>♥ 我的点赞 {likes.size}</button>
       {incomplete ? <button className={chip(filter === '__incomplete')} onClick={() => setFilter('__incomplete')}>连载/未完 {incomplete}</button> : null}
       <span className={divider} />
-      {/* 标签条与上面同一行（窄屏时单独一行） */}
-      <div className="order-last min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-0"><div className="flex gap-1.5 overflow-x-auto pb-0.5">
-        {tagCounts.map(([t, n]) => <button key={t} className={chip(filter === t)} onClick={() => setFilter(filter === t ? '' : t)}>🏷 {t} <span className="text-xs">{n}</span></button>)}
-        {filter && !['__liked', '__incomplete', '__recent'].includes(filter) && !tagCounts.some(([t]) => t === filter) ? <button className={chip(true)} onClick={() => setFilter('')}>🏷 {filter} ✕</button> : null}
-      </div></div>
       <input className={`${select} w-44`} placeholder="搜索书名、作者、标签" value={query} onChange={e => setQuery(e.target.value)} />
       <button className={button} onClick={() => setRevision(value => value + 1)}>刷新</button>
     </div>
+    <ChannelBar groups={tagCounts.map(([id, count]) => ({ id, count, label: id }))} pins={[]} basicItems={[]} groupLabel="标签" channel={`group:${filter}`}
+      onPick={value => { const tag = value.slice(6); setFilter(filter === tag ? '' : tag); }} />
+    {filter && !['__liked', '__incomplete', '__recent'].includes(filter) && !tagCounts.some(([t]) => t === filter) ? <button className={chip(true)} onClick={() => setFilter('')}>🏷 {filter} ✕</button> : null}
     {error ? <p role="alert" className="text-danger">{error}</p> : null}
     {!books && !error ? <p role="status">正在读取书架…</p> : null}
     {filter === '__recent' ? <div className="space-y-1">{!shownRecent.length ? <p className="text-sm text-muted">这个分类里还没有读过的漫画。</p> : null}
@@ -122,7 +121,7 @@ export default function MangaLibrary({ active }: { active: boolean }) {
       return <div className="relative flex h-full flex-col overflow-hidden rounded-lg border border-line bg-panel hover:border-primary">
         <button className="relative min-h-0 flex-1" onClick={() => openManga(book)} title={book.title}>
           <img className="h-full w-full object-cover" loading="lazy" decoding="async" src={active ? `/api/media/manga/cover?path=${encodeURIComponent(book.logical_path)}&revision=${revision}` : undefined} alt="" />
-          {book.is_complete === false ? <span className="absolute left-1 top-1 rounded bg-[#d29922] px-1 text-xs text-black">未完</span> : null}
+          {book.completion_known && book.is_complete === false ? <span className="absolute left-1 top-1 rounded bg-[#d29922] px-1 text-xs text-black">未完</span> : null}
         </button>
         <button className={`absolute right-1 top-1 rounded-full bg-black/60 px-1.5 text-sm ${liked ? 'text-[#f778ba]' : 'text-white/70'}`} onClick={() => toggleLike(book)} title={liked ? '取消点赞' : '点赞'}>{liked ? '♥' : '♡'}</button>
         <div className="h-16 px-1.5 py-1">

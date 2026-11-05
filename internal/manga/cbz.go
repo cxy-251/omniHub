@@ -32,14 +32,16 @@ var ErrEntryNotFound = errors.New("file not found in cbz archive")
 
 // PackageMetadata 映射 metadata.json 结构。
 type PackageMetadata struct {
-	ID             string   `json:"id"`
-	Title          string   `json:"title"`
-	Author         string   `json:"author"`
-	Description    string   `json:"description"`
-	Tags           []string `json:"tags"`
-	OnlineChapters int      `json:"online_chapters"`
-	LocalChapters  int      `json:"local_chapters"`
-	IsComplete     bool     `json:"is_complete"`
+	ID               string   `json:"id"`
+	Title            string   `json:"title"`
+	Author           string   `json:"author"`
+	Description      string   `json:"description"`
+	Tags             []string `json:"tags"`
+	OnlineChapters   int      `json:"online_chapters"`
+	LocalChapters    int      `json:"local_chapters"`
+	IsComplete       *bool    `json:"is_complete,omitempty"`
+	CompletionStatus string   `json:"completion_status,omitempty"`
+	DownloadComplete *bool    `json:"download_complete,omitempty"`
 }
 
 // CBZReader 封装基于 ReaderAt 的 CBZ 零落盘随机寻址阅读器（第 7.1.3 节）。
@@ -288,7 +290,10 @@ func ScanMangaFromCBZContext(ctx context.Context, cbzPath string) (_ *Manga, res
 		manga.Author = meta.Author
 		manga.Description = meta.Description
 		manga.Tags = meta.Tags
-		manga.IsComplete = meta.IsComplete
+		manga.CompletionKnown = meta.IsComplete != nil
+		if meta.IsComplete != nil {
+			manga.IsComplete = *meta.IsComplete
+		}
 		manga.ChapterCount = meta.LocalChapters
 	}
 

@@ -23,6 +23,9 @@ func Handler() http.Handler {
 	assets := http.FileServer(http.FS(FS))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// The entry point must revalidate after an embedded UI update, otherwise
+		// an old tab can reference chunks absent from the new executable.
+		w.Header().Set("Cache-Control", "no-cache")
 		if strings.HasPrefix(r.URL.Path, "/vendor/") {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Referrer-Policy", "no-referrer")
@@ -31,7 +34,15 @@ func Handler() http.Handler {
 		}
 		if strings.HasPrefix(r.URL.Path, "/assets/") {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			if info, err := fs.Stat(dist, strings.TrimPrefix(r.URL.Path, "/")); err == nil && !info.IsDir() {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-store")
+				// FileServer's error response may strip cache headers. Keep the
+				// missing-chunk response explicitly uncacheable across upgrades.
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
 		}
 		if strings.HasPrefix(r.URL.Path, "/players/") && strings.HasSuffix(r.URL.Path, ".html") {
 			w.Header().Set("Content-Security-Policy", "sandbox allow-scripts allow-pointer-lock allow-modals allow-downloads; frame-ancestors 'self'")

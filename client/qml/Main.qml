@@ -19,6 +19,16 @@ DarkWindow {
     property string audioRequest: ""
     // 音声播放引擎：全局一份，切换页面不中断。
     AudioEngine { id: audio }
+    property bool sc2Requested: false
+    SC2AfterGame {
+        id: sc2AfterGame
+        enabled: mainWindow.serviceReady && backendApi.connected
+        onSettingsRequested: {
+            mainWindow.sc2Requested = true
+            mainWindow.selectPage(1)
+            mainWindow.showNormal(); mainWindow.raise(); mainWindow.requestActivate()
+        }
+    }
     // 记住上次打开的页面。
     Settings { id: uiPrefs; category: "main"; property int page: 4 }
 
@@ -91,16 +101,22 @@ DarkWindow {
     Loader {
         id: matrixWindow
         active: false
-        sourceComponent: Component { MatrixWindow { domain: "shortvideo"; audioEngine: audio; onClosing: Qt.callLater(function () { matrixWindow.active = false }) } }
+        sourceComponent: Component { MatrixWindow { domain: "shortvideo"; audioEngine: audio; onAudioOpenRequested: mainWindow.openAudio(); onClosing: Qt.callLater(function () { matrixWindow.active = false }) } }
     }
     Loader {
         id: galleryMatrixWindow
         active: false
-        sourceComponent: Component { MatrixWindow { domain: "gallery"; audioEngine: audio; onClosing: Qt.callLater(function () { galleryMatrixWindow.active = false }) } }
+        sourceComponent: Component { MatrixWindow { domain: "gallery"; audioEngine: audio; onAudioOpenRequested: mainWindow.openAudio(); onClosing: Qt.callLater(function () { galleryMatrixWindow.active = false }) } }
     }
     function openMatrixWindow(loader) {
         if (loader.item) { loader.item.raise(); loader.item.requestActivate() }
         else loader.active = true
+    }
+    function openAudio() {
+        mainWindow.selectPage(6)
+        if (!mainWindow.visible || mainWindow.visibility === Window.Minimized) mainWindow.showNormal()
+        mainWindow.raise()
+        mainWindow.requestActivate()
     }
 
     Column {
@@ -150,7 +166,11 @@ DarkWindow {
             Item { }
             Loader {
                 active: mainWindow.pagesReady && mainWindow.serviceReady && stack.currentIndex === 1
-                sourceComponent: Component { GamesView { } }
+                sourceComponent: Component { GamesView {
+                    sc2Requested: mainWindow.sc2Requested
+                    onSc2Opened: mainWindow.sc2Requested = false
+                    onReplaysRequested: sc2AfterGame.showRecords()
+                } }
             }
             Loader {
                 active: mainWindow.pagesReady && stack.currentIndex === 2
@@ -196,7 +216,7 @@ DarkWindow {
             id: audioBar
             width: parent.width
             engine: audio
-            visible: audio.active
+            visible: audio.active && !(matrixWindow.item && matrixWindow.item.visible) && !(galleryMatrixWindow.item && galleryMatrixWindow.item.visible)
             onOpenRequested: mainWindow.selectPage(6)
         }
     }

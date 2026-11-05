@@ -6,17 +6,18 @@ import "time"
 
 // Manga 记录单部漫画元数据。
 type Manga struct {
-	ID           string    `json:"id"`            // 漫画唯一 ID（数字 ID 或文件名哈希）
-	Title        string    `json:"title"`         // 漫画标题
-	Author       string    `json:"author"`        // 作者
-	Description  string    `json:"description"`   // 简介
-	Tags         []string  `json:"tags"`          // 标签列表
-	ChapterCount int       `json:"chapter_count"` // 章节总数
-	TotalPages   int       `json:"total_pages"`   // 总页数
-	IsComplete   bool      `json:"is_complete"`   // 是否已完结
-	RelPath      string    `json:"rel_path"`      // 相对 manga 目录路径
-	CustomCover  string    `json:"custom_cover"`  // 手动指定的封面包内条目相对路径（第 7.2.3 节）
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID              string    `json:"id"`               // 漫画唯一 ID（数字 ID 或文件名哈希）
+	Title           string    `json:"title"`            // 漫画标题
+	Author          string    `json:"author"`           // 作者
+	Description     string    `json:"description"`      // 简介
+	Tags            []string  `json:"tags"`             // 标签列表
+	ChapterCount    int       `json:"chapter_count"`    // 章节总数
+	TotalPages      int       `json:"total_pages"`      // 总页数
+	IsComplete      bool      `json:"is_complete"`      // 是否已完结
+	CompletionKnown bool      `json:"completion_known"` // 未提供完结信息时不能标为未完结。
+	RelPath         string    `json:"rel_path"`         // 相对 manga 目录路径
+	CustomCover     string    `json:"custom_cover"`     // 手动指定的封面包内条目相对路径（第 7.2.3 节）
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // Chapter 记录单话章节。

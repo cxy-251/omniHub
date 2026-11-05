@@ -6,7 +6,7 @@ import QtCore
 // 18comic 漫画下载（参照 omniDeck 的做法，但不并发）：
 //   联网搜索（关键词、本子编号或网址）或看日/周/月榜 → 点封面加进下载列表 → 开始下载。
 //   下载按列表顺序一本一本来，每本整本下好后封成 CBZ 放进所选资源库的 manga/nsfw/。
-//   搜索结果标出已经下载过的本子（各库漫画包里记着本子编号），加列表时自动跳过；下载时已有的也会跳过，线上有新章节的整本更新。
+//   已下载作品可以再次加入列表检查更新，只下载缺少的章节，复用旧包里的图片。
 // 下载列表存在本机设置里，关掉再开还在；开始下载后列表清空，进度在「任务」里。
 ColumnLayout {
     id: panel
@@ -19,7 +19,7 @@ ColumnLayout {
     function saveQueue(list) { queue = list; store.queueJson = JSON.stringify(list) }
     function queued(id) { return queue.some(function (q) { return q.id === id }) }
     function toggle(album) {
-        if (album.downloaded || album.active) return
+        if (album.active) return
         if (queued(album.id)) saveQueue(queue.filter(function (q) { return q.id !== album.id }))
         else saveQueue(queue.concat([{id: album.id, title: album.title}]))
     }
@@ -56,7 +56,7 @@ ColumnLayout {
 
     Label {
         Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#8b949e"; font.pixelSize: 12
-        text: "搜索 18comic（禁漫）的本子，点封面加进右边的下载列表，再「开始下载」。一本一本下，整本下好后封成 CBZ 放进漫画库的 nsfw/。已经下载过的、正在下载的会标出来，不能再加；下载时已有的跳过，线上出了新章节的整本更新。"
+        text: "搜索 18comic（禁漫）的本子，点封面加入右侧列表，再「开始下载」。已下载作品也可加入检查更新：只下载缺少的章节，复用旧包图片；已是最新则跳过。更新时请选择原作品所在的资源库。"
     }
 
     Rectangle {
@@ -159,14 +159,14 @@ ColumnLayout {
                             fillMode: Image.PreserveAspectCrop
                             asynchronous: true
                             source: backendApi.apiUrl("/api/downloads/manga/cover?id=" + cell.modelData.id)
-                            opacity: cell.modelData.downloaded || cell.modelData.active ? 0.45 : 1
+                            opacity: cell.modelData.active ? 0.45 : 1
                         }
                         Label { anchors.centerIn: cover; visible: cover.status !== Image.Ready; text: cover.status === Image.Error ? "无封面" : "…"; color: "#6e7681" }
                         Label {
                             visible: !!cell.modelData.downloaded || !!cell.modelData.active || cell.inQueue
                             anchors.left: cover.left; anchors.top: cover.top; anchors.margins: 6
                             padding: 4; font.pixelSize: 11; color: "#ffffff"
-                            text: cell.modelData.downloaded ? "已下载 · " + cell.modelData.downloaded : cell.modelData.active ? "下载中" : "✓ 在下载列表"
+                            text: cell.inQueue ? "✓ 在更新／下载列表" : cell.modelData.active ? "下载中" : "已下载 · " + cell.modelData.downloaded
                             background: Rectangle { radius: 4; color: cell.modelData.downloaded ? "#2d333b" : cell.modelData.active ? "#9e6a03" : "#1f6feb" }
                         }
                         Column {
@@ -179,7 +179,7 @@ ColumnLayout {
                             id: mouse
                             anchors.fill: parent
                             hoverEnabled: true
-                            cursorShape: cell.modelData.downloaded || cell.modelData.active ? Qt.ArrowCursor : Qt.PointingHandCursor
+                            cursorShape: cell.modelData.active ? Qt.ArrowCursor : Qt.PointingHandCursor
                             onClicked: panel.toggle(cell.modelData)
                             ToolTip.visible: containsMouse && (cell.modelData.tags || []).length > 0
                             ToolTip.text: (cell.modelData.tags || []).join("、")

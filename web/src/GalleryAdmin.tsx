@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { useVisiblePolling } from './useVisiblePolling';
 import DirectoryPicker from './DirectoryPicker';
 import { button, primaryButton } from './ui';
 
@@ -26,14 +27,9 @@ export default function GalleryAdmin() {
       setLibraries(writable);
       setTarget((writable.find(l => l.is_primary) ?? writable[0])?.id ?? '');
     }).catch((e: Error) => { if (!c.signal.aborted) setError(e.message); });
-    void refresh(c.signal);
     return () => c.abort();
   }, []);
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(() => void refresh(), 1000);
-    return () => clearInterval(t);
-  }, [running]);
+  useVisiblePolling(refresh, running ? 1000 : null);
 
   async function send(method: string, body?: unknown) {
     setError('');
@@ -42,9 +38,8 @@ export default function GalleryAdmin() {
   }
   const p = status.progress;
   return <section className="space-y-4">
-    <h2 className="text-xl font-semibold">相册</h2>
     <div className="space-y-3 rounded-lg border border-line bg-panel p-4">
-      <p className="text-sm text-muted">把文件夹里的照片（JPEG、PNG、WebP、GIF，含子文件夹）加进相册。文件夹在运行 omniHub 的那台设备上。已在相册里的同一张照片会跳过，源文件不会被移动或删除。HEIC 等其他格式暂不支持，会计入「格式不支持」。</p>
+      <details className="settings-help"><summary>导入说明</summary><p>从服务端文件夹导入 JPEG、PNG、WebP、GIF（含子目录）。跳过重复照片，保留源文件；HEIC 等其他格式计入「格式不支持」。</p></details>
       {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
       {!libraries.length && !error ? <p className="text-sm text-muted">没有在线、可写的资源库：先在「资源库」里添加。</p> : null}
       <label className="flex flex-wrap items-center gap-2 text-sm">导入到

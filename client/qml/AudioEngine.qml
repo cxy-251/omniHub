@@ -21,6 +21,37 @@ Item {
     property var track: null          // {index, title, id, ext, offset, duration}
     // 当前曲目的标签：艺人、专辑、风格，以及下载音乐时写进去的 Last.fm 听众、播放、重播率
     property var tags: ({})
+    property var musicRatings: ({})
+    property bool musicCanRate: false
+    property bool musicCanTrash: false
+    signal musicChanged(bool catalog)
+    function refreshMusic() {
+        api.getJSON("/api/media/audio/music/state", function (s) {
+            engine.musicRatings = s.ratings || {}
+            engine.musicCanRate = !!s.can_rate
+            engine.musicCanTrash = !!s.can_trash
+        })
+    }
+    function rateMusic(id, value) {
+        api.send("POST", "/api/media/audio/music/rating", {id: id, rating: value}, function () {
+            engine.refreshMusic()
+            engine.musicChanged(false)
+            engine.refreshMusicQueue()
+        })
+    }
+    function groupArtist(id, main) {
+        api.send("POST", "/api/media/audio/music/artist", {id: id, main: main}, function () { engine.musicChanged(true) })
+    }
+    function refreshMusicQueue() {
+        if (!track || track.id.indexOf(":media_library/audio/music/") < 0) return
+        var id = track.id
+        api.getJSON("/api/media/audio/tracks?path=" + encodeURIComponent(albumId) + "&locate=" + encodeURIComponent(id) + "&limit=1", function (rows, xhr) {
+            if (!engine.track || engine.track.id !== id) return
+            engine.total = parseInt(xhr.getResponseHeader("X-Total-Count") || "0")
+            if (rows.length) engine.position = rows[0].index - 1
+            else engine.stop()
+        })
+    }
     ApiClient { id: tagApi }
     // 当前曲目的歌词：{synced, lines: [{time, text}]}，纯文本的 time 为 -1；lyricIndex 是正在唱的那一行（带时间轴时）
     property var lyrics: ({synced: false, lines: []})
@@ -34,6 +65,7 @@ Item {
         tags = {}
         lyrics = {synced: false, lines: []}
         if (!track) return
+        if (track.id.indexOf(":media_library/audio/music/") >= 0) refreshMusic()
         tagApi.getJSON("/api/media/audio/metadata?path=" + encodeURIComponent(track.id), function (r) { engine.tags = r || {} })
         tagApi.getJSON("/api/media/audio/lyrics?path=" + encodeURIComponent(track.id), function (r) { engine.lyrics = r && r.lines ? r : {synced: false, lines: []} })
     }
@@ -104,7 +136,7 @@ Item {
         var path = "/api/media/audio/tracks?path=" + encodeURIComponent(album) + "&limit=1&offset=" + Math.max(0, pos)
         api.getJSON(path, function (list, xhr) {
             var count = parseInt(xhr.getResponseHeader("X-Total-Count") || "0")
-            if (!list.length) { engine.error = "这张专辑没有可播放的分集"; return }
+            if (!list.length) { engine.error = "所选列表没有可播放的音频"; return }
             engine.albumId = album
             engine.albumTitle = title
             engine.total = count
@@ -172,10 +204,12 @@ Item {
         if (prefs.mode === "single") { mpv.position = 0; mpv.play() }
         else nextMedia()
     }
-    function stop() {
-        save()
-        mpv.source = ""
+    function stop() { stopTrack(false) }
+    function stopRemoved() { stopTrack(true) }
+    function stopTrack(skipSave) {
+        if (!skipSave) save()
         track = null
+        mpv.source = ""
         position = -1
         sleepMinutes = 0; sleepAt = 0
         prefs.lastPosition = -1

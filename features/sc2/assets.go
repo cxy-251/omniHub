@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 )
 
-//go:embed sc2tool.py proton-wine pyproject.toml uv.lock
+//go:embed sc2tool.py resident.py replays.py teams.py starts.py proton-wine pyproject.toml uv.lock
 var files embed.FS
 
 // Prepare 把文件写到 dir（内容不变时不重写），返回 dir。proton-wine 需可执行。
@@ -17,7 +17,7 @@ func Prepare(dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}
-	for _, name := range []string{"sc2tool.py", "proton-wine", "pyproject.toml", "uv.lock"} {
+	for _, name := range []string{"sc2tool.py", "resident.py", "replays.py", "teams.py", "starts.py", "proton-wine", "pyproject.toml", "uv.lock"} {
 		data, err := files.ReadFile(name)
 		if err != nil {
 			return "", err

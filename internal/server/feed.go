@@ -214,18 +214,17 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 	inScope := func(it *feed.Item) bool { return (q.scope == "" || cat.HasTag(it, scopeTag)) && !hasAnyTag(cat, it, denied) }
 	group, byGroup := strings.CutPrefix(q.channel, "group:")
 	tag, byTag := strings.CutPrefix(q.channel, "tag:")
-	if strings.HasPrefix(group, "coll:") { // 相册的图库频道：按图库标签筛（照片的分组是色系）
+	if strings.HasPrefix(group, "sub:") { // 相册的成员/子目录标签：按标签筛（照片的 Group 字段存色系）
 		tag, byTag, byGroup = group, true, false
 	}
 	groupID, tagID := cat.Lookup(group), cat.Lookup(tag)
-	// NSFW 图库的照片（分组为 nsfw:<图库>）只在选中它自己的频道时出现；
-	// 标了 NSFW 的短视频平台（如 X）只在只看这个平台、或选中它的博主时出现
-	nsfwGroups := map[int32]bool{}
+	// 标了 NSFW 的相册图库或短视频平台（如 X）只在只看这个平台、或选中它的频道/博主时出现
 	var nsfwPlatforms []int32
 	marks := r.markedNSFW()
 	for i, name := range cat.Names {
-		if strings.HasPrefix(name, "nsfw:") {
-			nsfwGroups[int32(i)] = true
+		if p, ok := strings.CutPrefix(name, "nsfw:"); ok &&
+			q.scope != "tag:platform:"+p && !(byTag && tag == "platform:"+p) {
+			nsfwPlatforms = append(nsfwPlatforms, int32(i))
 		}
 		if p, ok := strings.CutPrefix(name, "perm:shortvideo/"); ok && marks["shortvideo/"+p] &&
 			q.scope != "tag:platform:"+p && !(byGroup && strings.HasPrefix(group, p+"/")) {
@@ -236,7 +235,7 @@ func (r *Router) feedOrderFor(req *http.Request, domain string, snap *feedSnapsh
 		if !inScope(it) {
 			return false
 		}
-		if (nsfwGroups[it.Group] && !(byGroup && it.Group == groupID)) || hasAnyTag(cat, it, nsfwPlatforms) {
+		if hasAnyTag(cat, it, nsfwPlatforms) {
 			return false
 		}
 		// 编码过滤只针对视频（图集没有编码）；未探测编码的视频也排除。
@@ -771,8 +770,32 @@ func hexTags(hex string) []string {
 	return []string{fmt.Sprintf("hue:%d", int(h/30)%12), light}
 }
 
-// items 列出各资源库各图库的照片。根目录相册的照片分组是色系；其他图库多一个 coll:<图库> 标签；
-// NSFW 图库的照片分组为 nsfw:<图库>（只在它自己的频道出现，见 feedOrderFor）。
+// photoSubcategory 从原图相对路径（如 "All photos/1. Nayeon/..." 或 "<作者>/..."）提取子分类（成员名/合集名）。
+func photoSubcategory(filename string) string {
+	parts := strings.Split(filepath.ToSlash(filename), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	dir := parts[0]
+	if strings.EqualFold(dir, "All photos") && len(parts) >= 3 {
+		dir = parts[1]
+	}
+	return strings.TrimSpace(dir)
+}
+
+func subcategoryLabel(dir string) string {
+	if _, after, ok := strings.Cut(dir, ". "); ok {
+		if strings.EqualFold(after, "Group photos") {
+			return "Group"
+		}
+		return after
+	}
+	return dir
+}
+
+// items 列出各资源库各图库的照片。每个图库是一个平台（platform:<图库名>），照片分组为色系；
+// 含目录层级的照片额外打上 sub:<图库名>/<子目录> 标签（如成员名），排在颜色标签之前；
+// NSFW 图库带 nsfw:<图库名> 标签（只在选中该平台时出现，见 feedOrderFor）。
 func (g galleryFeed) items(req *http.Request) (*feed.Catalog, error) {
 	libs, err := g.r.onlineLibraries()
 	if err != nil {
@@ -807,18 +830,17 @@ func (g galleryFeed) items(req *http.Request) (*feed.Catalog, error) {
 					shape = "shape:landscape"
 				}
 				color := fmt.Sprintf("color:%d", p.ColorFamily)
-				tags := append([]string{color, shape}, hexTags(p.ColorHex)...)
-				group := color
+				tags := append([]string{color, shape, "platform:" + c.Name}, hexTags(p.ColorHex)...)
+				if sub := photoSubcategory(p.Filename); sub != "" {
+					tags = append(tags, "sub:"+c.Name+"/"+sub)
+				}
 				if c.Key != "" {
 					tags = append(tags, "perm:gallery/"+c.Key)
 				}
-				switch {
-				case c.NSFW:
-					group = "nsfw:" + c.Key
-				case c.Key != "":
-					tags = append(tags, "coll:"+c.Key)
+				if c.NSFW {
+					tags = append(tags, "nsfw:"+c.Name)
 				}
-				cat.Add(p.ID, lib.ID, group, tags, 0, ratio)
+				cat.Add(p.ID, lib.ID, color, tags, 0, ratio)
 			}
 		}
 	}
@@ -875,66 +897,98 @@ func (g galleryFeed) render(req *http.Request, items []feed.Item, liked map[stri
 
 func (g galleryFeed) groups(req *http.Request, cat *feed.Catalog, allowed func(*feed.Item) bool) any {
 	type group struct {
-		ID    string `json:"id"`
-		Label string `json:"label"`
-		Count int    `json:"count"`
+		ID       string `json:"id"`
+		Label    string `json:"label"`
+		Platform string `json:"platform,omitempty"`
+		Count    int    `json:"count"`
 	}
-	counts := make([]int, len(colorNames))
-	// 按分组编号计数，再换成色系号（避免对 10 万条逐个解析字符串）。
-	byGroup := map[int32]int{}
-	for i := range cat.Items {
-		if allowed(&cat.Items[i]) {
-			byGroup[cat.Items[i].Group]++
-		}
-	}
-	for gid, n := range byGroup {
+	colorOf := map[int32]int{}
+	platformOf := map[int32]string{}
+	subOf := map[int32]string{}
+	nsfwTag := map[int32]bool{}
+	for i, name := range cat.Names {
 		var c int
-		if _, err := fmt.Sscanf(cat.Names[gid], "color:%d", &c); err == nil && c >= 0 && c < len(counts) {
-			counts[c] += n
+		if _, err := fmt.Sscanf(name, "color:%d", &c); err == nil && c >= 0 && c < len(colorNames) {
+			colorOf[int32(i)] = c + 1
+		} else if p, ok := strings.CutPrefix(name, "platform:"); ok {
+			platformOf[int32(i)] = p
+		} else if strings.HasPrefix(name, "sub:") {
+			subOf[int32(i)] = name
+		} else if strings.HasPrefix(name, "nsfw:") {
+			nsfwTag[int32(i)] = true
 		}
 	}
-	out := []group{}
-	for c, n := range counts {
-		if n > 0 {
-			out = append(out, group{ID: fmt.Sprintf("color:%d", c), Label: colorNames[c], Count: n})
-		}
-	}
-	// 图库频道（根目录的相册不单列）：普通图库按 coll: 标签数，NSFW 图库按 nsfw: 分组数
-	names := map[string]string{}
-	if libs, err := g.r.onlineLibraries(); err == nil {
-		for _, lib := range libs {
-			for _, c := range g.r.galleryCollections(lib) {
-				names[c.Key] = c.Name
-			}
-		}
-	}
-	colls := map[string]int{}
+	allCounts := make([]int, len(colorNames))
+	platCounts := map[string][]int{}
+	subCounts := map[string]int{}
 	for i := range cat.Items {
 		it := &cat.Items[i]
 		if !allowed(it) {
 			continue
 		}
-		if key, ok := strings.CutPrefix(cat.Names[it.Group], "nsfw:"); ok {
-			colls["nsfw:"+key]++
-		}
+		c := colorOf[it.Group] - 1
+		var plat string
+		var isNSFW bool
 		for _, t := range it.Tags {
-			if t >= 0 && strings.HasPrefix(cat.Names[t], "coll:") {
-				colls[cat.Names[t]]++
+			if p, ok := platformOf[t]; ok {
+				plat = p
+			} else if sub, ok := subOf[t]; ok {
+				subCounts[sub]++
+			} else if nsfwTag[t] {
+				isNSFW = true
 			}
 		}
-	}
-	keys := make([]string, 0, len(colls))
-	for k := range colls {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		key := k[strings.Index(k, ":")+1:]
-		label := "图库 · " + names[key]
-		if strings.HasPrefix(k, "nsfw:") {
-			label += "（NSFW）"
+		if plat != "" {
+			if platCounts[plat] == nil {
+				platCounts[plat] = make([]int, len(colorNames))
+			}
+			if c >= 0 {
+				platCounts[plat][c]++
+			}
 		}
-		out = append(out, group{ID: k, Label: label, Count: colls[k]})
+		if !isNSFW && c >= 0 {
+			allCounts[c]++
+		}
+	}
+	out := []group{}
+	for c, n := range allCounts {
+		if n > 0 {
+			out = append(out, group{ID: fmt.Sprintf("color:%d", c), Label: colorNames[c], Count: n})
+		}
+	}
+	var plats []string
+	for p := range platCounts {
+		plats = append(plats, p)
+	}
+	sort.Slice(plats, func(i, j int) bool {
+		if (plats[i] == "相册") != (plats[j] == "相册") {
+			return plats[i] == "相册"
+		}
+		return plats[i] < plats[j]
+	})
+	var subKeys []string
+	for k := range subCounts {
+		subKeys = append(subKeys, k)
+	}
+	sort.Strings(subKeys)
+	for _, p := range plats {
+		added := false
+		prefix := "sub:" + p + "/"
+		for _, k := range subKeys {
+			if sub, ok := strings.CutPrefix(k, prefix); ok && subCounts[k] > 0 {
+				out = append(out, group{ID: k, Label: subcategoryLabel(sub), Platform: p, Count: subCounts[k]})
+				added = true
+			}
+		}
+		for c, n := range platCounts[p] {
+			if n > 0 {
+				out = append(out, group{ID: fmt.Sprintf("color:%d", c), Label: colorNames[c], Platform: p, Count: n})
+				added = true
+			}
+		}
+		if !added {
+			out = append(out, group{ID: "color:0", Label: colorNames[0], Platform: p, Count: 0})
+		}
 	}
 	return out
 }

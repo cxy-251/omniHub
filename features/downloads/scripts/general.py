@@ -926,6 +926,8 @@ def enrich_music(files, known, batch, album_of, music_info):
         artist, album, number, track = place
         fields = source_fields(meta)
         ytm = music_info.get(meta.get("id")) or {}
+        if ytm.get("owner"):
+            fields["MUSIC_REQUESTED_ARTIST"] = ytm["owner"]
         # 年份用发行年份（yt-dlp 写进 DATE 的是视频上传日期）
         std = {"artist": artist, "title": track, "album": album, "number": number, "date": str(ytm.get("year") or "")}
         if ytm.get("year"):   # 纯音轨版的上传日期不是发行日期，用专辑的发行年份

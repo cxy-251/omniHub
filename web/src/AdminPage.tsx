@@ -14,7 +14,7 @@ const button = 'rounded-md border border-line px-3 py-2 text-sm hover:border-pri
 
 // AdminPage renders untrusted account/device labels as text and loads data only
 // on entry or explicit changes. Credentials remain in HttpOnly browser cookies.
-export default function AdminPage() {
+export default function AdminPage({ view }: { view: 'permissions' | 'users' | 'devices' }) {
   const [offset, setOffset] = useState(0), [more, setMore] = useState(false), [currentID, setCurrentID] = useState(0);
   const [username, setUsername] = useState(''), [password, setPassword] = useState(''), [role, setRole] = useState('user'), [newLevel, setNewLevel] = useState(1);
   const [passwordUser, setPasswordUser] = useState<number>(), [replacement, setReplacement] = useState('');
@@ -22,6 +22,7 @@ export default function AdminPage() {
   const [permissions, setPermissions] = useState<Record<string, number>>({});
   const [subsections, setSubsections] = useState<Subsection[]>([]);
   const [devices, setDevices] = useState<Devices>();
+  const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState(''), [revision, setRevision] = useState(0);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [pending, setPending] = useState(false);
   const lifetime = useRef<AbortController | null>(null);
@@ -31,11 +32,28 @@ export default function AdminPage() {
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    Promise.all([api<Record<string, number>>('/api/admin/permissions', { signal: controller.signal }), request(`/api/admin/users?limit=32&offset=${offset}`, { signal: controller.signal }).then(async response => ({ rows: await response.json() as (User & { status: string })[], more: response.headers.get('X-Has-More') === 'true' })), api<Devices>('/api/admin/devices', { signal: controller.signal }), api<Status>('/api/auth/status', { signal: controller.signal }), api<Subsection[]>('/api/admin/subsections', { signal: controller.signal })])
-      .then(([matrix, accounts, remembered, status, subs]) => { setPermissions(matrix); setSubsections(subs ?? []); setUsers(accounts.rows); setMore(accounts.more); setCurrentID(status.user.id); setDevices(remembered); })
-      .catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
+    setLoaded(false);
+    const options = { signal: controller.signal };
+    async function load() {
+      if (view === 'permissions') {
+        const [matrix, subs] = await Promise.all([api<Record<string, number>>('/api/admin/permissions', options), api<Subsection[]>('/api/admin/subsections', options)]);
+        if (controller.signal.aborted) return;
+        setPermissions(matrix); setSubsections(subs ?? []);
+      } else if (view === 'users') {
+        const [response, status] = await Promise.all([request(`/api/admin/users?limit=32&offset=${offset}`, options), api<Status>('/api/auth/status', options)]);
+        const rows = await response.json();
+        if (controller.signal.aborted) return;
+        setUsers(rows ?? []); setMore(response.headers.get('X-Has-More') === 'true'); setCurrentID(status.user.id);
+      } else {
+        const remembered = await api<Devices>('/api/admin/devices', options);
+        if (controller.signal.aborted) return;
+        setDevices({ ...remembered, devices: remembered.devices ?? [] });
+      }
+      setLoaded(true);
+    }
+    void load().catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
-  }, [revision, offset]);
+  }, [revision, offset, view]);
 
   async function change(path: string, body?: unknown, method = 'POST', reload = false) {
     const signal = lifetime.current?.signal; if (!signal || pending) return;
@@ -50,40 +68,40 @@ export default function AdminPage() {
   return <div className="space-y-6">
     <div className="flex items-center gap-3"><button className={button} disabled={pending} onClick={() => { setError(''); setRevision(value => value + 1); }}>刷新管理状态</button>{notice ? <p role="status" className="text-muted">{notice}</p> : null}</div>
     {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
-    <section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-1 text-lg">分区最低等级</h2>
+    {view === 'permissions' ? <section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-1 text-lg">分区最低等级</h2>
       <p className="mb-3 text-sm text-muted">选择后立即保存。「游客」表示局域网内不登录也能看到。</p>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{sections.map(([id, label]) => <label key={id} className="flex items-center justify-between gap-2 text-sm">{label}
-        <select className={input} disabled={pending || !devices} value={permissions[id] ?? 0} onChange={e => { const level = Number(e.target.value); setPermissions(old => ({ ...old, [id]: level })); void change('/api/admin/permissions', { section_id: id, required_level: level }); }}>
+        <select className={input} disabled={pending || !loaded} value={permissions[id] ?? 0} onChange={e => { const level = Number(e.target.value); setPermissions(old => ({ ...old, [id]: level })); void change('/api/admin/permissions', { section_id: id, required_level: level }); }}>
           {levels.map(level => <option key={level} value={level}>{levelNames[level]}</option>)}</select></label>)}</div>
       {subsections.length ? <>
         <h3 className="mb-1 mt-4 font-semibold">子分区</h3>
         <p className="mb-2 text-sm text-muted">资源库里的子目录（如 text/novels/nsfw、短视频平台 shortvideo/X、相册图库 gallery/X）和各个工具。灰色为默认值：子目录沿用所属分区（nsfw 目录、标了 NSFW 的平台和图库默认仅管理员）；剪贴板、共享文件默认「用户」，主机状态、网络默认「管理员」。</p>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{subsections.map(sub => <label key={sub.id} className="flex items-center justify-between gap-2 text-sm">
           <span className={`min-w-0 truncate ${sub.explicit ? '' : 'text-muted'}`} title={sub.id}>{subsectionNames[sub.id] ?? sub.id}{sub.explicit ? '' : '（默认）'}</span>
-          <select className={input} disabled={pending || !devices} value={sub.required_level} onChange={e => { const level = Number(e.target.value); setSubsections(old => old.map(x => x.id === sub.id ? { ...x, required_level: level, explicit: true } : x)); void change('/api/admin/permissions', { section_id: sub.id, required_level: level }); }}>
+          <select className={input} disabled={pending || !loaded} value={sub.required_level} onChange={e => { const level = Number(e.target.value); setSubsections(old => old.map(x => x.id === sub.id ? { ...x, required_level: level, explicit: true } : x)); void change('/api/admin/permissions', { section_id: sub.id, required_level: level }); }}>
             {levels.map(level => <option key={level} value={level}>{levelNames[level]}</option>)}</select></label>)}</div>
       </> : null}
-    </section>
-    <section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-4 text-lg">创建用户</h2>
+    </section> : null}
+    {view === 'users' ? <><section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-4 text-lg">创建用户</h2>
       <form className="flex flex-wrap items-end gap-3" onSubmit={event => { event.preventDefault(); void change('/api/admin/users/create', { username: username.trim(), password, role, level: role === 'admin' ? 99 : newLevel }).then(ok => { setPassword(''); if (ok) setUsername(''); }); }}>
         <label>用户名 <input className={input} required maxLength={64} value={username} onChange={e => setUsername(e.target.value)} autoComplete="off" /></label>
         <label>初始密码 <input className={input} type="password" required maxLength={72} value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password" /></label>
         <label>角色 <select className={input} value={role} onChange={e => setRole(e.target.value)}><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
         {role === 'user' ? <label>等级 <select className={input} value={newLevel} onChange={e => setNewLevel(Number(e.target.value))}>{levels.filter(value => value !== 99).map(value => <option key={value} value={value}>{levelNames[value]}</option>)}</select></label> : null}
-        <button className={button} disabled={pending || !devices}>创建</button>
+        <button className={button} disabled={pending || !loaded}>创建</button>
       </form>
     </section>
     <section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-4 text-lg">用户等级与状态</h2><p className="mb-3 text-sm text-muted">修改会撤销该账号的普通会话与信任设备。管理员等级固定为 99。</p>
-      <div className="space-y-3">{users.map(user => <div key={user.id} className="flex flex-wrap items-center gap-3"><span className="min-w-40 break-all">{user.username} · {user.role} · {user.status}</span><select aria-label={`${user.username} 的等级`} className={input} disabled={user.role === 'admin'} value={user.level} onChange={e => setUsers(old => old.map(item => item.id === user.id ? { ...item, level: Number(e.target.value) } : item))}>{levels.map(level => <option key={level} value={level}>{levelNames[level]}</option>)}</select><button className={button} disabled={pending || user.role === 'admin'} onClick={() => void change('/api/admin/users', { user_id: user.id, level: user.level })}>保存并撤销凭证</button><button className={button} disabled={pending} onClick={() => void change('/api/admin/users/status', { user_id: user.id, status: user.status === 'active' ? 'disabled' : 'active' }, 'POST', user.id === currentID)}>{user.status === 'active' ? '停用账号' : '恢复账号'}</button><button className={button} disabled={pending} onClick={() => { setPasswordUser(user.id); setReplacement(''); }}>重置密码</button></div>)}</div>
+      <div className="space-y-3">{users.map(user => <div key={user.id} className="flex flex-wrap items-center gap-3"><span className="min-w-40 break-all">{user.username} · {user.role} · {user.status}</span><select aria-label={`${user.username} 的等级`} className={input} disabled={pending || !loaded || user.role === 'admin'} value={user.level} onChange={e => setUsers(old => old.map(item => item.id === user.id ? { ...item, level: Number(e.target.value) } : item))}>{levels.map(level => <option key={level} value={level}>{levelNames[level]}</option>)}</select><button className={button} disabled={pending || user.role === 'admin'} onClick={() => void change('/api/admin/users', { user_id: user.id, level: user.level })}>保存并撤销凭证</button><button className={button} disabled={pending} onClick={() => void change('/api/admin/users/status', { user_id: user.id, status: user.status === 'active' ? 'disabled' : 'active' }, 'POST', user.id === currentID)}>{user.status === 'active' ? '停用账号' : '恢复账号'}</button><button className={button} disabled={pending} onClick={() => { setPasswordUser(user.id); setReplacement(''); }}>重置密码</button></div>)}</div>
       <div className="mt-4 flex gap-3"><button className={button} disabled={pending || offset === 0} onClick={() => setOffset(value => Math.max(0, value - 32))}>上一页</button><button className={button} disabled={pending || !more} onClick={() => setOffset(value => value + 32)}>下一页</button></div>
       {passwordUser !== undefined ? <form className="mt-4 flex flex-wrap items-center gap-3" onSubmit={event => { event.preventDefault(); void change('/api/admin/users/password', { user_id: passwordUser, password: replacement }, 'POST', passwordUser === currentID).then(ok => { setReplacement(''); if (ok) setPasswordUser(undefined); }); }}><label>账号 #{passwordUser} 的新密码 <input className={input} type="password" required maxLength={72} autoComplete="new-password" value={replacement} onChange={e => setReplacement(e.target.value)} /></label><button className={button} disabled={pending}>更新并撤销全部凭证</button><button type="button" className={button} onClick={() => { setPasswordUser(undefined); setReplacement(''); }}>取消</button></form> : null}
-    </section>
-    <section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-3 text-lg">局域网信任设备</h2>
+    </section></> : null}
+    {view === 'devices' ? <section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-3 text-lg">局域网信任设备</h2>
       <p className="mb-3 text-sm text-muted">信任当前浏览器 {devices?.lifetime_days ?? 180} 天，仅在直接 RFC1918 IPv4 局域网访问时免登录。登记 IP 用于辨认，不作为设备身份；地址变化后凭证仍可在局域网使用。公网、隧道与代理不会使用此凭证。</p>
       <div className="mb-4 flex flex-wrap items-center gap-3"><label>设备名称 <input className={input} maxLength={128} value={name} onChange={e => setName(e.target.value)} placeholder="例如：客厅平板" /></label><button className={button} disabled={pending || !devices?.can_enroll || !name.trim()} onClick={() => void change('/api/admin/devices', { name }, 'POST', true)}>信任当前浏览器</button></div>
       {!devices?.can_enroll ? <p className="mb-3 text-sm text-muted">登记需要通过局域网私有 IPv4 地址访问并使用账号密码登录；已信任的设备需重新密码登录后才能登记新凭证。</p> : null}
       <div className="space-y-3">{devices?.devices.map(device => <div key={device.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line p-3"><div className="min-w-0"><p className="break-all">{device.device_name}{device.id === devices.current_device_id ? ' · 当前浏览器' : ''}</p><p className="text-sm text-muted">{device.username} · 登记 IP {device.ip} · 到期 {new Date(device.expires_at).toLocaleString()}</p></div><button className={button} disabled={pending} onClick={() => void change(`/api/admin/devices?id=${encodeURIComponent(device.id)}`, undefined, 'DELETE', device.id === devices.current_device_id)}>撤销信任</button></div>)}</div>
       {devices && !devices.devices.length ? <p className="text-muted">尚无已登记设备。</p> : null}
-    </section>
+    </section> : null}
   </div>;
 }

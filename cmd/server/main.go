@@ -26,6 +26,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "--bt-manga" {
+		if err := runBTManga(os.Args[2]); err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		return
+	}
 	if handled, err := runMangaCommand(os.Args[1:]); handled {
 		if err != nil {
 			log.Print(err)

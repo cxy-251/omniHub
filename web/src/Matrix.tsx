@@ -3,6 +3,7 @@ import { api } from './api';
 import { webCodecs } from './codecs';
 import { feedPath, feedQuery, newSeed, sendEvent, trash as trashItem, like, useGroups, type Domain } from './feed';
 import { useAudio } from './AudioEngine';
+import { mangaHandlesKeyboard } from './mangaState';
 import { chip, explain, notify, select, store, stored } from './ui';
 
 // 多联放映（短视频与相册共用，与桌面端一致）：2/3 屏并排，只放竖屏内容。
@@ -13,6 +14,7 @@ type Item = { id: string; library_id: string; collection?: string; liked?: boole
 type Slot = { channel: string; shuffle: boolean; muted: boolean; seed: number; index: number; itemId: string; pos: number };
 type Prefs = { screens: number; focusAudio: boolean; slideSeconds: number; slots: Slot[] };
 type Album = { id: string; title: string };
+type Artist = Album & { main_artist: boolean };
 
 const newSlot = (): Slot => ({ channel: 'recommend', shuffle: true, muted: false, seed: newSeed(), index: 0, itemId: '', pos: 0 });
 const shortcuts: [string, string, boolean?][] = [
@@ -129,11 +131,27 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
   const accompanying = !!audio?.playing;
   const { groups, pins } = useGroups(domain, true);
   const [albums, setAlbums] = useState<Album[]>([]);
-  useEffect(() => { api<Album[]>('/api/media/audio/albums?limit=100').then(setAlbums).catch(() => undefined); }, []);
+  const [artists, setArtists] = useState<Artist[]>([]);
+  useEffect(() => {
+    const controller = new AbortController();
+    api<Album[]>('/api/media/audio/albums?limit=100', { signal: controller.signal }).then(setAlbums).catch(() => undefined);
+    return () => controller.abort();
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    api<Artist[]>('/api/media/audio/artists', { signal: controller.signal }).then(setArtists).catch(() => undefined);
+    return () => controller.abort();
+  }, [audio?.musicCatalogVersion]);
+  const musicCollections: Album[] = artists.length ? [
+    { id: '@music/liked', title: '我的点赞' },
+  ] : [];
+  const mainArtists = artists.filter(a => a.main_artist);
+  const currentUnlisted = !!audio?.track && ![...musicCollections, ...mainArtists, ...albums].some(a => a.id === audio.albumId);
   const [focused, setFocused] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [help, setHelp] = useState(false);
   const [toast, setToast] = useState(() => stored('omnihub.matrix.seenHelp', false) ? '' : '按 ? 查看快捷键');
+  useEffect(() => { if (audio?.error) setToast(audio.error); }, [audio?.error]);
   useEffect(() => store('omnihub.matrix.seenHelp', true), []);
   const [trashArmed, setTrashArmed] = useState(false);
   const [barShown, setBarShown] = useState(true);
@@ -164,10 +182,11 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
   const focusedHandle = handles.current[focused];
 
   const channels = [{ value: 'recommend', label: '推荐' }, { value: 'liked', label: '♥ 我的点赞' }];
-  if (isVideo) for (const p of [...new Set(groups.map(g => g.platform))]) if (p) channels.push({ value: `tag:platform:${p}`, label: p });
+  for (const p of [...new Set(groups.map(g => g.platform))]) if (p) channels.push({ value: `tag:platform:${p}`, label: p });
+  const shownGroups = isVideo ? groups : groups.filter(g => !g.platform && g.count > 0);
   const groupLabel = (g: { label: string; platform?: string; count: number }) => `${g.platform ? `${g.platform} · ` : ''}${g.label}（${g.count}）`;
-  for (const id of pins) { const g = groups.find(x => x.id === id); if (g) channels.push({ value: `group:${g.id}`, label: `📌 ${groupLabel(g)}` }); }
-  for (const g of groups) if (!pins.includes(g.id)) channels.push({ value: `group:${g.id}`, label: groupLabel(g) });
+  for (const id of pins) { const g = shownGroups.find(x => x.id === id); if (g) channels.push({ value: `group:${g.id}`, label: `📌 ${groupLabel(g)}` }); }
+  for (const g of shownGroups) if (!pins.includes(g.id)) channels.push({ value: `group:${g.id}`, label: groupLabel(g) });
 
   const trashFocused = () => {
     if (!focusedHandle?.item) return;
@@ -187,7 +206,7 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
     else if (k === 'f' || k === 'F') toggleFullscreen();
     else if (k >= '1' && k <= String(prefs.screens)) setFocused(Number(k) - 1);
     else if (k === 'p' || k === 'P') setPlaying(v => !v);
-    else if (k === 'b' || k === 'B') { if (audio?.track) audio.toggle(); else setToast('先在顶栏选一张伴听专辑'); }
+    else if (k === 'b' || k === 'B') { if (audio?.track) audio.toggle(); else setToast('先在顶栏选择伴听音乐或有声书'); }
     else if (!h) return;
     else if (k === ' ') h.togglePause();
     else if (k === 'ArrowRight') h.step(1);
@@ -200,13 +219,13 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
     e.preventDefault();
   };
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if ((e.target as HTMLElement)?.tagName === 'SELECT' || (e.target as HTMLElement)?.tagName === 'INPUT') return; keys.current(e); };
+    const handler = (e: KeyboardEvent) => { if (mangaHandlesKeyboard() || (e.target as HTMLElement)?.tagName === 'SELECT' || (e.target as HTMLElement)?.tagName === 'INPUT') return; keys.current(e); };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // 铺满整个窗口（omniHub 顶栏也盖住），不随页面滚动；工具条藏在顶边。漫画阅读器停靠在右侧时让出它的宽度。
-  return <div ref={container} className="fixed inset-y-0 left-0 z-30 flex flex-col bg-black" style={{ right: 'var(--manga-dock, 0px)' }}>
+  // 随导航收起释放空间，避免侧栏盖住第一屏；浏览器全屏时不保留外部导航/播放器边距。
+  return <div ref={container} className="matrix-workspace fixed top-0 z-30 flex flex-col bg-black" style={{ right: 'var(--manga-dock, 0px)' }}>
     <div className="absolute inset-x-0 top-0 z-10 h-3" onMouseEnter={() => revealBar()} onClick={() => revealBar()} />
     <div ref={bar} className={`absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-1.5 bg-panel/95 px-2 py-1 ${pinned || barShown ? '' : 'hidden'}`}
       onMouseEnter={() => { overBar.current = true; setBarShown(true); window.clearTimeout(hideTimer.current); }}
@@ -230,14 +249,27 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
       {isVideo ? <button className={chip(cfg.muted)} onClick={() => setSlot(focused, { muted: !cfg.muted })} title="M">{cfg.muted ? '🔇' : '🔊'}</button> : null}
       <button className={chip(!!focusedHandle?.item?.liked)} disabled={!focusedHandle?.item} onClick={() => focusedHandle?.toggleLike()} title="Z">{focusedHandle?.item?.liked ? '♥ 已赞' : '♡ 点赞'}</button>
       <button className={chip(trashArmed)} disabled={!focusedHandle?.item} onClick={trashFocused} title="Delete 按两次">{trashArmed ? '再点一次确认' : '🗑 回收站'}</button>
-      {albums.length ? <select className={`${select} max-w-44`} value={accompanying ? audio!.albumId : ''} title="伴听：选一张音声专辑（B 暂停/继续）" onChange={e => {
-        const a = albums.find(x => x.id === e.target.value);
-        if (!a) audio?.track && audio.playing && audio.toggle();
-        else if (audio?.albumId === a.id && audio.track) { if (!audio.playing) audio.toggle(); }
-        else audio?.continueAlbum(a.id, a.title);
+      {audio && (artists.length || albums.length || currentUnlisted) ? <select aria-label="伴听" className={`${select} max-w-44`} value={accompanying ? audio.albumId : ''} title="伴听：音乐或有声书（B 暂停/继续）" onChange={e => {
+        const id = e.target.value;
+        if (!id) { if (audio.playing) audio.toggle(); }
+        else if (audio.albumId === id && audio.track) { if (!audio.playing) audio.toggle(); }
+        else {
+          const music = [...musicCollections, ...mainArtists].find(a => a.id === id);
+          if (music) audio.open(music.id, music.title, 0, true);
+          else { const book = albums.find(a => a.id === id); if (book) audio.continueAlbum(book.id, book.title); }
+        }
       }}>
         <option value="">🎧 伴听：关</option>
-        {albums.map(a => <option key={a.id} value={a.id}>🎧 {a.title}</option>)}
+        {artists.length ? <optgroup label="音乐">
+          {musicCollections.map(a => <option key={a.id} value={a.id}>音乐 · {a.title}</option>)}
+        </optgroup> : null}
+        {mainArtists.length ? <optgroup label="常听歌手">
+          {mainArtists.map(a => <option key={a.id} value={a.id}>音乐 · {a.title}</option>)}
+        </optgroup> : null}
+        {albums.length ? <optgroup label="有声书">
+          {albums.map(a => <option key={a.id} value={a.id}>有声书 · {a.title}</option>)}
+        </optgroup> : null}
+        {currentUnlisted ? <option value={audio.albumId}>当前 · {audio.albumTitle}</option> : null}
       </select> : null}
       <button className={`${chip(help)} ml-auto`} onClick={() => setHelp(v => !v)} title="? 或 H">⌨ 快捷键</button>
       <button className={chip(false)} onClick={toggleFullscreen} title="F">全屏</button>

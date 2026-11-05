@@ -161,7 +161,7 @@ func (d *DB) setPassword(ctx context.Context, id int64, password string, proof *
 // CreateVerifiedSession closes the verification/reset race: a password checked
 // against an older hash cannot create a fresh session after reset or disable.
 func (d *DB) CreateVerifiedSession(ctx context.Context, user *User, token string, duration time.Duration) error {
-	if user == nil || user.ID <= 0 || user.PasswordHash == "" || token == "" || duration <= 0 || duration > 24*time.Hour {
+	if user == nil || user.ID <= 0 || user.PasswordHash == "" || token == "" || duration <= 0 || duration > time.Duration(MaxSessionIdleDays)*24*time.Hour {
 		return ErrAccountInput
 	}
 	added, err := d.db.ExecContext(ctx, `INSERT INTO user_sessions(token_hash,user_id,expires_at) SELECT ?,id,? FROM users WHERE id=? AND password_hash=? AND auth_version=? AND status='active'`, HashToken(token), time.Now().UTC().Add(duration).Format(time.RFC3339), user.ID, user.PasswordHash, user.AuthVersion)

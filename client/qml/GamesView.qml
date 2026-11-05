@@ -8,6 +8,16 @@ import QtCore
 Item {
     id: view
 
+    property bool sc2Requested: false
+    signal sc2Opened()
+    signal replaysRequested()
+    function selectSC2() {
+        if (!sc2Requested) return
+        var g = gamesList.find(function (x) { return x.kind === "sc2" })
+        if (g) { category = "wine"; selected = g; sc2Opened() }
+    }
+    onSc2RequestedChanged: selectSC2()
+    onGamesListChanged: selectSC2()
     property var gamesList: []
     property var active: null          // 正在运行的游戏会话
     property var selected: null
@@ -54,13 +64,13 @@ Item {
         return gamesList.filter(function (g) { return g.category === category && (category !== "retro" || !prefs.retroGroup || franchiseOf(g) === prefs.retroGroup) })
     }
 
-    function request(method, path, body, done) {
+    function request(method, path, body, done, failed) {
         var url = backendApi.apiUrl(path)
         if (!url) { view.error = "无法连接 omniHub 服务"; return }
         var xhr = new XMLHttpRequest()
         xhr.onreadystatechange = function () {
             if (xhr.readyState !== XMLHttpRequest.DONE || !view) return
-            if (xhr.status < 200 || xhr.status >= 300) { view.error = xhr.responseText.trim() || ("请求失败（" + xhr.status + "）"); view.busy = false; return }
+            if (xhr.status < 200 || xhr.status >= 300) { view.error = xhr.responseText.trim() || ("请求失败（" + xhr.status + "）"); view.busy = false; if (failed) failed(view.error); return }
             view.error = ""
             done(xhr.responseText ? JSON.parse(xhr.responseText) : null)
         }
@@ -251,7 +261,7 @@ Item {
                 Layout.fillHeight: true
                 active: !!(view.selected && view.selected.kind === "sc2")
                 visible: active
-                sourceComponent: Component { SC2Panel { request: view.request; game: view.selected; onFavoriteToggled: view.toggleFavorite(view.selected) } }
+                sourceComponent: Component { SC2Panel { request: view.request; game: view.selected; onReplaysRequested: view.replaysRequested(); onFavoriteToggled: view.toggleFavorite(view.selected) } }
             }
             // 详情
             Rectangle {

@@ -51,7 +51,7 @@ export default function LibraryManager({ onChanged }: { onChanged: (name?: strin
   }
 
   return <section className="space-y-5">
-    <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-semibold">资源库</h2><button className={button} disabled={pending} onClick={() => void perform<Snapshot>('/api/library/refresh', {}, update)}>重新检测与恢复</button></div>
+    <button className={button} disabled={pending} onClick={() => void perform<Snapshot>('/api/library/refresh', {}, update)}>重新检测与恢复</button>
     <p className="text-sm text-muted">添加、移除立即生效，只改变配置，不动库内文件。主库迁移会暂停当前播放。</p>
     {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
     {snapshot ? <div className="rounded-lg border border-line bg-panel p-4"><p>全局状态：{snapshot.state_ready ? '可用' : '离线，等待原库恢复'}</p><p className="mt-2 break-all text-sm text-muted">{snapshot.state_directory}</p>{snapshot.state_error ? <p className="mt-2 text-danger">{snapshot.state_error}</p> : null}</div> : <p role="status">正在读取配置…</p>}

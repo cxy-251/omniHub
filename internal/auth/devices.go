@@ -206,6 +206,7 @@ func (d *DB) TrustedUserByHash(ctx context.Context, hash string) (*User, string,
 
 // ListDevices returns bounded safe metadata, never token digests or credentials.
 func (d *DB) ListDevices(ctx context.Context) (devices []TrustedDevice, result error) {
+	devices = make([]TrustedDevice, 0)
 	rows, err := d.db.QueryContext(ctx, `SELECT t.device_id,t.user_id,u.username,t.device_name,t.ip,t.created_at,t.expires_at FROM trusted_devices t JOIN users u ON u.id=t.user_id WHERE t.device_id!='' ORDER BY t.created_at DESC,t.device_id LIMIT 65`)
 	if err != nil {
 		return nil, err

@@ -15,11 +15,28 @@ Item {
     property var audioEngine: null          // 全局音声引擎，交给多联放映做伴听
     property bool matrixWindowOpen: false
     signal matrixWindowRequested()
-    Settings { id: viewPrefs; category: "gallery"; property string channel: "recommend"; property string mode: "browse" }
+    Settings { id: viewPrefs; category: "gallery"; property string channel: "recommend"; property string platform: ""; property string mode: "browse" }
     property alias channel: viewPrefs.channel
+    property alias platform: viewPrefs.platform
     property alias mode: viewPrefs.mode       // browse | matrix
 
     FeedApi { id: feed; domain: "gallery" }
+    readonly property var platforms: {
+        var seen = {}, out = []
+        feed.groups.forEach(function (g) { if (g.platform && !seen[g.platform]) { seen[g.platform] = true; out.push(g.platform) } })
+        return out
+    }
+    function pickPlatform(p) {
+        platform = p
+        if (channel.indexOf("group:") === 0 && !feed.groups.some(function (g) { return "group:" + g.id === channel && (g.platform || "") === p && g.count > 0 })) channel = "recommend"
+    }
+    Connections {
+        target: feed
+        function onGroupsChanged() {
+            if (view.channel.indexOf("group:coll:") === 0 || view.channel.indexOf("group:nsfw:") === 0) view.channel = "recommend"
+            if (view.platform && feed.groups.length && view.platforms.indexOf(view.platform) < 0) view.platform = ""
+        }
+    }
     property var likedOverride: ({})
     function isLiked(photo) { return photo && (photo.id in likedOverride ? likedOverride[photo.id] : !!photo.liked) }
     function toggleLike(photo) {
@@ -28,7 +45,10 @@ Item {
     }
     // 移到回收站 / 从回收站恢复后，列表与排版都要重取（序号变了）。
     function reload() { paged.reset(); layout.source = ""; layout.source = view.ratiosUrl() }
-    function ratiosUrl() { return backendApi.apiUrl(feed.path("ratios") + "?channel=" + encodeURIComponent(view.channel) + "&seed=" + feed.seed) }
+    function ratiosUrl() {
+        return backendApi.apiUrl(feed.path("ratios") + "?channel=" + encodeURIComponent(view.channel) + "&seed=" + feed.seed
+            + (view.platform ? "&scope=" + encodeURIComponent("tag:platform:" + view.platform) : ""))
+    }
 
     function apiQuery(path, photo) {
         return backendApi.apiUrl(path + "?library_id=" + encodeURIComponent(photo.library_id) + "&id=" + encodeURIComponent(photo.id)
@@ -38,7 +58,7 @@ Item {
     PagedModel {
         id: paged
         pageSize: 100
-        endpoint: view.mode === "browse" ? feed.itemsPath(view.channel) : ""
+        endpoint: view.mode === "browse" ? feed.itemsPath(view.channel, "", view.platform ? "tag:platform:" + view.platform : "") : ""
     }
 
     Component.onCompleted: feed.loadGroups()
@@ -55,18 +75,27 @@ Item {
         spacing: 6
         visible: view.openIndex < 0 && view.mode === "browse"
 
-        // 一行：浏览 | 多联放映 ‖ 推荐 | 我的点赞 | 色系 | 回收站 ‖ 换一批 · 张数
+        // 一行：浏览 | 多联放映 ‖ 平台 ▾ ‖ 推荐 | 我的点赞 | 色系 | 回收站 ‖ 换一批 · 张数
         RowLayout {
             Layout.fillWidth: true
             spacing: 4
             Chip { text: "浏览"; selected: true }
             Chip { text: view.matrixWindowOpen ? "多联放映（窗口）" : "多联放映"; onClicked: if (view.matrixWindowOpen) view.matrixWindowRequested(); else view.mode = "matrix" }
             Divider { Layout.leftMargin: 2; Layout.rightMargin: 2 }
+            ComboBox {
+                visible: view.platforms.length > 0
+                implicitHeight: 28; Layout.preferredWidth: 110; font.pixelSize: 12
+                model: ["全部平台"].concat(view.platforms)
+                currentIndex: Math.max(0, view.platforms.indexOf(view.platform) + 1)
+                onActivated: function (i) { view.pickPlatform(i === 0 ? "" : view.platforms[i - 1]) }
+                ToolTip.visible: hovered; ToolTip.text: "平台"
+            }
             ChannelBar {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 28
                 feed: feed
                 channel: view.channel
+                platform: view.platform
                 showHidden: true
                 onPicked: function (ch) { view.channel = ch }
             }

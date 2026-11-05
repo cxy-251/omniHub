@@ -17,12 +17,12 @@ omniHub 星际争霸 2 助手（移植自 omni-deck 的 features/sc2/service.py 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import io
 import json
 import os
 import re
 import shutil
-import struct
 import subprocess
 import sys
 import threading
@@ -53,34 +53,26 @@ def _read_mpq_file(map_file: Path, inner_name: str) -> Optional[bytes]:
 _SLOT_PAT = re.compile(rb".\x01\x00\x00\x00\xff\xff\xff\xff")
 
 
-def _map_has_force_data(raw: bytes, n: int) -> bool:
-    """真正分了队伍（Force）的地图，MapInfo 里会把出生点按两种顺序各排一遍（N 前缀出现两次）。
-    没有队伍数据的图，多个电脑会各自一伙互相敌对，所以只能配 1 个电脑。"""
-    if n <= 2 or not raw:
-        return False
-    return raw.count(struct.pack("<I", n)) >= 2
-
-
 def _map_max_players(map_file: Path):
     raw = _read_mpq_file(map_file, "MapInfo")
     if not raw:
-        return None, False
+        return None
     idxs = {raw[m.start()] for m in _SLOT_PAT.finditer(raw)}
     n = 0
     while (n + 1) in idxs:
         n += 1
     n = min(n, 8) or None
-    return n, (_map_has_force_data(raw, n) if n else False)
+    return n
 
 
 def _guess_team(stem: str, map_file: Path):
     """(队伍标签, 人数上限, 最多电脑数)。AIE 后缀是 1v1 天梯图；其余按实测人数分档。"""
     if stem.endswith("AIE"):
         return "1v1", 2, 1
-    n, has_force = _map_max_players(map_file)
+    n = _map_max_players(map_file)
     if n is None or n <= 2:
         return "1v1", n or 2, 1
-    max_opp = (n - 1) if has_force else 1
+    max_opp = n - 1
     if n <= 4:
         return "2v2", n, max_opp
     if n <= 6:
@@ -256,15 +248,28 @@ def sync_mods_to_pfx() -> None:
 # ---------------------------------------------------------------- 对局
 
 
-def _sc2_pids() -> List[str]:
-    out = subprocess.run(["pgrep", "-f", "SC2_x64.exe"], capture_output=True, text=True, timeout=5).stdout
-    return [p for p in out.split() if p.isdigit()]
+def _sc2_pids(port: int) -> List[str]:
+    """仅查本局 API 端口对应的游戏进程，不匹配 Proton 包装器或其他 SC2。"""
+    found = []
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            args = proc.joinpath("cmdline").read_bytes().split(b"\0")
+            exe = args[0].replace(b"\\", b"/").rsplit(b"/", 1)[-1].lower()
+            if exe != b"sc2_x64.exe":
+                continue
+            if any(a == b"-port" and b == str(port).encode() for a, b in zip(args, args[1:])):
+                found.append(proc.name)
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+    return found
 
 
-def _force_kill_sc2() -> None:
-    """burnysc2 只结束它直接启动的垫片，真正的 SC2_x64.exe 在 Proton 下好几层，兜底按名字 SIGKILL。"""
+def _force_kill_sc2(port: int) -> None:
+    """burnysc2 只结束 Proton 垫片；同时结束本局实际游戏，避免留下黑窗口。"""
     try:
-        for pid in _sc2_pids():
+        for pid in _sc2_pids(port):
             subprocess.run(["kill", "-9", pid], timeout=3)
     except Exception:
         pass
@@ -273,10 +278,10 @@ def _force_kill_sc2() -> None:
 WINDOW_LOST_GRACE = 15
 
 
-def _sc2_window_states():
+def _sc2_window_states(port: int):
     """SC2 名下所有 X 窗口的状态（Normal/Iconic/Withdrawn）；查不到返回 None。"""
     try:
-        pids = _sc2_pids()
+        pids = _sc2_pids(port)
         if not pids:
             return None
         states = []
@@ -290,12 +295,12 @@ def _sc2_window_states():
         return None
 
 
-def _watch_window(stop: threading.Event, lost: dict) -> None:
+def _watch_window(stop: threading.Event, lost: dict, port: int) -> None:
     """窗口出现过之后连续 15 秒既不可见也没最小化，视为闪退并结束对局
     （burnysc2 只看 websocket，进程还在发数据时会一直等下去）。"""
     seen, missing_since = False, None
     while not stop.wait(3):
-        states = _sc2_window_states()
+        states = _sc2_window_states(port)
         if states is None:
             missing_since = None
             continue
@@ -307,16 +312,94 @@ def _watch_window(stop: threading.Event, lost: dict) -> None:
         missing_since = missing_since or time.monotonic()
         if time.monotonic() - missing_since >= WINDOW_LOST_GRACE:
             lost["reason"] = "SC2 窗口消失（疑似闪退），已结束对局"
-            _force_kill_sc2()
+            _force_kill_sc2(port)
             return
 
 
-def cmd_play(args) -> None:
+def _replay_files(directory: Path):
+    """记录回放文件身份，只用本次开局后生成或替换的文件判断结束。"""
+    files = {}
+    for path in directory.rglob("*.SC2Replay"):
+        try:
+            info = path.stat()
+            files[path] = (info.st_mtime_ns, info.st_size)
+        except FileNotFoundError:
+            continue
+    return files
+
+
+def _has_finished_replay(directory: Path, before: dict, map_path: Path) -> bool:
+    """API 卡住时，以本局完整回放为退出凭据；不读取或改写已有回放。"""
+    import mpyq
+    marker = str(map_path).replace("\\", "/").casefold()
+    for path, identity in _replay_files(directory).items():
+        if before.get(path) == identity:
+            continue
+        try:
+            details = mpyq.MPQArchive(str(path)).read_file("replay.details")
+            if details and marker in details.decode("utf-8", errors="ignore").replace("\\", "/").casefold():
+                return True
+        except Exception:
+            # 写入未完成的 MPQ 不能作为结束凭据，下次再读。
+            continue
+    return False
+
+
+async def _run_match(game_map, players, stop: threading.Event, lost: dict) -> str:
+    """运行一局真人对战；认输退出及无响应时也保证关闭本局的 Proton 游戏。"""
+    from loguru import logger
+    from sc2.client import Client
+    from sc2.sc2process import SC2Process
+
+    replays = _pfx_docs() / "Replays"
+    before = _replay_files(replays)
+    process = SC2Process(fullscreen=players[0].fullscreen)
+    port = process._port
+    threading.Thread(target=_watch_window, args=(stop, lost, port), daemon=True).start()
+    pending = None
+    try:
+        async with process as server:
+            try:
+                await server.ping()
+                created = await server.create_game(game_map, players, realtime=True)
+                if created.create_game.HasField("error"):
+                    raise RuntimeError(f"无法创建对局：{created.create_game}")
+                client = Client(server._ws)
+                player = await client.join_game(race=players[0].race)
+                while True:
+                    pending = asyncio.create_task(client.observation())
+                    started = time.monotonic()
+                    while not (await asyncio.wait({pending}, timeout=2))[0]:
+                        # 暂停/最小化仍正常回复 observation。真人从游戏菜单认输时，
+                        # SC2 却会保存回放并停止回复，而不发送 player_result。
+                        if _has_finished_replay(replays, before, game_map.relative_path):
+                            logger.info("游戏界面已退出，本局回放已保存")
+                            return "Quit"
+                        if time.monotonic() - started >= 30:
+                            raise RuntimeError("游戏状态接口超过 30 秒未响应，已关闭本局 SC2")
+                    pending.result()
+                    if client._game_result:
+                        return client._game_result[player].name
+                    await asyncio.sleep(0.2)
+            finally:
+                # 必须先杀实际游戏再让 burnysc2 清理包装器。不要直接取消 observation：
+                # 它的取消处理还会等一次响应，在认输后同样会无限等待。
+                stop.set()
+                _force_kill_sc2(port)
+                if pending is not None:
+                    if not pending.done():
+                        await server._ws.close()
+                    await asyncio.gather(pending, return_exceptions=True)
+    finally:
+        stop.set()
+        _force_kill_sc2(port)
+
+
+def _prepare_match(args):
     os.environ.setdefault("SC2PF", "WineLinux")
     os.environ.setdefault("SC2_TIMEOUT", "180")
     from sc2 import maps
     from sc2.data import AIBuild, Difficulty, Race
-    from sc2.main import run_game
     from sc2.player import Computer, Human
 
     race = {"T": Race.Terran, "P": Race.Protoss, "Z": Race.Zerg, "R": Race.Random}
@@ -330,55 +413,57 @@ def cmd_play(args) -> None:
              "power": AIBuild.Power, "macro": AIBuild.Macro, "air": AIBuild.Air}
 
     opponents = json.loads(args.opponents)
+    teams = [1] + [o.get("team") or 2 for o in opponents]
     mods = [m for m in args.mods.split(",") if m]
-    result = {"map": args.map, "race": args.race, "opponents": opponents, "mods": mods}
+    if not re.fullmatch(r"[^/\\\x00-\x1f]{1,128}", args.map) or ".." in args.map:
+        raise ValueError("无效地图名")
+    if any(not re.fullmatch(r"[A-Za-z0-9_]{1,64}", m) for m in mods):
+        raise ValueError("无效 mod")
+    if not opponents or len(teams) > 8 or any(type(t) is not int or t not in (1, 2) for t in teams) or 2 not in teams:
+        raise RuntimeError("至少要有一个电脑对手")
+    mf = SC2_MAPS_DIR / f"{args.map}.SC2Map"
+    if mf.exists():
+        _, _, max_opp = _guess_team(args.map, mf)
+        if len(opponents) > max_opp:
+            raise RuntimeError(f"这张图最多只能配 {max_opp} 个电脑")
+    map_name = _import_bake().bake(args.map, mods) if mods else args.map
+    game_map = maps.get(map_name)
+    reusable = getattr(args, "reusable", False)
+    if len(teams) > 2 or reusable:
+        from teams import team_map
+        cache = Path(os.environ.get("SC2_MATCH_CACHE", str(THUMB_CACHE.parent / "matches")))
+        prepared = team_map(game_map.path, teams, cache, SC2MOD_DIR, reusable=reusable)
+        game_map = maps.Map(prepared)
+        if os.environ.get("SC2PF") == "WineLinux":
+            game_map.relative_path = Path("Z:" + str(prepared.resolve()).replace("/", "\\"))
+    install_hotkeys()
+    sync_mods_to_pfx()
+    players = [Human(race[args.race.upper()], fullscreen=True)]
+    for o in opponents:
+        players.append(Computer(race[o["race"].upper()], diff[o["difficulty"]],
+                                build.get(o.get("ai_build", "random"), AIBuild.RandomBuild)))
+    return game_map, players
+
+
+def cmd_play(args) -> None:
+    result = {"map": args.map, "race": args.race, "opponents": json.loads(args.opponents),
+              "mods": [m for m in args.mods.split(",") if m]}
     stop, lost = threading.Event(), {}
     try:
-        if not opponents:
-            raise RuntimeError("至少要有一个电脑对手")
-        mf = SC2_MAPS_DIR / f"{args.map}.SC2Map"
-        if mf.exists():
-            _, _, max_opp = _guess_team(args.map, mf)
-            if len(opponents) > max_opp:
-                raise RuntimeError(f"这张图最多只能配 {max_opp} 个电脑")
-        install_hotkeys()
-        sync_mods_to_pfx()
-        map_name = _import_bake().bake(args.map, mods) if mods else args.map
-        players = [Human(race[args.race.upper()], fullscreen=True)]
-        for o in opponents:
-            players.append(Computer(race[o["race"].upper()], diff[o["difficulty"]],
-                                    build.get(o.get("ai_build", "random"), AIBuild.RandomBuild)))
-        threading.Thread(target=_watch_window, args=(stop, lost), daemon=True).start()
-        # 对局一结束（burnysc2 记下 Result）就先报告结果并结束 SC2：burnysc2 自己在 Proton 下清理进程
-        # 要等一分多钟，界面会一直显示「对局进行中」。
-        from loguru import logger
-
-        def early_result(message):
-            text = message.record["message"]
-            if text.startswith("Result for player 1") and "early" not in result:
-                outcome = text.rsplit(":", 1)[-1].strip()
-                result["early"] = outcome
-                print("OMNIHUB_SC2_RESULT " + json.dumps({**result, "result": outcome}, ensure_ascii=False), flush=True)
-                threading.Thread(target=_force_kill_sc2, daemon=True).start()
-
-        logger.add(early_result, level="INFO")
-        res = run_game(maps.get(map_name), players, realtime=True)
+        if os.environ.get("SC2_HOST_SOCKET"):
+            from resident import forward_match
+            result = asyncio.run(forward_match(os.environ["SC2_HOST_SOCKET"], result))
+            print("OMNIHUB_SC2_RESULT " + json.dumps(result, ensure_ascii=False), flush=True)
+            return
+        game_map, players = _prepare_match(args)
+        result["result"] = asyncio.run(_run_match(game_map, players, stop, lost))
         if lost:
             raise RuntimeError(lost["reason"])
-        if isinstance(res, list):
-            res = res[0] if res else None
-        result["result"] = getattr(res, "name", str(res)) if res is not None else "Unknown"
     except Exception as e:
-        if "early" in result:
-            # 已经拿到结果后我们主动结束了 SC2，burnysc2 随后报连接断开，不算出错。
-            result["result"] = result["early"]
-        else:
-            result["result"] = "Error"
-            result["error"] = lost.get("reason") or str(e)
+        result["result"] = "Error"
+        result["error"] = lost.get("reason") or str(e)
     finally:
         stop.set()
-        _force_kill_sc2()
-    result.pop("early", None)
     print("OMNIHUB_SC2_RESULT " + json.dumps(result, ensure_ascii=False), flush=True)
 
 
@@ -390,7 +475,7 @@ def main() -> None:
     play = sub.add_parser("play")
     play.add_argument("--map", required=True)
     play.add_argument("--race", required=True, choices=["T", "P", "Z", "R", "t", "p", "z", "r"])
-    play.add_argument("--opponents", required=True, help='JSON：[{"race":"T","difficulty":"hard","ai_build":"random"}]')
+    play.add_argument("--opponents", required=True, help='JSON：[{"race":"T","difficulty":"hard","ai_build":"random","team":2}]；team=1 为队友，2 为对手')
     play.add_argument("--mods", default="")
     args = p.parse_args()
     {"maps": cmd_maps, "mods": cmd_mods, "play": cmd_play}[args.cmd](args)

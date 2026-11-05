@@ -141,6 +141,9 @@ type audioTrackOut struct {
 	Ext      string  `json:"ext"`
 	Offset   float64 `json:"offset"`
 	Duration float64 `json:"duration"`
+	Rating   int     `json:"rating"`
+	Artist   string  `json:"artist,omitempty"`
+	Album    string  `json:"album,omitempty"`
 	// 只在按歌词筛选（lyrics=unsynced）时给出
 	LyricsStatus string `json:"lyrics_status,omitempty"`
 }
@@ -148,6 +151,10 @@ type audioTrackOut struct {
 // handleAudioTracks 分页列出专辑分集（自然序），q 按标题筛选；带当前账号的断点。X-Total-Count 为筛选后的总数。
 func (r *Router) handleAudioTracks(w http.ResponseWriter, req *http.Request) {
 	relPath := req.URL.Query().Get("path")
+	if strings.HasPrefix(relPath, "@music/") {
+		r.handleMusicTracks(w, req)
+		return
+	}
 	if !r.allowPath(w, req, relPath) {
 		return
 	}
@@ -200,6 +207,22 @@ func (r *Router) handleAudioTracks(w http.ResponseWriter, req *http.Request) {
 		tracks = filtered
 	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(len(tracks)))
+	if locate := req.URL.Query().Get("locate"); locate != "" {
+		found := false
+		for _, t := range tracks {
+			if base := strings.TrimSuffix(relPath, "/") + "/" + t.Filename; base == locate {
+				tracks = []*audio.Track{t}
+				offset = 0
+				limit = 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeJSON(w, 200, []audioTrackOut{})
+			return
+		}
+	}
 	page := tracks[min(offset, len(tracks)):min(offset+limit, len(tracks))]
 	base := strings.TrimSuffix(relPath, "/")
 	out := make([]audioTrackOut, 0, len(page))
@@ -215,6 +238,13 @@ func (r *Router) handleAudioTracks(w http.ResponseWriter, req *http.Request) {
 				if p, ok := progress[out[i].ID]; ok {
 					out[i].Offset, out[i].Duration = p.Offset, p.Duration
 				}
+			}
+		}
+	}
+	if r.userState != nil {
+		if ratings, err := r.userState.MusicRatings(req.Context(), auth.UserFromContext(req.Context()).ID); err == nil {
+			for i := range out {
+				out[i].Rating = ratings[out[i].ID]
 			}
 		}
 	}
@@ -290,6 +320,7 @@ type artistOut struct {
 	TrackCount  int    `json:"track_count"`
 	CoverPath   string `json:"cover_path"`
 	LibraryName string `json:"library_name"`
+	Main        bool   `json:"main_artist"`
 }
 
 // artistCover 用歌手列表里第一首带封面的歌（最多看 5 首）当封面。
@@ -317,6 +348,11 @@ func (r *Router) handleAudioArtists(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	out := []artistOut{}
+	groups, err := r.userState.MusicArtistGroups(req.Context(), auth.UserFromContext(req.Context()).ID)
+	if err != nil {
+		http.Error(w, err.Error(), 503)
+		return
+	}
 	for _, lib := range libraries {
 		root, err := r.libMgr.ResolveCategoryPath(lib.ID+":"+audio.MusicRoot, "media_library/audio")
 		if err != nil {
@@ -339,8 +375,12 @@ func (r *Router) handleAudioArtists(w http.ResponseWriter, req *http.Request) {
 			if err != nil || len(album.Tracks) == 0 {
 				continue
 			}
+			main, explicit := groups[logical]
+			if !explicit {
+				main = r.musicRequestedArtist(req, dir, e.Name(), album.Tracks)
+			}
 			out = append(out, artistOut{ID: logical, Title: e.Name(), SingleCount: sections[0].Count, AlbumCount: len(sections) - 1,
-				TrackCount: len(album.Tracks), CoverPath: r.artistCover(req, dir, logical, album.Tracks), LibraryName: lib.Name})
+				TrackCount: len(album.Tracks), CoverPath: r.artistCover(req, dir, logical, album.Tracks), LibraryName: lib.Name, Main: main})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

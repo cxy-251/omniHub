@@ -24,7 +24,7 @@ ColumnLayout {
     readonly property bool thumbsRunning: !!(worker && worker.thumbnails_enabled && processed.some(function (l) { return l.stats && l.stats.thumbnails + l.stats.thumbnail_failures < l.stats.videos + l.stats.albums }))
     readonly property int cleanable: processed.reduce(function (n, l) { return n + (l.stats ? l.stats.albums_cleanable : 0) }, 0)
     readonly property int importable: processed.reduce(function (n, l) { return n + (l.stats ? l.stats.albums_on_disk - l.stats.albums_cleanable : 0) }, 0)
-    readonly property var jobNames: ({scan: "扫描", import: "图集入库", clean: "清理已入库原目录", thumbnails: "生成缩略图", merge: "合并其他设备的数据", copy: "补充到其他资源库", phone: "同步到手机", "clean-phone": "清理已同步到手机的视频"})
+    readonly property var jobNames: ({queued: "等待任务", "phone-thumbs-history": "读取手机回收记录", "phone-thumbs-plan": "核对手机旧封面", "phone-thumbs-clean": "回收手机旧封面", "phone-thumbs-restore": "恢复手机旧封面", scan: "扫描", import: "图集入库", clean: "清理已入库原目录", thumbnails: "生成缩略图", merge: "合并其他设备的数据", copy: "补充到其他资源库", phone: "同步到手机", "clean-phone": "清理已同步到手机的视频"})
 
     readonly property var mergeTargets: libraries.filter(function (l) { return !l.error })
     FolderDialog {
@@ -150,6 +150,12 @@ ColumnLayout {
                     + "• 清理：手机上有同名同大小的文件、且 SD 卡已有的博主那边也补上了，才移进回收站；downloaded.txt 全部保留。" : ""
             }
             Label { visible: page.reviewLoading !== ""; text: page.reviewLoading; color: "#c9d1d9"; font.pixelSize: 12 }
+            PhoneThumbnails { Layout.fillWidth: true; visible: !!(page.status && page.status.phone_maintenance); worker: page.worker; busy: page.busy; onAction: function (name, body) { page.act(name, body) } }
+            ScrollView {
+                Layout.fillWidth: true; Layout.preferredHeight: Math.min(180, logText.implicitHeight + 12)
+                visible: !!(page.worker && page.worker.logs && page.worker.logs.length)
+                TextArea { id: logText; readOnly: true; selectByMouse: true; wrapMode: TextEdit.WrapAnywhere; font.pixelSize: 11; color: "#adbac7"; text: page.worker && page.worker.logs ? page.worker.logs.map(function (l) { return l.time + " " + l.message }).join("\n") : "" }
+            }
             Rectangle {
                 visible: !!page.review
                 Layout.fillWidth: true

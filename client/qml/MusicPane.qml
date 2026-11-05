@@ -24,6 +24,7 @@ ColumnLayout {
         if (artist) api.getJSON("/api/media/audio/artist?path=" + encodeURIComponent(artist.id), function (r) { pane.info = r })
     }
     onArtistChanged: load()
+    Connections { target: pane.engine; function onMusicChanged(catalog) { if (catalog) { pane.load(); paged.reset() } } }
     function coverUrl(logical) { return logical ? backendApi.apiUrl("/api/media/audio/cover?path=" + encodeURIComponent(logical)) : "" }
     // 播放：t.index 是在歌手播放列表（或专辑）里的位置（1 起）
     function playInArtist(t) { engine.open(artist.id, artist.title, t.index - 1, true) }
@@ -56,6 +57,8 @@ ColumnLayout {
             onClicked: pane.album ? pane.loopScope(pane.album.id, pane.album.album) : pane.loopScope(pane.artist.id, pane.artist.title)
         }
         Item { Layout.fillWidth: true }
+        Chip { visible: !!pane.artist; text: pane.artist && pane.artist.main_artist ? "归入其他歌手" : "设为常听歌手"
+            onClicked: pane.engine.groupArtist(pane.artist.id, !pane.artist.main_artist) }
         Chip { visible: !!pane.artist; text: "歌词待处理"; selected: pane.reviewOnly; onClicked: pane.reviewOnly = !pane.reviewOnly }
     }
     Label {
@@ -104,6 +107,7 @@ ColumnLayout {
                     text: row.t && row.t.lyrics_status ? pane.lyricStatusText[row.t.lyrics_status] || row.t.lyrics_status : ""
                     color: "#e3b341"; font.pixelSize: 11
                 }
+                MusicRatingButtons { engine: pane.engine; trackId: row.t ? row.t.id : "" }
             }
             onClicked: {
                 if (!row.t) return

@@ -3,8 +3,9 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 // VirtualGrid：固定比例格子的虚拟滚动网格。只渲染可视区上下各 overscan 行，
 // 滚远的格子（及其 <img>）从 DOM 移除，浏览器随之释放解码后的图片。
 // 滚动容器自身占满剩余高度；extraHeight 为格子下方文字等固定高度。
-export default function VirtualGrid({ total, minColumnWidth, aspect, extraHeight = 0, overscan = 3, render }: {
+export default function VirtualGrid({ total, minColumnWidth, minColumns = 2, aspect, extraHeight = 0, overscan = 3, gap = 4, className, render }: {
   total: number; minColumnWidth: number; aspect: number; extraHeight?: number; overscan?: number;
+  gap?: number; className?: string; minColumns?: number;
   render: (index: number) => ReactNode;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -20,8 +21,7 @@ export default function VirtualGrid({ total, minColumnWidth, aspect, extraHeight
     return () => observer.disconnect();
   }, []);
 
-  const gap = 4;
-  const columns = Math.max(2, Math.floor((width + gap) / (minColumnWidth + gap)));
+  const columns = Math.max(minColumns, Math.floor((width + gap) / (minColumnWidth + gap)));
   const cell = width > 0 ? (width - gap * (columns - 1)) / columns : 0;
   const rowHeight = cell * aspect + extraHeight + gap;
   const rows = Math.ceil(total / columns);
@@ -33,7 +33,7 @@ export default function VirtualGrid({ total, minColumnWidth, aspect, extraHeight
     const row = Math.floor(i / columns), col = i % columns;
     cells.push(<div key={i} style={{ position: 'absolute', top: row * rowHeight, left: col * (cell + gap), width: cell, height: rowHeight - gap }}>{render(i)}</div>);
   }
-  return <div ref={scroller} className="relative h-[calc(100vh-11rem)] min-h-80 overflow-y-auto" onScroll={e => setScrollTop(e.currentTarget.scrollTop)}>
+  return <div ref={scroller} className={className ?? 'relative h-[calc(100vh-11rem)] min-h-80 overflow-y-auto'} onScroll={e => setScrollTop(e.currentTarget.scrollTop)}>
     <div style={{ position: 'relative', height: rows * rowHeight }}>{cells}</div>
   </div>;
 }

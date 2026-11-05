@@ -48,8 +48,9 @@ start_server() {
 SERVER=$(pgrep -x omnihub-server | head -1)
 if [ -z "$SERVER" ]; then
     start_server
-elif [ build/omnihub-server -nt /proc/$SERVER ]; then
-    # 服务端程序比正在运行的进程新（重新编译过）：重启，让改动生效。
+elif [ build/omnihub-server -nt /proc/$SERVER ] \
+        && [ -z "$(systemctl --user list-units --type=scope --state=running --no-legend 'app-omnihub-game-*' 'app-omnihub-sc2-*' 2>/dev/null)" ]; then
+    # 服务端程序比正在运行的进程新时更新；对局还在进行则保留当前服务，避免打开新客户端把游戏关掉。
     kill "$SERVER"; while kill -0 "$SERVER" 2>/dev/null; do sleep 0.2; done
     start_server
 fi
@@ -68,6 +69,6 @@ launched_clients() {
     done
 }
 if [ -z "$(launched_clients)" ] \
-        && [ -z "$(systemctl --user list-units --type=scope --state=running --no-legend 'app-omnihub-game-*' 2>/dev/null)" ]; then
+        && [ -z "$(systemctl --user list-units --type=scope --state=running --no-legend 'app-omnihub-game-*' 'app-omnihub-sc2-*' 2>/dev/null)" ]; then
     pkill -x omnihub-server
 fi

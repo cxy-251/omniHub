@@ -30,6 +30,9 @@ type sc2State struct {
 	mu        sync.Mutex
 	lastRunID string
 	mods      []byte
+	host      *games.LaunchedGame
+	hostUser  int64
+	socket    string
 }
 
 func (r *Router) sc2Available() bool {
@@ -46,6 +49,7 @@ func (r *Router) sc2Env() (dir string, env []string, err error) {
 	env = []string{
 		"SC2PATH=" + r.gameTools.SC2Dir,
 		"SC2_THUMB_CACHE=" + filepath.Join(dir, "thumbs"),
+		"SC2_MATCH_CACHE=" + filepath.Join(dir, "matches"),
 		"SC2MOD_DIR=" + r.gameTools.SC2ModDir,
 		"SC2MOD_COMPAT_DATA=" + r.gameTools.ProtonPrefix,
 		"WINE=" + filepath.Join(dir, "proton-wine"),
@@ -149,6 +153,7 @@ type sc2Opponent struct {
 	Race       string `json:"race"`
 	Difficulty string `json:"difficulty"`
 	AIBuild    string `json:"ai_build"`
+	Team       int    `json:"team"` // 1 为真人一方，2 为对手；省略时沿用对手。
 }
 
 var (
@@ -173,15 +178,21 @@ func (r *Router) handleSC2Play(w http.ResponseWriter, req *http.Request) {
 		Opponents []sc2Opponent `json:"opponents"`
 		Mods      []string      `json:"mods"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&in); err != nil || !mapStemPattern.MatchString(in.Map) || !sc2Races[in.Race] || len(in.Opponents) < 1 || len(in.Opponents) > 7 || len(in.Mods) > 8 {
+	if err := json.NewDecoder(req.Body).Decode(&in); err != nil || !mapStemPattern.MatchString(in.Map) || strings.Contains(in.Map, "..") || !sc2Races[in.Race] || len(in.Opponents) < 1 || len(in.Opponents) > 7 || len(in.Mods) > 8 {
 		http.Error(w, "invalid match settings", 400)
 		return
 	}
+	hasOpponent := false
 	for _, o := range in.Opponents {
-		if !sc2Races[o.Race] || !sc2Diffs[o.Difficulty] || !sc2Builds[o.AIBuild] {
+		if !sc2Races[o.Race] || !sc2Diffs[o.Difficulty] || !sc2Builds[o.AIBuild] || o.Team < 0 || o.Team > 2 {
 			http.Error(w, "invalid opponent", 400)
 			return
 		}
+		hasOpponent = hasOpponent || o.Team != 1
+	}
+	if !hasOpponent {
+		http.Error(w, "至少需要一个电脑对手", http.StatusBadRequest)
+		return
 	}
 	for _, m := range in.Mods {
 		if !modPattern.MatchString(m) {
@@ -231,10 +242,34 @@ func (r *Router) handleSC2Play(w http.ResponseWriter, req *http.Request) {
 	argv := []string{uv, "run", "--frozen", "--project", dir, "python", filepath.Join(dir, "sc2tool.py"), "play",
 		"--map", in.Map, "--race", in.Race, "--opponents", string(opponents), "--mods", strings.Join(in.Mods, ",")}
 	user := auth.UserFromContext(req.Context())
+	r.sc2.mu.Lock()
+	defer r.sc2.mu.Unlock()
+	if r.gameRuns.HasRunning() {
+		http.Error(w, "a game is already running", http.StatusConflict)
+		return
+	}
+	if r.sc2.host != nil {
+		state, e := sc2HostRequest(r.sc2.socket, map[string]string{"op": "status"})
+		if e != nil {
+			http.Error(w, "游戏窗口尚未就绪："+e.Error(), 503)
+			return
+		}
+		if state["busy"] == true {
+			http.Error(w, "请先结束当前对局或回放", 409)
+			return
+		}
+	}
+	host, err := r.ensureSC2Host(req.Context(), user.ID, uv, dir, env)
+	if err != nil {
+		http.Error(w, "SC2 窗口启动失败："+err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	env = append(env, "SC2_HOST_SOCKET="+r.sc2.socket)
 	status, err := r.gameRuns.Start(req.Context(), "sc2:"+sc2GameID, games.LaunchOptions{
 		GameDir: r.gameTools.SC2Dir, WorkDir: dir, Argv: argv, Env: env,
 		Scope: fmt.Sprintf("app-omnihub-game-%d", time.Now().UnixNano()), UserID: user.ID, IsAdmin: true,
-		LogsDir: filepath.Join(r.cacheDir, "game-logs"),
+		LogsDir:       filepath.Join(r.cacheDir, "game-logs"),
+		ResourceOwner: host,
 	})
 	if errors.Is(err, games.ErrRunBusy) {
 		http.Error(w, "a game is already running", 409)
@@ -244,17 +279,25 @@ func (r *Router) handleSC2Play(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "launch failed: "+err.Error(), 422)
 		return
 	}
-	r.sc2.mu.Lock()
 	r.sc2.lastRunID = status.ID
-	r.sc2.mu.Unlock()
 	writeJSON(w, http.StatusCreated, status)
 }
 
 // handleSC2Status 返回是否可用、当前/上一局会话与结果（从对局日志末尾的 OMNIHUB_SC2_RESULT 行读取）。
 func (r *Router) handleSC2Status(w http.ResponseWriter, req *http.Request) {
+	if !r.gameControlAllowed(w, req) || !r.checkSectionAccess(w, req, "games", auth.TargetGUI) {
+		return
+	}
 	out := map[string]any{"available": r.sc2Available(), "mods_available": r.gameTools.SC2ModDir != ""}
 	r.sc2.mu.Lock()
 	id := r.sc2.lastRunID
+	out["window_open"] = r.sc2.host != nil
+	if r.sc2.host != nil {
+		if state, err := sc2HostRequest(r.sc2.socket, map[string]string{"op": "status"}); err == nil {
+			out["replay_id"] = state["replay_id"]
+			out["replay_error"] = state["replay_error"]
+		}
+	}
 	r.sc2.mu.Unlock()
 	if id != "" {
 		if status, err := r.gameRuns.Snapshot(id); err == nil {

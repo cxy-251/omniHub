@@ -18,7 +18,8 @@ ListView {
     clip: true
     model: {
         var list = [{channel: "recommend", label: "推荐"}, {channel: "liked", label: "♥ 我的点赞"}].concat(filters)
-        var groups = platform ? feed.groups.filter(function (g) { return g.platform === platform }) : feed.groups
+        var groups = platform ? feed.groups.filter(function (g) { return g.platform === platform && g.count > 0 })
+                              : feed.groups.filter(function (g) { return (feed.domain === "gallery" ? !g.platform : true) && g.count > 0 })
         feed.pins.forEach(function (id) {
             var g = groups.find(function (x) { return x.id === id })
             if (g) list.push({channel: "group:" + g.id, label: "📌 " + g.label + " · " + g.count})

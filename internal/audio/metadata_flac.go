@@ -77,7 +77,7 @@ func vorbisComments(data []byte, result *Metadata, format string) error {
 				}
 			}
 		case "GENRE", "LASTFM_LISTENERS", "LASTFM_PLAYCOUNT", "LASTFM_REPLAY", "LASTFM_ALBUM",
-			"SOURCE_VIEWS", "SOURCE_LIKES", "SOURCE_URL", "RELEASE_DATE", "DOWNLOAD_DATE", "LYRICS_STATUS", "LYRICS_MATCH":
+			"SOURCE_VIEWS", "SOURCE_LIKES", "SOURCE_URL", "RELEASE_DATE", "DOWNLOAD_DATE", "LYRICS_STATUS", "LYRICS_MATCH", "MUSIC_REQUESTED_ARTIST", "SOURCE_INFO":
 			extraTag(key, value, result)
 		case "LYRICS", "UNSYNCEDLYRICS":
 			if len(value) <= lyricsLimit && result.Lyrics == "" {

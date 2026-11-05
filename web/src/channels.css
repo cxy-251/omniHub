@@ -1,0 +1,18 @@
+.channel-picker { min-width: 0; clear: both; }
+.channel-shortcuts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.channel-shortcuts > button { min-height: 32px; max-width: 100%; }
+.channel-shortcut { display: inline-flex; align-items: center; gap: 6px; max-width: min(240px, 100%) !important; }
+.channel-shortcut > span:not([aria-hidden]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-shortcut small, .channel-pick small { flex: none; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.channel-expand { border-style: dashed; }
+.channel-panel { padding: 12px; margin: 8px 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.channel-panel > input { width: 100%; min-width: 0; margin-bottom: 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.channel-results { position: relative; height: min(320px, 45dvh); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.channel-option { display: flex; height: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 6px; }
+.channel-option.is-selected { color: var(--accent); border-color: var(--accent); background: #183a30; }
+.channel-pick { display: flex; align-items: center; gap: 12px; padding: 8px 12px; flex: 1; min-width: 0; text-align: left; }
+.channel-pick > span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.channel-pick:hover, .channel-pin:hover { background: var(--bg); }
+.channel-pin { flex: none; width: 36px; opacity: .5; }
+.channel-pin[aria-pressed="true"], .channel-pin:hover, .channel-pin:focus-visible { opacity: 1; }
+.channel-empty { padding: 24px 0; color: var(--text-muted); }

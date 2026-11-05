@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent as React
 import { usePaged } from './paged';
 import VirtualGrid from './VirtualGrid';
 import ChannelBar from './ChannelBar';
+import { mangaHandlesKeyboard } from './mangaState';
 import { canPlayCodec, webCodecs } from './codecs';
 import { feedPath, feedQuery, newSeed, sendEvent, trash, useGroups, useLiked } from './feed';
 import { button, chip, divider, iconButton, select, store, stored } from './ui';
@@ -42,22 +43,18 @@ export default function ShortVideoPage({ active }: { active: boolean }) {
   if (!active) return null;
   if (mode === 'matrix') return <Suspense fallback={<p role="status">正在加载…</p>}><Matrix domain="shortvideo" onExit={() => setMode('browse')} /></Suspense>;
   return <section className="space-y-1.5">
-    {/* 一行：浏览 | 多联放映 ‖ 平台 ▾ ‖ 频道条（窄屏时单独一行）‖ 换一批 · 固定 · 作品数 */}
+    {/* 播放/平台操作与可展开的频道筛选分行，筛选面板使用内容区全宽。 */}
     <div className="flex flex-wrap items-center gap-1.5">
-      <button className={chip(true)}>浏览</button>
       <button className={chip(false)} onClick={() => setMode('matrix')}>多联放映</button>
-      <span className={divider} />
       {platforms.length > 1 ? <select aria-label="平台" className={select} value={platform} onChange={e => pickPlatform(e.target.value)}>
         {['', ...platforms].map(p => <option key={p || 'all'} value={p}>{p || '全部平台'}</option>)}
       </select> : null}
-      <div className="order-last min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-0">
-        <ChannelBar groups={shownGroups} pins={pins.filter(id => shownGroups.some(g => g.id === id))} channel={channel} onPick={setChannel} />
-      </div>
       <span className={`${divider} hidden sm:block`} />
       {channel === 'recommend' ? <button className={chip(false)} onClick={() => setSeed(newSeed())}>换一批</button> : null}
       {group ? <button className={chip(pins.includes(group))} onClick={() => setPinned(group, !pins.includes(group))} title={pins.includes(group) ? '取消固定这个博主' : '把这个博主固定在频道条前面'}>{pins.includes(group) ? '取消固定' : '📌 固定'}</button> : null}
       <span className={`text-xs ${paged.error ? 'text-danger' : 'text-muted'}`}>{paged.error || `${paged.total} 个`}</span>
     </div>
+    <ChannelBar groups={shownGroups} pins={pins} channel={channel} onPick={setChannel} groupLabel="博主" onPin={setPinned} />
     <VirtualGrid total={paged.total} minColumnWidth={170} aspect={16 / 9} extraHeight={44} render={index => {
       const post = paged.item(index);
       if (!post) return <div className="h-full rounded-lg border border-line bg-panel" />;
@@ -125,6 +122,7 @@ function Viewer({ post, liked, onLike, onTrash, onClose, onPrev, onNext }: {
   keys.current = { onClose, onPrev, onNext, pages, onLike, doTrash };
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (mangaHandlesKeyboard()) return;
       const k = keys.current;
       if (e.key === 'Escape') k.onClose();
       else if (e.key === 'ArrowLeft') k.onPrev?.();
@@ -162,7 +160,7 @@ function Viewer({ post, liked, onLike, onTrash, onClose, onPrev, onNext }: {
   }
   const gestures = <div className={`absolute inset-x-0 top-0 z-10 touch-none ${post?.kind === 'video' ? 'bottom-16' : 'bottom-14'}`}
     onPointerDown={e => { press.current = { x: e.clientX, y: e.clientY }; }} onPointerUp={release} onPointerCancel={() => { press.current = undefined; }} />;
-  return <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex flex-col bg-black/95 text-white">
+  return <div role="dialog" aria-label="短视频查看器" className="fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden bg-black/95 text-white" style={{ right: 'var(--manga-dock, 0px)' }}>
     <div className="flex flex-wrap items-center gap-2 p-2">
       <p className="min-w-0 flex-1 truncate text-sm">{post ? `${post.creator_id.split('/').slice(1).join(' / ')} · ${post.published} · ${post.title}` : '加载中…'}</p>
       {notice ? <span className={`text-sm ${armed ? 'font-bold text-[#ff7b72]' : 'text-[#3fb950]'}`}>{notice}</span> : null}

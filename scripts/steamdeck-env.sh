@@ -22,18 +22,33 @@ export CMAKE_PREFIX_PATH="$OH_TOOLS/qt6/usr:$OH_TOOLS/libmpv-sdk/usr"
 export OH_SYSROOT="$OH_TOOLS/gcc"
 export QT_PLUGIN_PATH="$OH_TOOLS/qt6/usr/lib/qt6/plugins"
 export QML_IMPORT_PATH="$OH_TOOLS/qt6/usr/lib/qt6/qml"
-# 中文输入：自带的 Qt 没有 fcitx5 的输入法插件，客户端里切不出输入法。系统的 Qt 和自带的同一版本（6.9.1）时，
-# 只把系统的 fcitx5 插件链接进一个单独的插件目录（不把整个系统插件目录加进来，免得加载系统的主题等插件），并指定用它。
+# 中文输入：版本一致时借用系统 fcitx 插件；系统升级后改用自带 Qt 的
+# IBus 插件连接 fcitx5 的兼容前端，避免加载依赖新版 Qt 私有接口的插件。
 _im="/usr/lib/qt6/plugins/platforminputcontexts/libfcitx5platforminputcontextplugin.so"
 if [ -f "$_im" ] && [ -e /usr/lib/libQt6Core.so.6.9.1 ] && [ -e "$OH_TOOLS/qt6/usr/lib/libQt6Core.so.6.9.1" ]; then
     _imdir="${XDG_CACHE_HOME:-$HOME/.cache}/omnihub/qt-im"
     mkdir -p "$_imdir/platforminputcontexts" && ln -sf "$_im" "$_imdir/platforminputcontexts/"
     QT_PLUGIN_PATH="$QT_PLUGIN_PATH:$_imdir"
     case "${XMODIFIERS:-}" in *fcitx*) export QT_IM_MODULE="${QT_IM_MODULE:-fcitx}" ;; esac
+elif [ -f "$OH_TOOLS/qt6/usr/lib/qt6/plugins/platforminputcontexts/libibusplatforminputcontextplugin.so" ]; then
+    case "${XMODIFIERS:-}:${QT_IM_MODULE:-}" in
+        *fcitx:|*fcitx:fcitx) export QT_IM_MODULE=ibus; export IBUS_USE_PORTAL=1 ;;
+    esac
 fi
 unset _im _imdir
 # 使用 --sysroot 后，链接器在 sysroot 下找系统库（libproxy、libpulse 的私有依赖）的 RUNPATH，找不到；显式指定。
 export LDFLAGS="-Wl,-rpath-link,/usr/lib/libproxy -Wl,-rpath-link,/usr/lib/pulseaudio${LDFLAGS:+ $LDFLAGS}"
+
+# SteamOS 只有运行库 libgcc_s.so.1，工具链 sysroot 又没有开发链接名。
+# 在本项目的忽略目录补链接，不修改系统或外部 SDK。
+if [ ! -e "$OH_SYSROOT/usr/lib/libgcc_s.so" ] && [ -e /usr/lib/libgcc_s.so.1 ]; then
+    _oh_linkdir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.build/compiler-libs"
+    mkdir -p "$_oh_linkdir"
+    ln -sf /usr/lib/libgcc_s.so.1 "$_oh_linkdir/libgcc_s.so"
+    export LIBRARY_PATH="$_oh_linkdir${LIBRARY_PATH:+:$LIBRARY_PATH}"
+    export LDFLAGS="-L$_oh_linkdir $LDFLAGS"
+    unset _oh_linkdir
+fi
 
 
 

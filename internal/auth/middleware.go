@@ -139,12 +139,18 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 				}
 			}
 		} else if hash := SessionHash(r); hash != "" {
-			user, err := m.db.GetUserBySessionHash(hash)
+			user, expires, err := m.db.UseSession(r.Context(), hash)
 			if err != nil {
 				http.Error(w, "session store unavailable", 503)
 				return
 			}
 			if user != nil {
+				if !expires.IsZero() {
+					// Bearer authentication must not create a browser cookie.
+					if cookie, err := r.Cookie("omni_token"); err == nil && HashToken(cookie.Value) == hash {
+						SetSessionCookie(w, r, cookie.Value, expires)
+					}
+				}
 				ctx = context.WithValue(ctx, UserContextKey, user)
 				ctx = context.WithValue(ctx, methodContextKey, "session")
 				ctx = context.WithValue(ctx, credentialContextKey, hash)

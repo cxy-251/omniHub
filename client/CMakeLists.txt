@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.22)
 project(omnihub_client VERSION 1.0.0 LANGUAGES CXX)
 
+# Deck 的 SDK 提供编译头文件，Qt/mpv 则链接本机运行库；系统升级后
+# SDK 内旧 glibc 无法满足本机 ffmpeg 等库的新符号。只在本机 SDK 构建时分开二者。
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CMAKE_CROSSCOMPILING
+        AND DEFINED ENV{OH_SYSROOT} AND CMAKE_SYSROOT STREQUAL "$ENV{OH_SYSROOT}")
+    set(CMAKE_SYSROOT_LINK "/")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)

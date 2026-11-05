@@ -16,8 +16,10 @@ import (
 // ErrCapacity reports a container or entry exceeding the supported read budget.
 var ErrCapacity = errors.New("archive exceeds read capacity")
 
-const maxDirectoryBytes = 16 << 20
-const maxEntries = 100000 // 合集类的本子有两万多页（2026-10-27 一本 20423 页）
+const maxDirectoryBytes = 64 << 20
+
+// MaxEntries bounds directory allocation while allowing large comic collections.
+const MaxEntries = 500000
 
 // Reader owns the file behind a validated, bounded ZIP directory.
 type Reader struct {
@@ -39,8 +41,8 @@ func (s *fileSource) ReadAt(data []byte, offset int64) (int, error) {
 	return s.file.ReadAt(data, offset)
 }
 
-// Open accepts regular single-disk ZIP/ZIP64 containers, at most 20,000 entries
-// and 16 MiB of central directory data, before allocating ZIP entry metadata.
+// Open accepts regular single-disk ZIP/ZIP64 containers, at most MaxEntries entries
+// and 64 MiB of central directory data, before allocating ZIP entry metadata.
 func Open(path string) (_ *Reader, result error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -199,7 +201,7 @@ func validateDirectory(r io.ReaderAt, size int64) error {
 	} else if uint64(binary.LittleEndian.Uint16(e[8:])) != count {
 		return zip.ErrFormat
 	}
-	if count > maxEntries || length > maxDirectoryBytes {
+	if count > MaxEntries || length > maxDirectoryBytes {
 		return ErrCapacity
 	}
 	if offset > uint64(directoryEnd) || length != uint64(directoryEnd)-offset {

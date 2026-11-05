@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -23,6 +24,8 @@ type DB struct {
 	ipMu           sync.Mutex
 	ipFailed       map[string][]time.Time // 防暴力破解：记录单 IP 验证失败时间戳
 	hasAdminCached int32                  // 0: 未知/未初始化, 1: 已有管理员
+	sessionMu      sync.RWMutex
+	sessionDays    int
 }
 
 // OpenDB 打开或创建指定路径下的 users.db，自动执行建表与 WAL 模式开启。
@@ -76,6 +79,10 @@ func (d *DB) migrate() error {
 		expires_at TEXT NOT NULL,
 		FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 	);
+	CREATE TABLE IF NOT EXISTS auth_settings (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		session_idle_days INTEGER NOT NULL CHECK (session_idle_days BETWEEN 1 AND 365)
+	);
 
 	CREATE TABLE IF NOT EXISTS trusted_devices (
 		token_hash TEXT PRIMARY KEY,
@@ -91,7 +98,15 @@ func (d *DB) migrate() error {
 	if err = d.migrateAccountVersion(); err != nil {
 		return err
 	}
-	return d.migrateDevices()
+	if err = d.migrateDevices(); err != nil {
+		return err
+	}
+	d.sessionDays = DefaultSessionIdleDays
+	err = d.db.QueryRow("SELECT session_idle_days FROM auth_settings WHERE id=1").Scan(&d.sessionDays)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	return err
 }
 
 // HashToken 计算会话 Token 的 SHA-256 哈希值作为存储键。
@@ -338,30 +353,8 @@ func (d *DB) GetUserByToken(token string) (*User, error) {
 // GetUserBySessionHash validates a retained session identity without retaining
 // its plaintext token; revocation, expiry and disabled accounts remain effective.
 func (d *DB) GetUserBySessionHash(tokenHash string) (*User, error) {
-	if len(tokenHash) != 64 {
-		return nil, errors.New("invalid session hash")
-	}
-	nowStr := time.Now().UTC().Format(time.RFC3339)
-
-	var u User
-	var createdAtStr string
-	err := d.db.QueryRow(`
-		SELECT u.id, u.username, u.role, u.level, u.status, u.created_at
-		FROM user_sessions s
-		JOIN users u ON s.user_id = u.id
-		WHERE s.token_hash = ? AND s.expires_at > ? AND u.status = 'active'`,
-		tokenHash, nowStr,
-	).Scan(&u.ID, &u.Username, &u.Role, &u.Level, &u.Status, &createdAtStr)
-
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil // 无效或过期 Token
-		}
-		return nil, err
-	}
-
-	u.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
-	return &u, nil
+	user, _, err := d.session(context.Background(), tokenHash, time.Now().UTC())
+	return user, err
 }
 
 // RevokeUserSessions 废止指定用户的所有活跃会话（用于降权或修改等级时即时生效，第 5.3.2 节）。

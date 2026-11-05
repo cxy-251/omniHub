@@ -19,6 +19,7 @@ import (
 	"time"
 
 	dlassets "omnihub/features/downloads"
+	"omnihub/internal/auth"
 	"omnihub/internal/config"
 	"omnihub/internal/library"
 	"omnihub/internal/scanner"
@@ -82,6 +83,7 @@ func (p dlParams) lines(name string) []string {
 }
 
 type dlPlan struct {
+	command  *tasks.Command // 原生任务（如 aria2 漫画）不依赖 Python/uv。
 	title    string
 	args     []string // features/downloads 下的脚本及参数
 	resource string   // 写入的目标目录（互斥锁）
@@ -184,7 +186,7 @@ func (r *Router) downloadKinds() []*dlKind {
 	mangaLibs, mangaDef := r.writableLibraryChoice("media_library/manga")
 	kinds := append(r.schemeKinds(), []*dlKind{
 		{
-			ID: "manga", Title: "18comic 漫画", Description: "18comic（禁漫）的本子：搜索、加进下载列表，整本下载后封成 CBZ 放进漫画库的 nsfw/；已下载的自动跳过，线上有新章节时整本更新。",
+			ID: "manga", Title: "18comic 漫画", Description: "搜索作品、加入列表并下载为 CBZ；已有作品只下载缺少的章节，复用原包图片，已是最新则跳过。更新时请选择原作品所在的资源库。",
 			needs: []string{"uv"},
 			Fields: []dlField{
 				{Name: "ids", Label: "本子", Type: "lines", Required: true, Placeholder: "粘贴本子网址或 ID，一行一个", Help: "例如 https://18comic.vip/album/123456 或 123456"},
@@ -238,6 +240,7 @@ func (r *Router) downloadKinds() []*dlKind {
 			},
 		},
 	}...)
+	kinds = append(kinds, r.btKind())
 	for _, k := range kinds {
 		for _, tool := range k.needs {
 			if _, err := exec.LookPath(tool); err != nil {
@@ -430,6 +433,10 @@ func (r *Router) handleDownloads(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
+		if in.Kind == "btmanga" && !auth.IsTrustedLocalFromContext(req.Context()) {
+			http.Error(w, "只能在主机桌面端使用普通漫画下载", 403)
+			return
+		}
 		job, err := r.startDownload(in.Kind, in.Params)
 		if err != nil {
 			status := http.StatusBadRequest
@@ -569,6 +576,21 @@ func (r *Router) startDownload(kindID string, params dlParams) (dlJob, error) {
 	plan, err := kind.build(r, params)
 	if err != nil {
 		return dlJob{}, err
+	}
+	if plan.command != nil {
+		spec := *plan.command
+		spec.Name = plan.title
+		spec.Resource = plan.resource
+		spec.Write = true
+		id := fmt.Sprintf("dl-%s-%d", kind.ID, time.Now().UnixNano())
+		t, err := r.taskMgr.RunCommand(id, spec)
+		if err != nil {
+			return dlJob{}, err
+		}
+		r.downloads.mu.Lock()
+		r.downloads.kinds[id] = kind.ID
+		r.downloads.mu.Unlock()
+		return r.jobCard(t), nil
 	}
 	dir, err := dlassets.Prepare(filepath.Join(r.cacheDir, "downloads"))
 	if err != nil {

@@ -38,6 +38,7 @@ import (
 type Router struct {
 	mux            *http.ServeMux
 	libMgr         *library.Manager
+	music          musicState
 	authDB         *auth.DB
 	authMid        *auth.Middleware
 	davAuth        davAuthCache
@@ -49,6 +50,7 @@ type Router struct {
 	gameTools      games.Tools
 	sc2            sc2State
 	jm             jmState
+	btCatalog      btCatalogState
 	stateDir       string
 	cacheDir       string // 可重新生成的数据（SC2 助手与虚拟环境、只读库的游戏日志），不放进主库的全局状态目录
 	webGames       *webGameGrants
@@ -84,6 +86,7 @@ type Router struct {
 	mangaDB      map[string]*manga.DB
 
 	phoneADB, phoneDir string // 经数据线同步短视频的手机（ConfigurePhone）
+	deviceOps          *deviceOperations
 }
 
 // NewRouter 创建路由分发器实例。
@@ -115,6 +118,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		svStores:       make(map[string]*shortvideo.Store),
 		gameArt:        make(map[string]*games.ArtStore),
 		svJobs:         newSVWorker(),
+		deviceOps:      newDeviceOperations(filepath.Join(stateDir, "phone-operations")),
 		mangaDB:        make(map[string]*manga.DB),
 		libMgr:         libMgr,
 		authDB:         authDB,
@@ -206,13 +210,18 @@ func (r *Router) CanReconfigure() bool {
 		return false
 	}
 	defer r.runtimeMu.RUnlock()
-	return !r.taskMgr.HasRunningTasks() && !r.gameRuns.HasRunning()
+	return !r.taskMgr.HasRunningTasks() && !r.gameRuns.HasRunning() && !r.deviceOps.snapshot().Running
 }
 
 // Close 在 HTTP 服务完成退出后关闭所有模块连接，允许重复调用。
 func (r *Router) Close() error {
 	// 后台工作会获取数据库锁，必须先停止它再关闭连接。
+	r.deviceOps.close()
 	r.svJobs.close()
+	r.svJobs.mu.Lock()
+	phoneReview := r.svJobs.phoneReview
+	r.svJobs.mu.Unlock()
+	r.closePhoneForward(phoneReview)
 	r.runtimeMu.Lock()
 	defer r.runtimeMu.Unlock()
 	r.dbMu.Lock()
@@ -241,7 +250,7 @@ func (r *Router) Close() error {
 		errs = append(errs, db.Close())
 	}
 	// Drain game statistics before closing the captured global state database.
-	errs = append(errs, r.gameRuns.Close(), r.progressDB.Close(), r.userState.Close(), r.taskMgr.Close(), r.mangaReaders.Close())
+	errs = append(errs, r.closeSC2Host(), r.gameRuns.Close(), r.progressDB.Close(), r.userState.Close(), r.taskMgr.Close(), r.mangaReaders.Close())
 	return errors.Join(errs...)
 }
 
@@ -256,6 +265,7 @@ func (r *Router) registerRoutes() {
 	})
 
 	// 用户系统与状态接口
+	r.mux.HandleFunc("/api/devices/", r.handleDeviceOperations)
 	r.mux.HandleFunc("/api/auth/status", r.handleAuthStatus)
 	r.mux.HandleFunc("/api/sections", r.handleSections)
 	r.mux.HandleFunc("/api/auth/setup", r.handleAuthSetup)
@@ -263,6 +273,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/auth/logout", r.handleLogout)
 	r.mux.HandleFunc("/api/auth/password", r.handleOwnPassword)
 	r.mux.HandleFunc("/api/admin/devices", r.handleDevices)
+	r.mux.HandleFunc("/api/admin/sessions", r.handleSessionSettings)
 
 	// 媒体库管理接口
 	r.mux.HandleFunc("/api/library/list", r.handleLibraryList)
@@ -315,6 +326,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/media/audio/progress", r.handleAudioProgress)
 	r.mux.HandleFunc("/api/media/audio/tracks", r.handleAudioTracks)
 	r.mux.HandleFunc("/api/media/audio/recent", r.handleAudioRecent)
+	r.mux.HandleFunc("/api/media/audio/music/", r.handleMusic)
 
 	// 漫画业务接口
 	r.mux.HandleFunc("/api/media/manga/list", r.handleMangaList)
@@ -337,6 +349,8 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/sc2/thumb", r.handleSC2Thumb)
 	r.mux.HandleFunc("/api/sc2/mods", r.handleSC2Mods)
 	r.mux.HandleFunc("/api/sc2/play", r.handleSC2Play)
+	r.mux.HandleFunc("/api/sc2/control", r.handleSC2Control)
+	r.mux.HandleFunc("/api/sc2/replays", r.handleSC2Replays)
 	r.mux.HandleFunc("/api/games/web/open", r.handleWebGameOpen)
 	r.mux.HandleFunc("/game-content/", r.handleWebGameAsset)
 	r.mux.HandleFunc("/api/games/launch", r.handleGameLaunch)
@@ -376,6 +390,7 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/mega/", r.handleMega)
 	r.mux.HandleFunc("/api/downloads/", r.handleDownloads)
 	r.mux.HandleFunc("/api/downloads/manga/", r.handleJM)
+	r.mux.HandleFunc("/api/downloads/bt/", r.handleBTManga)
 	r.mux.HandleFunc("/api/feed/", r.handleFeed)
 
 	// Legacy primary-only paths cannot safely host game scripts in the UI origin.
@@ -439,20 +454,13 @@ func (r *Router) handleAuthSetup(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := r.authDB.CreateSession(user.ID, token, 24*time.Hour); err != nil {
+	timeout := r.authDB.SessionIdleTimeout()
+	if err := r.authDB.CreateSession(user.ID, token, timeout); err != nil {
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "omni_token",
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   req.TLS != nil,
-		MaxAge:   86400,
-	})
+	auth.SetSessionCookie(w, req, token, time.Now().UTC().Add(timeout))
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status": "ok",
@@ -487,7 +495,8 @@ func (r *Router) handleAuthLogin(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := r.authDB.CreateVerifiedSession(req.Context(), user, token, 24*time.Hour); err != nil {
+	timeout := r.authDB.SessionIdleTimeout()
+	if err := r.authDB.CreateVerifiedSession(req.Context(), user, token, timeout); err != nil {
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
 	}
@@ -500,15 +509,7 @@ func (r *Router) handleAuthLogin(w http.ResponseWriter, req *http.Request) {
 		r.webGames.revokeCredential(auth.HashToken(cookie.Value))
 	}
 	clearDeviceCookie(w, req)
-	http.SetCookie(w, &http.Cookie{
-		Name:     "omni_token",
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   req.TLS != nil,
-		MaxAge:   86400,
-	})
+	auth.SetSessionCookie(w, req, token, time.Now().UTC().Add(timeout))
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status": "ok",

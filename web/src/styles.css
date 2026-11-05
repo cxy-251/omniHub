@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "../css/app.css" layer(components);
+@import "./workbench.css" layer(components);
 
 @theme inline {
   --color-background: var(--bg);

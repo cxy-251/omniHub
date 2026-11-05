@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, request } from './api';
 import { usePaged } from './paged';
 import VirtualGrid from './VirtualGrid';
+import ChannelBar from './ChannelBar';
 import { button, chip, divider, select, store, stored } from './ui';
 
 // 文本页：小说（书架 + EPUB/TXT 阅读器，进度与桌面端共用）与文档（media_library/docs 目录浏览，md/rst 整篇渲染）。
@@ -75,13 +76,11 @@ function Novels({ switcher }: { switcher: React.ReactNode }) {
       {groups.length > 1 ? <><span className={divider} />{groups.map(g => <button key={g} className={`rounded-md px-2.5 py-0.5 text-sm ${g === currentGroup ? 'bg-panel text-primary' : 'text-muted hover:text-foreground'}`}
         onClick={() => { setGroup(g); setCategory('__recent'); }}>{groupName(g)}</button>)}</> : null}
       <span className={divider} />
-      {!search ? <div className="order-last min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-0"><div className="flex gap-1.5 overflow-x-auto pb-0.5">
-        <button className={chip(showRecent)} onClick={() => setCategory('__recent')}>最近阅读</button>
-        {inGroup.map(c => <button key={c.category} className={chip(c.category === category)} onClick={() => setCategory(c.category)}>{c.category.split('/').pop() || '未分类'} <span className="text-xs">{c.count}</span></button>)}
-      </div></div> : <span className="flex-1" />}
       <input className={`${select} w-44`} placeholder={`搜索${groupName(currentGroup)}书名`} value={query} onChange={e => setQuery(e.target.value)} />
       {search ? <span className="text-xs text-muted">{paged.total} 本</span> : null}
     </div>
+    {!search ? <ChannelBar groups={inGroup.map(c => ({ id: c.category, label: c.category.split('/').pop() || '未分类', count: c.count }))} pins={[]}
+      basicItems={[{ channel: '__recent', label: '最近阅读' }]} channel={showRecent ? '__recent' : `group:${category}`} onPick={value => setCategory(value.startsWith('group:') ? value.slice(6) : '__recent')} /> : null}
     {error || paged.error ? <p className="text-sm text-danger">{error || paged.error}</p> : null}
     {showRecent && !shownRecent.length ? <p className="text-sm text-muted">{categories.length ? '还没有阅读记录（登录后才会记录进度）。从上面选一个分类。' : '没有小说。'}</p> : null}
     <VirtualGrid total={total} minColumnWidth={130} aspect={3 / 4} extraHeight={40} render={i => {

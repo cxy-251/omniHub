@@ -4,17 +4,19 @@ import QtQuick.Layouts
 import QtCore
 
 // 星际争霸 2 对战面板（游戏大厅 Wine 分类里的「星际争霸 II」）：选地图、种族、电脑对手与 mod 后开局。
-// 只有你一个真人，其余全是电脑；对局在独立进程组中运行，主窗口保持不动。
+// 只有你一个真人，其余全是电脑；每局独立结算，共用一个常驻游戏窗口。
 Rectangle {
     id: panel
     required property var request         // GamesView.request(method, path, body, done)
     required property var game            // 大厅里的「星际争霸 II」条目（含 favorite）
     signal favoriteToggled()
+    signal replaysRequested()
     property var maps: []
     property var mods: []
     property var status: ({})
     property string teamFilter: ""
     property string error: ""
+    property bool controlling: false
     radius: 6
     color: "#161b22"; border.color: "#30363d"
 
@@ -32,8 +34,9 @@ Rectangle {
         ["harder", "更难"], ["veryhard", "非常难"], ["cheatvision", "作弊·视野"], ["cheatmoney", "作弊·资源"], ["cheatinsane", "作弊·疯狂"]]
     readonly property var builds: [["random", "随机打法"], ["rush", "速攻"], ["timing", "时间点"], ["power", "强势"], ["macro", "运营"], ["air", "空军"]]
     readonly property var selectedMap: maps.find(function (m) { return m.stem === prefs.map }) || null
-    readonly property int maxOpponents: selectedMap ? selectedMap.max_opponents : 1
-    // 日志里一有结果就算结束（SC2 进程可能还在收尾）。
+    readonly property int maxOpponents: selectedMap ? Math.max(1, selectedMap.max_players - 1) : 1
+    readonly property bool hasOpponent: prefs.opponents.slice(0, maxOpponents).some(function (o) { return o.team !== 1 })
+    // 会话属于这一局；游戏窗口在会话结束后仍可保留。
     readonly property bool running: !!(status.session && status.session.state !== "exited" && !status.ended)
 
     function refreshStatus() { request("GET", "/api/sc2/status", null, function (s) { panel.status = s; panel.starting = false }) }
@@ -44,15 +47,23 @@ Rectangle {
     }
     function start() {
         error = ""
+        starting = true
         var opponents = prefs.opponents.slice(0, maxOpponents)
         request("POST", "/api/sc2/play", {map: prefs.map, race: prefs.race, opponents: opponents, mods: prefs.mods}, function () {
-            panel.starting = true
             refreshStatus()
-        })
+        }, function (message) { panel.starting = false; panel.error = message })
     }
-    // 有对局在进行（包括切页回来时已经在进行的）就每 3 秒刷新一次；刚点开始、状态还没变成运行中时也刷新。
+    function control(action) {
+        error = ""
+        controlling = true
+        request("POST", "/api/sc2/control", {action: action}, function () {
+            panel.controlling = false
+            refreshStatus()
+        }, function (message) { panel.controlling = false; panel.error = message })
+    }
+    // 保留窗口时也刷新，及时反映用户从任务栏关闭窗口的操作。
     property bool starting: false
-    Timer { interval: 3000; repeat: true; running: panel.running || panel.starting; onTriggered: panel.refreshStatus() }
+    Timer { interval: 3000; repeat: true; running: panel.running || panel.starting || !!panel.status.window_open; onTriggered: panel.refreshStatus() }
 
     Component.onCompleted: {
         request("GET", "/api/sc2/maps", null, function (list) { panel.maps = list; if (!panel.selectedMap && list.length) prefs.map = list[0].stem })
@@ -139,25 +150,32 @@ Rectangle {
         Repeater {
             model: Math.min(prefs.opponents.length, panel.maxOpponents)
             delegate: RowLayout {
+                id: computerRow
                 required property int index
                 readonly property var opp: prefs.opponents[index]
                 spacing: 4
                 Label { text: "电脑 " + (index + 1); color: "#c9d1d9"; Layout.preferredWidth: 46; font.pixelSize: 12 }
+                ComboBox {
+                    implicitHeight: 28; font.pixelSize: 12; Layout.preferredWidth: 76
+                    model: ["对手", "队友"]
+                    currentIndex: opp.team === 1 ? 1 : 0
+                    onActivated: function (i) { panel.setOpponent(computerRow.index, {team: i === 1 ? 1 : 2}) }
+                }
                 Repeater {
                     model: ["T", "P", "Z", "R"]
-                    delegate: Chip { required property string modelData; text: panel.raceNames[modelData]; selected: opp.race === modelData; onClicked: panel.setOpponent(index, {race: modelData}) }
+                    delegate: Chip { required property string modelData; text: panel.raceNames[modelData]; selected: opp.race === modelData; onClicked: panel.setOpponent(computerRow.index, {race: modelData}) }
                 }
                 ComboBox {
                     implicitHeight: 28; font.pixelSize: 12; Layout.preferredWidth: 110
                     model: panel.difficulties.map(function (d) { return d[1] })
                     currentIndex: Math.max(0, panel.difficulties.findIndex(function (d) { return d[0] === opp.difficulty }))
-                    onActivated: function (i) { panel.setOpponent(index, {difficulty: panel.difficulties[i][0]}) }
+                    onActivated: function (i) { panel.setOpponent(computerRow.index, {difficulty: panel.difficulties[i][0]}) }
                 }
                 ComboBox {
                     implicitHeight: 28; font.pixelSize: 12; Layout.preferredWidth: 100
                     model: panel.builds.map(function (b) { return b[1] })
                     currentIndex: Math.max(0, panel.builds.findIndex(function (b) { return b[0] === (opp.ai_build || "random") }))
-                    onActivated: function (i) { panel.setOpponent(index, {ai_build: panel.builds[i][0]}) }
+                    onActivated: function (i) { panel.setOpponent(computerRow.index, {ai_build: panel.builds[i][0]}) }
                 }
                 IconButton { glyph: "close"; size: 26; visible: prefs.opponents.length > 1; onClicked: { var l = prefs.opponents.slice(); l.splice(index, 1); prefs.opponents = l } }
             }
@@ -171,7 +189,7 @@ Rectangle {
             }
             Label {
                 color: "#8b949e"; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight
-                text: panel.selectedMap ? "这张图最多 " + panel.maxOpponents + " 个电脑" + (panel.maxOpponents === 1 && panel.selectedMap.max_players > 2 ? "（没有队伍数据，多了会互相敌对）" : "") : ""
+                text: panel.selectedMap ? "这张图最多 " + panel.maxOpponents + " 个电脑；同队就近出生、共享视野，至少保留一个对手。" : ""
             }
         }
         // mod
@@ -203,20 +221,25 @@ Rectangle {
         }
         RowLayout {
             PrimaryButton {
-                text: panel.running ? "对局进行中…" : "开始对局"
-                enabled: !panel.running && !panel.starting && !!panel.selectedMap
+                text: panel.running ? "对局进行中…" : panel.status.window_open ? "开始下一局" : "开始对局"
+                enabled: !panel.running && !panel.starting && !panel.controlling && !panel.status.replay_id && !!panel.selectedMap && panel.hasOpponent
                 onClicked: panel.start()
             }
+            Chip { text: "结束本局"; visible: panel.running; enabled: !panel.controlling; onClicked: panel.control("surrender") }
+            Chip { text: "最近 10 场回放"; onClicked: panel.replaysRequested() }
+            Chip { text: "结束回放"; visible: !!panel.status.replay_id; enabled: !panel.controlling; onClicked: panel.control("stop_replay") }
+            Chip { text: "关闭游戏"; visible: !!panel.status.window_open; enabled: !panel.controlling; onClicked: panel.control("close") }
             Label {
                 Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
                 color: panel.error ? "#f85149" : "#c9d1d9"
                 text: {
                     if (panel.error) return panel.error
+                    if (panel.controlling) return "正在处理游戏窗口…"
                     var r = panel.status.result
                     if (panel.running) return "对局进行中（首次启动可能要等十几秒）"
                     if (panel.starting) return "SC2 启动中…"
-                    if (!r) return ""
-                    return (panel.status.ended && panel.status.session && panel.status.session.state !== "exited" ? "对局已结束 · " : "上一局：") + r.map + " · " + ({Victory: "胜利", Defeat: "失败", Tie: "平局"}[r.result] || r.result) + (r.error ? "（" + r.error + "）" : "")
+                    if (!r) return panel.status.window_open ? "窗口已保留，下一局自动切回游戏。" : "游戏内顶部“认输”返回大厅，窗口保留供下一局使用。"
+                    return "上一局：" + r.map + " · " + ({Victory: "胜利", Defeat: "失败", Tie: "平局", Quit: "已退出"}[r.result] || r.result) + (r.error ? "（" + r.error + "）" : "") + (panel.status.window_open ? " · 窗口已保留" : "")
                 }
             }
         }

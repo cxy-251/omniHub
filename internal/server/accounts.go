@@ -11,6 +11,33 @@ import (
 	"omnihub/internal/auth"
 )
 
+func (r *Router) handleSessionSettings(w http.ResponseWriter, req *http.Request) {
+	if auth.UserFromContext(req.Context()).Role != auth.RoleAdmin {
+		http.Error(w, "administrator required", http.StatusForbidden)
+		return
+	}
+	if req.Method == http.MethodPost {
+		var input struct {
+			Days int `json:"idle_days"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1024))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&input) != nil || decoder.Decode(new(any)) != io.EOF {
+			http.Error(w, "invalid session settings", http.StatusBadRequest)
+			return
+		}
+		if err := r.authDB.SetSessionIdleDays(req.Context(), input.Days); err != nil {
+			accountError(w, err)
+			return
+		}
+	} else if req.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"idle_days": r.authDB.SessionIdleDays(), "min_days": 1, "max_days": auth.MaxSessionIdleDays})
+}
+
 func accountError(w http.ResponseWriter, err error) {
 	status := 503
 	if errors.Is(err, auth.ErrAccountInput) {

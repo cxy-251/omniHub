@@ -3,8 +3,9 @@ import { api } from './api';
 import { usePaged } from './paged';
 import MasonryGrid from './MasonryGrid';
 import ChannelBar from './ChannelBar';
+import { mangaHandlesKeyboard } from './mangaState';
 import { feedPath, feedQuery, newSeed, restore, sendEvent, trash, useGroups, useLiked } from './feed';
-import { button, chip, divider, iconButton, store, stored } from './ui';
+import { button, chip, divider, iconButton, select, store, stored } from './ui';
 
 const Matrix = lazy(() => import('./Matrix'));
 
@@ -12,21 +13,28 @@ type Photo = { id: string; filename: string; width: number; height: number; colo
 // 图库（空是原来的相册）也要带上，缩略图和原图在各自图库里
 const query = (p: Photo) => new URLSearchParams({ library_id: p.library_id, id: p.id, ...(p.collection ? { collection: p.collection } : {}) }).toString();
 
-// 相册（只读）：频道（推荐 | 我的点赞 | 色系 | 回收站）的瀑布流 + 原图查看 + 多联放映（图片自动轮播）。
+// 相册（只读）：先选平台（全部 | 相册 | TWICE | …），再选频道（推荐 | 我的点赞 | 色系 | 回收站）的瀑布流 + 原图查看 + 多联放映（图片自动轮播）。
 // 回收站只在 omniHub 里隐藏，不改原图库。与桌面端共用 /api/feed/gallery。
 export default function GalleryPage({ active, isAdmin }: { active: boolean; isAdmin: boolean }) {
   const [mode, setMode] = useState<'browse' | 'matrix'>(() => window.location.hash.endsWith('/matrix') ? 'matrix' : stored('omnihub.gallery.mode', 'browse'));
-  const [channel, setChannel] = useState(() => stored('omnihub.gallery.channel', 'recommend'));
+  const legacy = stored('omnihub.gallery.channel', 'recommend');
+  const [channel, setChannel] = useState(() => (legacy.startsWith('group:coll:') || legacy.startsWith('group:nsfw:')) ? 'recommend' : legacy);
+  const [platform, setPlatform] = useState(() => stored('omnihub.gallery.platform', ''));
   const [seed, setSeed] = useState(newSeed);
   const [reload, setReload] = useState(0);
   const [open, setOpen] = useState<number>();
   const [ratios, setRatios] = useState<number[]>([]);
   useEffect(() => store('omnihub.gallery.mode', mode), [mode]);
   useEffect(() => store('omnihub.gallery.channel', channel), [channel]);
+  useEffect(() => store('omnihub.gallery.platform', platform), [platform]);
   const { groups, pins } = useGroups('gallery', active);
   const liked = useLiked('gallery');
+  const platforms = [...new Set(groups.map(g => g.platform).filter(Boolean))] as string[];
+  const shownGroups = groups.filter(g => (g.platform || '') === platform && g.count > 0);
+  useEffect(() => { if (platform && groups.length && !platforms.includes(platform)) setPlatform(''); }, [platform, groups]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pickPlatform = (p: string) => { setPlatform(p); if (channel.startsWith('group:') && !groups.some(g => `group:${g.id}` === channel && (g.platform || '') === p && g.count > 0)) setChannel('recommend'); };
   const browsing = active && mode === 'browse';
-  const q = feedQuery({ channel, seed, r: reload || undefined });
+  const q = feedQuery({ channel, scope: platform ? `tag:platform:${platform}` : undefined, seed, r: reload || undefined });
   const paged = usePaged<Photo>(browsing ? `${feedPath('gallery', 'items')}?${q}` : '', 100);
   useEffect(() => {
     if (!browsing) return;
@@ -39,18 +47,17 @@ export default function GalleryPage({ active, isAdmin }: { active: boolean; isAd
   if (!active) return null;
   if (mode === 'matrix') return <Suspense fallback={<p role="status">正在加载…</p>}><Matrix domain="gallery" onExit={() => setMode('browse')} /></Suspense>;
   return <section className="space-y-1.5">
-    {/* 一行：浏览 | 多联放映 ‖ 频道条（窄屏时单独一行）‖ 换一批 · 张数 */}
+    {/* 可展开的分类筛选独占一行，避免挤成横向滚动条。 */}
     <div className="flex flex-wrap items-center gap-1.5">
-      <button className={chip(true)}>浏览</button>
       <button className={chip(false)} onClick={() => setMode('matrix')}>多联放映</button>
+      {platforms.length > 0 ? <select aria-label="平台" className={select} value={platform} onChange={e => pickPlatform(e.target.value)}>
+        {['', ...platforms].map(p => <option key={p || 'all'} value={p}>{p || '全部平台'}</option>)}
+      </select> : null}
       <span className={divider} />
-      <div className="order-last min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-0">
-        <ChannelBar groups={groups} pins={pins} channel={channel} onPick={setChannel} showHidden={isAdmin} />
-      </div>
-      <span className={`${divider} hidden sm:block`} />
       {channel === 'recommend' ? <button className={chip(false)} onClick={() => setSeed(newSeed())}>换一批</button> : null}
       <span className={`text-xs ${paged.error ? 'text-danger' : 'text-muted'}`}>{paged.error || `${paged.total} 张${channel === 'hidden' ? '（回收站）' : ''}`}</span>
     </div>
+    <ChannelBar groups={shownGroups} pins={pins} channel={channel} onPick={setChannel} showHidden={isAdmin} />
     <MasonryGrid ratios={ratios} minColumnWidth={180} render={i => {
       const photo = paged.item(i);
       return <button className="relative block h-full w-full overflow-hidden rounded" style={{ background: photo?.color_hex || 'var(--surface)' }} onClick={() => photo && setOpen(i)}>
@@ -105,6 +112,7 @@ function Viewer({ index, total, photo, liked, restoring, onLike, onTrash, onInde
   keys.current = { index, total, onIndex, onClose, onLike, doTrash, zoom };
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (mangaHandlesKeyboard()) return;
       const k = keys.current;
       if (e.key === 'Escape' && k.zoom.zoomed) k.zoom.reset();
       else if (e.key === 'Escape') k.onClose();
@@ -121,7 +129,7 @@ function Viewer({ index, total, photo, liked, restoring, onLike, onTrash, onInde
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
-  return <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex flex-col bg-black/95 text-white">
+  return <div role="dialog" aria-label="图片查看器" className="fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden bg-black/95 text-white" style={{ right: 'var(--manga-dock, 0px)' }}>
     <div className="flex flex-wrap items-center gap-2 p-2">
       <p className="min-w-0 flex-1 truncate text-sm">{index + 1} / {total}{photo ? ` · ${photo.width}×${photo.height}` : ''}</p>
       {notice ? <span className={`text-sm ${armed ? 'font-bold text-[#ff7b72]' : 'text-[#3fb950]'}`}>{notice}</span> : null}

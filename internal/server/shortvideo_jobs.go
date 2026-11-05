@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -22,17 +23,19 @@ import (
 // 短视频后台工作：同一时间只执行一件事（扫描 / 图集入库 / 清理原目录 / 生成缩略图），
 // 外部进程均以 nice + ionice 低优先级运行。显式任务优先于缩略图生成。
 type svWorker struct {
-	mu        sync.Mutex
-	thumbs    bool
-	persist   func(bool) error
-	job       string
-	done      int
-	total     int
-	lastJob   string
-	lastError string
-	lastNote  string
-	detail    string // 进行中的任务现在在等什么（比如等手机重新连上）
-	cancelJob context.CancelFunc
+	mu          sync.Mutex
+	thumbs      bool
+	persist     func(bool) error
+	job         string
+	done        int
+	total       int
+	lastJob     string
+	lastError   string
+	lastNote    string
+	detail      string // 进行中的任务现在在等什么（比如等手机重新连上）
+	logs        []svLog
+	phoneReview *phoneThumbReview
+	cancelJob   context.CancelFunc
 
 	requests chan string
 	wake     chan struct{}
@@ -43,14 +46,30 @@ type svWorker struct {
 
 // svStatus 是管理页显示的工作状态。
 type svStatus struct {
-	Thumbnails bool   `json:"thumbnails_enabled"`
-	Job        string `json:"job"`
-	Done       int    `json:"done"`
-	Total      int    `json:"total"`
-	LastJob    string `json:"last_job"`
-	LastError  string `json:"last_error"`
-	LastNote   string `json:"last_note"`
-	Detail     string `json:"detail,omitempty"`
+	Thumbnails  bool               `json:"thumbnails_enabled"`
+	Job         string             `json:"job"`
+	Done        int                `json:"done"`
+	Total       int                `json:"total"`
+	LastJob     string             `json:"last_job"`
+	LastError   string             `json:"last_error"`
+	LastNote    string             `json:"last_note"`
+	Detail      string             `json:"detail,omitempty"`
+	Logs        []svLog            `json:"logs"`
+	PhoneReview *phoneThumbSummary `json:"phone_review,omitempty"`
+}
+
+type svLog struct {
+	Time    string `json:"time"`
+	Message string `json:"message"`
+}
+
+func (w *svWorker) note(message string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.logs = append(w.logs, svLog{time.Now().Format("15:04:05"), message})
+	if len(w.logs) > 200 {
+		w.logs = w.logs[len(w.logs)-200:]
+	}
 }
 
 func newSVWorker() *svWorker {
@@ -82,7 +101,16 @@ func (w *svWorker) close() {
 func (w *svWorker) status() svStatus {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return svStatus{w.thumbs, w.job, w.done, w.total, w.lastJob, w.lastError, w.lastNote, w.detail}
+	s := svStatus{Thumbnails: w.thumbs, Job: w.job, Done: w.done, Total: w.total, LastJob: w.lastJob, LastError: w.lastError, LastNote: w.lastNote, Detail: w.detail, Logs: append([]svLog{}, w.logs...)}
+	if s.Job == "" && len(w.requests) > 0 {
+		s.Job = "queued"
+	}
+	if w.phoneReview != nil {
+		v := w.phoneReview.Summary
+		v.CanClean = v.CanClean && time.Now().Before(w.phoneReview.Expires)
+		s.PhoneReview = &v
+	}
+	return s
 }
 
 func (w *svWorker) thumbsEnabled() bool {
@@ -96,6 +124,9 @@ func (w *svWorker) begin(job string, total int) context.Context {
 	w.mu.Lock()
 	w.job, w.done, w.total, w.cancelJob = job, 0, total, cancel
 	w.mu.Unlock()
+	if job != "thumbnails" && job != "probe" {
+		w.note("开始：" + job)
+	}
 	return ctx
 }
 
@@ -109,6 +140,13 @@ func (w *svWorker) progress(total int) {
 }
 
 func (w *svWorker) finish(job string, note string, err error) {
+	if job != "thumbnails" && job != "probe" {
+		message := note
+		if err != nil {
+			message += "；" + err.Error()
+		}
+		w.note(message)
+	}
 	w.mu.Lock()
 	if w.cancelJob != nil {
 		w.cancelJob()
@@ -175,6 +213,25 @@ func (r *Router) writableStores(noSource bool) (stores []*shortvideo.Store, dirs
 
 func (r *Router) runShortVideoJob(job string) {
 	w := r.svJobs
+	if body, ok := strings.CutPrefix(job, "phone-thumbs-plan\x00"); ok {
+		r.planPhoneThumbs(body)
+		return
+	}
+	if device, ok := strings.CutPrefix(job, "phone-thumbs-history\x00"); ok {
+		r.readPhoneThumbHistory(device)
+		return
+	}
+	if action, token, ok := strings.Cut(job, "\x00"); ok && (action == "phone-thumbs-clean" || action == "phone-thumbs-restore") {
+		w.mu.Lock()
+		valid := w.phoneReview != nil && w.phoneReview.Summary.Token == token
+		w.mu.Unlock()
+		if !valid {
+			w.finish(action, "", errors.New("预览已变化，请重新核对"))
+			return
+		}
+		r.movePhoneThumbs(action == "phone-thumbs-restore")
+		return
+	}
 	if rest, ok := strings.CutPrefix(job, "merge\x00"); ok {
 		libID, src, _ := strings.Cut(rest, "\x00")
 		r.mergeShortVideo(libID, src)
@@ -401,6 +458,7 @@ func (r *Router) keepDirs() []string {
 func (r *Router) phoneShortVideo() {
 	w := r.svJobs
 	ctx := w.begin("phone", 0)
+	w.note("连接 USB 手机，读取来源与目标清单")
 	src, _, phone, err := r.phoneEnds(ctx)
 	if err != nil {
 		w.finish("phone", "", err)
@@ -419,10 +477,12 @@ func (r *Router) phoneShortVideo() {
 	w.mu.Lock()
 	w.total = plan.Count
 	w.mu.Unlock()
+	w.note(fmt.Sprintf("计划复制 %d 个文件，%.2f GB", plan.Count, float64(plan.Bytes)/1e9))
 	res, err := shortvideo.RunPhone(ctx, src, phone, plan, listing, func(done int, _ int64) {
 		w.mu.Lock()
 		w.done = done
 		w.mu.Unlock()
+		w.note(fmt.Sprintf("已复制 %d/%d 个文件", done, plan.Count))
 	})
 	note := fmt.Sprintf("复制 %d 个文件（%.1f GB）", res.Copied, float64(res.Bytes)/1e9)
 	if len(plan.Conflicts) > 0 {
@@ -457,7 +517,13 @@ func (r *Router) cleanSyncedShortVideo() {
 	w.mu.Lock()
 	w.total = len(plan.Items)
 	w.mu.Unlock()
-	n, err := shortvideo.RunClean(ctx, plan, platform.Trash, func(int) { w.progress(0) })
+	w.note(fmt.Sprintf("已核对手机与其他库，计划回收 %d 项", len(plan.Items)))
+	n, err := shortvideo.RunClean(ctx, plan, platform.Trash, func(done int) {
+		w.progress(0)
+		if done == 1 || done%50 == 0 || done == len(plan.Items) {
+			w.note(fmt.Sprintf("已回收 %d/%d 项", done, len(plan.Items)))
+		}
+	})
 	note := fmt.Sprintf("移进回收站 %d 项（%d 个文件，%.1f GB）", n, plan.Files, float64(plan.Bytes)/1e9)
 	if plan.NotOnPhone+plan.NotOnKeep > 0 {
 		note += fmt.Sprintf("；保留手机上没有的 %d 个、SD 卡还没补的 %d 个", plan.NotOnPhone, plan.NotOnKeep)
@@ -606,6 +672,10 @@ func (r *Router) probePass() int {
 func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request) {
 	jobs := r.svJobs
 	action := req.URL.Path[len("/api/media/shortvideo/admin/"):]
+	if action == "phone-devices" || strings.HasPrefix(action, "phone-thumbs-") {
+		r.handlePhoneThumbs(w, req, action)
+		return
+	}
 	if req.Method == http.MethodGet && action == "status" {
 		type libStats struct {
 			ID     string           `json:"library_id"`
@@ -639,7 +709,7 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 			}
 			libs = append(libs, entry)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"worker": jobs.status(), "libraries": libs, "copy_targets": copyTo})
+		writeJSON(w, http.StatusOK, map[string]any{"worker": jobs.status(), "libraries": libs, "copy_targets": copyTo, "phone_maintenance": r.phoneADB != "" && runtime.GOOS != "android"})
 		return
 	}
 	if req.Method != http.MethodPost {

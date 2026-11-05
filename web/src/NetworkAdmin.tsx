@@ -1,3 +1,4 @@
+import { useVisiblePolling } from './useVisiblePolling';
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import { button, primaryButton } from './ui';
@@ -45,7 +46,7 @@ function LanSection() {
   </section>;
 }
 
-const tunnelRole = <p className="text-sm text-muted">外网访问靠 cloudflared：它在被访问的设备上运行，主动连到 Cloudflare 并保持连接；外网的人打开域名时，Cloudflare 把请求顺着这条连接转给这台设备的 omniHub。所以只有要被外网访问的设备需要它，用浏览器访问的一方什么都不用装。</p>;
+const tunnelRole = <details className="settings-help"><summary>外网访问说明</summary><p>被访问的设备需运行 cloudflared 并配置自己的隧道和域名；浏览器访问方无需安装。外网访问需要登录账号。</p></details>;
 
 // WanSection：广域网经 cloudflared 命名隧道从外网访问。域名可以改：服务端改隧道配置里的 hostname，
 // 在 Cloudflare 上把域名指向隧道，再经域名读回运行标识，确认指向的是这台设备。
@@ -55,13 +56,7 @@ function WanSection() {
   const [check, setCheck] = useState<Check>();
   const [error, setError] = useState(''), [pending, setPending] = useState(''), [checking, setChecking] = useState(false);
   const load = (signal?: AbortSignal) => api<Wan>('/api/network/wan', { signal }).then(w => { setWan(w); setDomain(d => d || w.domain); }).catch((e: Error) => { if (!signal?.aborted) setError(e.message); });
-  useEffect(() => { const c = new AbortController(); void load(c.signal); return () => c.abort(); }, []);
-  // 打开期间每 3 秒刷新连接状态
-  useEffect(() => {
-    if (!wan?.enabled) return;
-    const t = setInterval(() => void load(), 3000);
-    return () => clearInterval(t);
-  }, [wan?.enabled]);
+  useVisiblePolling(load, wan?.enabled ? 3000 : null);
   async function run(label: string, fn: () => Promise<void>) {
     setPending(label); setError('');
     try { await fn(); } catch (e) { setError((e as Error).message); }
@@ -80,14 +75,11 @@ function WanSection() {
   const changed = domain.trim().toLowerCase() !== wan.domain;
   if (!wan.binary) return <section className="space-y-3 rounded-lg border border-line bg-panel p-4">
     <h2 className="text-lg">广域网</h2>
-    <p className="text-sm">这台设备不提供外网访问。</p>
-    {tunnelRole}
-    <p className="text-sm text-muted">没有 cloudflared 的影响：外网访问不到这台设备。局域网和这台设备自己的浏览器照常能用；这台设备也照样能用浏览器经外网访问装了 cloudflared 的设备（比如 Deck 的域名）。</p>
-    <p className="text-sm text-muted">需要时：把 cloudflared 放在 ~/Applications/cloudflared/cloudflared 或系统的 PATH 里（Termux 里是 pkg install cloudflared），再打开这一页就会认出来，不用重启 omniHub。另外要在这台设备上登录 Cloudflare、建好它自己的命名隧道（~/.cloudflared/config.yml），然后在这里填域名。手机随身带出门，一般不需要。</p>
+    <p className="text-sm">未安装 cloudflared，外网访问不可用；本机和局域网仍可使用。</p>
+    <details className="settings-help"><summary>安装与配置</summary><p>把 cloudflared 放在 ~/Applications/cloudflared/cloudflared 或系统 PATH 中（Termux：pkg install cloudflared）。在这台设备上登录 Cloudflare，配置命名隧道（~/.cloudflared/config.yml），重新打开此页填写域名，无需重启 omniHub。浏览器访问方无需安装。</p></details>
   </section>;
   return <section className="space-y-3 rounded-lg border border-line bg-panel p-4">
     <h2 className="text-lg">广域网</h2>
-    <p className="text-sm text-muted">经 Cloudflare 隧道从外网访问（需要登录账号）。每台设备用自己的隧道和域名。</p>
     {tunnelRole}
     {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
     <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={wan.enabled} disabled={!!pending} onChange={e => void run('toggle', async () => { setWan(await post('/api/network/wan', { enabled: e.target.checked }) as Wan); })} />允许广域网访问</label>
@@ -128,8 +120,8 @@ function HomeSection() {
   const s = home?.status;
   return <section className="space-y-4 rounded-lg border border-line bg-panel p-4">
     <div>
-      <h2 className="mb-1 text-lg">只在家里的网络上对外服务</h2>
-      <p className="text-sm text-muted">打开后，局域网里的其他设备只有在可信网络上才能访问；连到别的 Wi-Fi 或用移动数据时自动停止对外服务，回到可信网络 15 秒内恢复。这台设备自己的浏览器（127.0.0.1）一直能用。可信网络按路由器的 UPnP 标识识别，路由器需要打开 UPnP。</p>
+      <h2 className="mb-1 text-lg">可信网络</h2>
+      <details className="settings-help"><summary>访问规则</summary><p>开启后只在可信网络对外服务；切换到其他网络时停止，返回后 15 秒内恢复。本机访问不受影响。通过路由器 UPnP 标识识别网络，需开启路由器 UPnP。</p></details>
     </div>
     {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
     {s ? <>

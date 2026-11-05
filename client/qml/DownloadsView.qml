@@ -87,7 +87,7 @@ Item {
                 onActivated: prefs.library = currentValue
                 ToolTip.visible: hovered; ToolTip.text: "下载先放进这个资源库的暂存区；移入时同一块盘上只是改名"
             }
-            Chip { text: "网络设置"; visible: !!view.currentKind && !!view.currentKind.scheme; selected: netBox.visible; onClicked: netBox.visible = !netBox.visible }
+            Chip { text: "网络设置"; visible: !!view.currentKind && (!!view.currentKind.scheme || view.currentKind.id === "btmanga"); selected: netBox.visible; onClicked: netBox.visible = !netBox.visible }
             Chip {
                 text: "任务" + (view.runningJobs ? "（" + view.runningJobs + " 个进行中）" : view.jobs.length ? "（" + view.jobs.length + "）" : "")
                 selected: view.showTasks
@@ -142,6 +142,14 @@ Item {
         Loader {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            active: prefs.tab === "btmanga" && !!view.currentKind
+            visible: active
+            sourceComponent: Component { BTMangaPanel { kind: view.currentKind; onRun: function (params) { view.run("btmanga", params) } } }
+        }
+
+        Loader {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
             active: prefs.tab === "manga" && !!view.currentKind
             visible: active
             sourceComponent: Component {
@@ -153,7 +161,7 @@ Item {
         }
 
         RowLayout {
-            visible: prefs.tab !== "mega" && prefs.tab !== "staging" && prefs.tab !== "cookies" && prefs.tab !== "manga" && !!view.currentKind
+            visible: prefs.tab !== "mega" && prefs.tab !== "staging" && prefs.tab !== "cookies" && prefs.tab !== "manga" && prefs.tab !== "btmanga" && !!view.currentKind
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 12
@@ -278,6 +286,7 @@ Item {
                                     Chip { text: "去收听"; visible: !!(card.job.open && card.job.open.type === "audio"); onClicked: view.openAudioAlbum(card.job.open.album) }
                                     Chip { text: "去暂存区"; visible: ["music", "youtube", "bilibili", "x", "other"].indexOf(card.job.kind) >= 0 && !card.job.running && !(card.job.result && card.job.result.plan); onClicked: prefs.tab = "staging" }
                                     Chip { text: "打开文件夹"; visible: !!(card.job.result && card.job.result.path); onClicked: Qt.openUrlExternally("file://" + card.job.result.path) }
+                                    Chip { text: "查看下载分卷"; visible: card.job.kind === "btmanga" && !!(card.job.result && card.job.result.work); onClicked: Qt.openUrlExternally("file://" + card.job.result.work) }
                                     Chip { text: "停止"; visible: card.job.running; onClicked: api.send("POST", "/api/downloads/stop", {id: card.job.id}, function () { view.refreshJobs() }) }
                                     Chip { text: card.showLog ? "收起日志" : "日志"; selected: card.showLog; onClicked: { card.showLog = !card.showLog; if (card.showLog) card.loadLog() } }
                                 }

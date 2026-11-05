@@ -7,8 +7,8 @@ import (
 	"sync"
 )
 
-const readerCacheBudget = 8 << 20
-const readerCacheItemBudget = 4 << 20
+const readerCacheBudget = 128 << 20
+const readerCacheItemBudget = 128 << 20
 const maxOpenReaders = 8
 
 type cachedReader struct {
@@ -23,7 +23,7 @@ type cachedReader struct {
 
 // ReaderCache reuses immutable CBZ directory metadata for at most eight books.
 // Descriptors exist only while leased, so idle caches do not hold media mounted.
-// Retained metadata has an estimated 8MiB budget; startup does no I/O.
+// Retained metadata has an estimated 128MiB budget; startup does no I/O.
 type ReaderCache struct {
 	mu       sync.Mutex
 	current  map[string]*cachedReader

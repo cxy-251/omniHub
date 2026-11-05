@@ -85,6 +85,27 @@ func (r *CBZReader) ParseMetadataContext(ctx context.Context) (*PackageMetadata,
 	if _, set := present["local_chapters"]; !set {
 		meta.LocalChapters = r.chapterCount()
 	}
+	// Legacy JM packages used is_complete for "downloaded up to date".
+	// Chapter-count equality says nothing about whether the author has finished.
+	if (present["online_chapters"] || present["local_chapters"]) && meta.CompletionStatus == "" {
+		if meta.DownloadComplete == nil {
+			meta.DownloadComplete = meta.IsComplete
+		}
+		meta.IsComplete = nil
+	}
+	switch meta.CompletionStatus {
+	case "completed":
+		complete := true
+		meta.IsComplete = &complete
+	case "ongoing":
+		complete := false
+		meta.IsComplete = &complete
+	case "unknown", "hiatus", "cancelled":
+		meta.IsComplete = nil
+	case "":
+	default:
+		return nil, errors.New("invalid manga completion status")
+	}
 	if err := validateMetadata(&meta); err != nil {
 		return nil, err
 	}
@@ -92,7 +113,7 @@ func (r *CBZReader) ParseMetadataContext(ctx context.Context) (*PackageMetadata,
 }
 
 func validateMetadata(meta *PackageMetadata) error {
-	if len(meta.ID) > 256 || len(meta.Title) > 4096 || len(meta.Author) > 4096 || len(meta.Description) > 64<<10 || len(meta.Tags) > 512 || meta.LocalChapters < 0 || meta.LocalChapters > 20000 || meta.OnlineChapters < 0 || meta.OnlineChapters > 20000 {
+	if len(meta.ID) > 256 || len(meta.Title) > 4096 || len(meta.Author) > 4096 || len(meta.Description) > 64<<10 || len(meta.Tags) > 512 || meta.LocalChapters < 0 || meta.LocalChapters > MaxPages || meta.OnlineChapters < 0 || meta.OnlineChapters > MaxPages {
 		return errors.New("manga metadata exceeds field capacity")
 	}
 	for _, tag := range meta.Tags {

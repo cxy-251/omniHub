@@ -1,51 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
-import { api } from './api';
+import { useEffect, useState } from 'react';
+import { api, post } from './api';
 import { usePaged } from './paged';
 import { formatTime, useAudio, type Track } from './AudioEngine';
 import { chip, stored, store } from './ui';
 import VirtualList from './VirtualList';
+import MusicCollections from './MusicCollections';
+import { MusicRatingButtons } from './MusicFeedback';
 
 type Album = { id: string; title: string; track_count: number; cover_path?: string; library_name?: string };
-type LyricLine = { time: number; text: string };
-type LyricsData = { synced: boolean; lines: LyricLine[] };
 const lyricStatusText: Record<string, string> = { plain: '只有纯文本歌词', search: '歌词是搜索来的，待核对', none: '查不到歌词', error: '歌词查询失败', unknown: '没查过歌词' };
 
-// 正在播放那首的歌词：带时间轴的跟着进度高亮、滚到中间（手动滚动后 4 秒内不跟随），点一行跳过去；纯文本整段显示。
-function LyricsPanel() {
-  const engine = useAudio();
-  const id = engine?.track?.id;
-  const [data, setData] = useState<LyricsData>({ synced: false, lines: [] });
-  const box = useRef<HTMLDivElement>(null);
-  const userScrolled = useRef(0);
-  useEffect(() => {
-    setData({ synced: false, lines: [] });
-    if (!id) return;
-    const controller = new AbortController();
-    api<LyricsData>(`/api/media/audio/lyrics?path=${encodeURIComponent(id)}`, { signal: controller.signal })
-      .then(r => setData(r?.lines ? r : { synced: false, lines: [] })).catch(() => undefined);
-    return () => controller.abort();
-  }, [id]);
-  const t = engine?.current ?? 0;
-  let current = -1;
-  if (data.synced) for (let k = 0; k < data.lines.length && data.lines[k].time <= t + 0.2; k++) current = k;
-  useEffect(() => {
-    if (current < 0 || Date.now() - userScrolled.current < 4000) return;
-    const el = box.current?.children[current] as HTMLElement | undefined;
-    const parent = box.current;
-    if (el && parent) parent.scrollTo({ top: el.offsetTop - parent.clientHeight / 2 + el.clientHeight / 2, behavior: 'smooth' });
-  }, [current]);
-  if (!data.lines.length) return null;
-  return <aside className="min-w-0 space-y-2">
-    <p className="truncate text-xs text-muted">{engine?.track?.title}{data.synced ? '' : '（纯文本歌词）'}</p>
-    <div ref={box} className="relative max-h-[50vh] space-y-1.5 overflow-y-auto rounded border border-line p-3 md:max-h-[calc(100vh-11rem)]"
-      onWheel={() => { userScrolled.current = Date.now(); }} onTouchMove={() => { userScrolled.current = Date.now(); }}>
-      {data.lines.map((l, i) => <p key={i} className={`whitespace-pre-wrap ${!data.synced ? 'text-sm' : i === current ? 'text-base text-primary' : 'cursor-pointer text-sm text-muted hover:text-foreground'}`}
-        onClick={() => { if (data.synced) engine?.seek(l.time); }}>{l.text || '\u00a0'}</p>)}
-    </div>
-  </aside>;
-}
-
-type Artist = { id: string; title: string; single_count: number; album_count: number; track_count: number; cover_path?: string; library_name?: string };
+type Artist = { id: string; title: string; single_count: number; album_count: number; track_count: number; cover_path?: string; library_name?: string; main_artist: boolean };
 type Section = { album: string; id: string; offset: number; count: number; cover_path?: string };
 const cover = (p?: string) => p ? `/api/media/audio/cover?path=${encodeURIComponent(p)}` : '';
 
@@ -56,6 +21,7 @@ function MusicPane({ artist }: { artist?: Artist }) {
   const [sections, setSections] = useState<Section[]>([]);
   const [album, setAlbum] = useState<Section>();
   const [review, setReview] = useState(false);
+  const [error, setError] = useState('');
   useEffect(() => {
     setSections([]); setAlbum(undefined);
     if (!artist) return;
@@ -83,19 +49,26 @@ function MusicPane({ artist }: { artist?: Artist }) {
       <button className={chip(engine?.albumId === scope && engine?.mode === 'list')} onClick={() => album ? loop(album.id, album.album) : loop(artist.id, artist.title)}>
         {album ? '🔁 循环这张专辑' : '🔁 循环这个歌手'}</button>
       <button className={`ml-auto ${chip(review)}`} onClick={() => setReview(v => !v)}>歌词待处理</button>
+      <button className={chip(artist.main_artist)} onClick={() => {
+        void post('/api/media/audio/music/artist', { id: artist.id, main: !artist.main_artist }).then(() => engine?.refreshMusic(true)).catch((e: Error) => setError(e.message));
+      }}>{artist.main_artist ? '归入其他歌手' : '设为常听歌手'}</button>
     </div>
+    {error ? <p className="text-sm text-danger">{error}</p> : null}
     <p className="text-xs text-muted">{engine?.albumId === artist.id ? '正在按歌手播放：播完一首接下一首单曲，单曲完了接各张专辑'
       : album && engine?.albumId === album.id ? '正在循环这张专辑' : '点一首歌：按歌手播放列表接着往下放（单曲 → 各张专辑）'}</p>
     {!album && !review && singles ? <p className="text-xs text-muted">单曲</p> : null}
     {rows ? <VirtualList total={rows} rowHeight={38} className="max-h-[calc(100vh-16rem)] min-h-24 rounded border border-line" render={i => {
       const t = paged.item(i);
       const current = !!t && engine?.track?.id === t.id;
-      return <button className={`flex h-full w-full items-center gap-3 border-b border-line px-3 text-left hover:bg-panel ${current ? 'text-primary' : ''}`} disabled={!t} onClick={() => t && play(t)}>
+      return <div className={`flex h-full w-full items-center gap-2 border-b border-line px-3 hover:bg-panel ${current ? 'text-primary' : ''}`}>
+        <button className="flex min-w-0 flex-1 items-center gap-3 text-left" disabled={!t} onClick={() => t && play(t)}>
         <span className="w-8 shrink-0 text-right text-xs text-muted">{t ? (album ? t.index : i + 1) : ''}</span>
         {current ? <span className="text-xs">{engine?.playing ? '🔊' : '⏸'}</span> : null}
         <span className="min-w-0 flex-1 truncate text-sm">{t?.title ?? '…'}</span>
         {t?.lyrics_status ? <span className="shrink-0 text-xs text-[#e3b341]">{lyricStatusText[t.lyrics_status] ?? t.lyrics_status}</span> : null}
-      </button>;
+        </button>
+        {t ? <MusicRatingButtons id={t.id} engine={engine} /> : null}
+      </div>;
     }} /> : null}
     {!album && !review && albums.length ? <>
       <p className="pt-2 text-xs text-muted">专辑</p>
@@ -126,6 +99,8 @@ export default function AudioPage({ active }: { active: boolean }) {
   const [section, setSection] = useState<'music' | 'book'>(() => stored('omnihub.audio.section', 'music'));
   const [artists, setArtists] = useState<Artist[]>([]);
   const [artistId, setArtistId] = useState<string>(() => stored('omnihub.audio.artist', ''));
+  const [musicCollection, setMusicCollection] = useState('all');
+  const [otherArtists, setOtherArtists] = useState(false);
   const artist = artists.find(a => a.id === artistId);   // 只看没有带时间轴歌词的（以后单独补）
   const album = albums.find(a => a.id === selected);
 
@@ -138,12 +113,17 @@ export default function AudioPage({ active }: { active: boolean }) {
     api<Album[]>('/api/media/audio/albums?limit=100', { signal: controller.signal })
       .then(list => { setAlbums(list); if (!list.some(a => a.id === selected) && list.length) setSelected(list[0].id); })
       .catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
-    api<Recent[]>('/api/media/audio/recent?limit=6', { signal: controller.signal }).then(setRecent).catch(() => undefined);
     api<Artist[]>('/api/media/audio/artists', { signal: controller.signal })
       .then(list => { setArtists(list); if (!list.some(a => a.id === artistId) && list.length) setArtistId(list[0].id); }).catch(() => undefined);
     return () => controller.abort();
-    // 播放的分集变化时刷新「继续收听」
-  }, [active, engine?.track?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [active, engine?.musicCatalogVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!active) return;
+    const controller = new AbortController();
+    api<Recent[]>('/api/media/audio/recent?limit=6', { signal: controller.signal }).then(setRecent).catch(() => undefined);
+    return () => controller.abort();
+  }, [active, engine?.track?.id]);
+  useEffect(() => { if (active) void engine?.refreshMusic().catch((e: Error) => setError(e.message)); }, [active, engine?.refreshMusic]);
   useEffect(() => { const t = window.setTimeout(() => setSearch(query.trim()), 300); return () => window.clearTimeout(t); }, [query]);
 
   const endpoint = active && album ? `/api/media/audio/tracks?${new URLSearchParams({ path: album.id, ...(search ? { q: search } : {}), ...(unsyncedOnly ? { lyrics: 'unsynced' } : {}) })}` : '';
@@ -157,12 +137,17 @@ export default function AudioPage({ active }: { active: boolean }) {
   if (!active) return null;
   const done = (t: { offset: number; duration: number }) => t.duration > 0 && t.offset >= t.duration - 5;
 
-  return <section className="grid gap-3 md:grid-cols-[16rem_1fr] xl:grid-cols-[16rem_1fr_20rem]">
-    <aside className="space-y-1 md:max-h-[calc(100vh-9rem)] md:overflow-y-auto">
+  return <section className="audio-library">
+    <aside className="max-h-64 space-y-1 overflow-y-auto md:max-h-[calc(100vh-9rem)]">
       <div className="flex gap-2 pb-1">
         <button className={chip(section === 'music')} onClick={() => setSection('music')}>音乐</button>
         <button className={chip(section === 'book')} onClick={() => setSection('book')}>有声书</button>
       </div>
+      {section === 'music' ? <div className="space-y-2 py-2">
+        <div className="flex flex-wrap gap-1">{[['all', '全部音乐'], ['liked', '我的点赞'], ['disliked', '不喜欢'], ...(engine?.music.can_trash ? [['trash', '回收记录']] : [])].map(([key, title]) =>
+          <button key={key} className={chip(musicCollection === key)} onClick={() => setMusicCollection(key)}>{title}</button>)}</div>
+        <div className="flex gap-1"><button className={chip(!otherArtists)} onClick={() => { setOtherArtists(false); setMusicCollection('all'); }}>常听歌手</button><button className={chip(otherArtists)} onClick={() => { setOtherArtists(true); setMusicCollection('other'); }}>其他歌手</button></div>
+      </div> : null}
       {error ? <p className="text-sm text-danger">{error}</p> : null}
       {recent.length ? <p className="px-1 text-xs text-muted">继续收听</p> : null}
       {recent.map(r => <button key={r.audio_id} className="block w-full rounded px-2 py-1 text-left hover:bg-panel" onClick={() => {
@@ -174,8 +159,8 @@ export default function AudioPage({ active }: { active: boolean }) {
         <p className="truncate text-sm">{r.title}</p>
         <p className="truncate text-xs text-muted">{r.album_title} · {done(r) ? '已听完' : `听到 ${formatTime(r.offset)}`}</p>
       </button>)}
-      <p className="px-1 pt-2 text-xs text-muted">{section === 'music' ? '歌手' : '专辑'}</p>
-      {section === 'music' ? artists.map(a => <button key={a.id} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left ${a.id === artistId ? 'bg-panel text-primary' : 'hover:bg-panel'}`} onClick={() => setArtistId(a.id)}>
+      <p className="px-1 pt-2 text-xs text-muted">{section === 'music' ? (otherArtists ? '其他歌手' : '常听歌手') : '专辑'}</p>
+      {section === 'music' ? artists.filter(a => !!a.main_artist !== otherArtists).map(a => <button key={a.id} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left ${a.id === artistId && !musicCollection ? 'bg-panel text-primary' : 'hover:bg-panel'}`} onClick={() => { setArtistId(a.id); setMusicCollection(''); }}>
         {a.cover_path
           ? <img className="h-10 w-10 shrink-0 rounded object-cover" src={cover(a.cover_path)} alt="" />
           : <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded bg-panel text-xl">♪</span>}
@@ -187,7 +172,7 @@ export default function AudioPage({ active }: { active: boolean }) {
         <span className="min-w-0"><span className="block truncate text-sm">{a.title}</span><span className="block text-xs text-muted">{a.track_count} 集{a.library_name ? ` · ${a.library_name}` : ''}</span></span>
       </button>)}
     </aside>
-    {section === 'music' ? <MusicPane artist={artist} /> : <div className="min-w-0 space-y-2">
+    {section === 'music' ? (musicCollection ? <MusicCollections collection={musicCollection} /> : <MusicPane artist={artist} />) : <div className="min-w-0 space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="truncate text-lg font-semibold">{album?.title ?? '没有音声专辑'}</h2>
         {album ? <span className="text-sm text-muted">{paged.total} 集</span> : null}
@@ -213,6 +198,5 @@ export default function AudioPage({ active }: { active: boolean }) {
       }} />
       {!paged.total && album ? <p className="text-sm text-muted">{search || unsyncedOnly ? '没有匹配的分集' : '加载中…'}</p> : null}
     </div>}
-    <LyricsPanel />
   </section>;
 }

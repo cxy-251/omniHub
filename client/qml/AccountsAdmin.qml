@@ -20,6 +20,7 @@ ColumnLayout {
     property int resetFor: 0
     // 输入新密码时可以显示明文；已有密码只存了哈希，无法显示，忘了就在这里重置。
     property bool showPasswords: false
+    property bool sessionLoaded: false
 
     readonly property var levels: [[0, "游客"], [1, "用户"], [2, "VIP1"], [3, "VIP2"], [4, "VIP3"], [99, "管理员"]]
     // 工具按单个工具分级（子分区 tools/…）；任务与设置只对管理员角色开放，不在这里设等级。
@@ -30,6 +31,7 @@ ColumnLayout {
     ApiClient { id: api; onErrorChanged: if (error) { page.notice = error; page.noticeError = true } }
     function say(text) { notice = text; noticeError = false }
     function load() {
+        api.getJSON("/api/admin/sessions", function (s) { sessionDays.value = s.idle_days; page.sessionLoaded = true })
         api.getJSON("/api/admin/permissions", function (p) { page.permissions = p })
         api.getJSON("/api/admin/subsections", function (list) { page.subsections = list })
         api.getJSON("/api/admin/devices", function (d) { page.devices = d.devices || [] })
@@ -47,6 +49,15 @@ ColumnLayout {
 
     Label { text: "账号与权限"; color: "#e6edf3"; font.pixelSize: 20 }
     Label { visible: page.notice !== ""; text: page.notice; color: page.noticeError ? "#f85149" : "#3fb950"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+
+    Label { text: "Web 登录保持"; color: "#c9d1d9"; font.pixelSize: 15; font.bold: true }
+    RowLayout {
+        Label { text: "连续未使用"; color: "#c9d1d9" }
+        SpinBox { id: sessionDays; from: 1; to: 365; value: 30; editable: true; enabled: page.sessionLoaded }
+        Label { text: "天后退出"; color: "#c9d1d9" }
+        Button { text: "保存"; enabled: page.sessionLoaded; onClicked: page.post("/api/admin/sessions", {idle_days: sessionDays.value}, "登录保持已设为 " + sessionDays.value + " 天") }
+    }
+    Label { text: "正常访问自动续期。保存后用于新登录及有效会话的后续续期，无需重启；已过期的登录需要重新登录。"; color: "#8b949e"; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
 
     // 分区等级
     Label { text: "分区最低等级"; color: "#c9d1d9"; font.pixelSize: 15; font.bold: true }

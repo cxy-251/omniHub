@@ -17,7 +17,7 @@ export default function PasswordChange({ onCancel }: { onCancel: () => void }) {
     finally { setCurrent(''); setPassword(''); setPending(false); }
   }
   const input = 'rounded-md border border-line bg-background px-3 py-2';
-  return <form className="mb-6 space-y-3 rounded-lg border border-line bg-panel p-4" onSubmit={submit}>
+  return <form className="mb-6 space-y-3 rounded-lg border border-line bg-panel p-4" data-dirty={!!current || !!password || pending} onSubmit={submit}>
     <p>修改密码后，所有登录会话与信任设备都需要重新登录。</p>
     {error ? <p role="alert" className="text-danger">{error}</p> : null}
     <div className="flex flex-wrap items-end gap-3">

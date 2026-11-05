@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent 
 import { api, request, type Status } from './api';
 import { chip, notify, store, stored } from './ui';
 import { MangaWindow } from './mangaWindow';
+import { mangaOpenKey as openKey, type Book } from './mangaState';
 
-export type Book = { metadata_error?: string; title: string; logical_path: string; library_name: string; read_only: boolean; total_pages: number };
 type Page = { index: number; chapter_index: number; entry: string };
 type Chapter = { title: string; first_page: number; pages: number };
 type PageList = { pages: Page[]; total: number; file_version: string; chapters?: Chapter[] };
@@ -28,11 +28,6 @@ function chapterName(c: Chapter, i: number) {
 //   窗口放得下小窗（至少 320 像素）就能停靠在右侧，竖屏小窗、宽度可拖动，左边照常浏览 omniHub 的其他页面；也可以铺满整个页面。
 //   窗口比 720 窄（手机竖屏）时默认全屏沉浸阅读，也能手动切成小窗。
 // 当前打开的书存在浏览器里，刷新后还在。
-const openKey = 'omnihub.manga.open';
-export function openManga(book: Book) {
-  store(openKey, book);
-  globalThis.dispatchEvent(new CustomEvent('omnihub-manga-open', { detail: book }));
-}
 
 // 小窗最窄 320 像素（拖动宽度的下限）。窗口能放下它就可以切成小窗，不看是什么设备；
 // 窗口比 720 窄时默认全屏（手机竖屏），更宽默认小窗。手动切过的按窄窗、宽窗分别记住。
@@ -84,7 +79,7 @@ export function MangaDock() {
     document.body.style.userSelect = 'none';
     globalThis.addEventListener('mousemove', move); globalThis.addEventListener('mouseup', up);
   }
-  return <div className={docked ? 'fixed bottom-0 right-0 top-0 z-40 border-l border-line' : 'fixed inset-0 z-50'} style={docked ? { width: dockWidth } : undefined}>
+  return <div data-manga-reader={docked ? 'docked' : 'full'} className={docked ? 'fixed bottom-0 right-0 top-0 z-40 border-l border-line' : 'fixed inset-0 z-50'} style={docked ? { width: dockWidth } : undefined}>
     {docked ? <div className="absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize hover:bg-[#58a6ff]/40" title="拖动调整宽度" onMouseDown={resize} /> : null}
     <BookReader key={book.logical_path} book={book} docked={docked} canDock={canDock} onClose={close} onToggleDock={toggleFull} />
   </div>;
@@ -128,9 +123,11 @@ function BookReader({ book, docked, canDock, onClose, onToggleDock }: { book: Bo
   const selectedPage = useRef(0);
   const columns = mode === 'double' ? 2 : 1;
   const model = useMemo(() => boot ? new MangaWindow(Math.ceil(boot.total / columns)) : undefined, [boot, columns]);
-  const current = useRef({ mode, model, focusRow });
-  current.current = { mode, model, focusRow };
   const window = model ? mode === 'single' ? { start: focusRow, end: focusRow + 1 } : model.window(focusRow) : { start: 0, end: 0 };
+  const layout = model && mode !== 'single' ? model.layout(window.start, window.end) : { top: 0, bottom: 0, origin: 0 };
+  const previousOrigin = useRef(0);
+  const current = useRef({ mode, model, focusRow, origin: layout.origin });
+  current.current = { mode, model, focusRow, origin: layout.origin };
 
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
@@ -206,7 +203,7 @@ function BookReader({ book, docked, canDock, onClose, onToggleDock }: { book: Bo
   function capture() {
     const root = viewport.current, state = current.current;
     if (!root || !state.model || !boot || restore.current || !active) return;
-    const anchor = state.mode === 'single' ? { row: state.focusRow, ratio: 0 } : state.model.locate(root.scrollTop);
+    const anchor = state.mode === 'single' ? { row: state.focusRow, ratio: 0 } : state.model.locate(root.scrollTop + state.origin);
     const rowColumns = state.mode === 'double' ? 2 : 1;
     const first = anchor.row * rowColumns;
     const index = selectedPage.current >= first && selectedPage.current < Math.min(boot.total, first + rowColumns) ? selectedPage.current : first;
@@ -214,7 +211,7 @@ function BookReader({ book, docked, canDock, onClose, onToggleDock }: { book: Bo
     const image = root.querySelector<HTMLImageElement>(`img[data-page="${index}"]`);
     const page = pages.current.get(index);
     if (!page || !image?.naturalWidth || !image.clientHeight) return;
-    const localOffset = root.scrollTop - (state.mode === 'single' ? 0 : state.model.prefix(anchor.row));
+    const localOffset = root.scrollTop + state.origin - (state.mode === 'single' ? 0 : state.model.prefix(anchor.row));
     const value = { page_index: index, chapter_index: page.chapter_index, scroll_offset_ratio: Math.max(0, Math.min(1, localOffset / image.clientHeight)), position_mode: 'page' };
     latest.current = { value, boot }; setPosition(value);
     if (state.mode !== 'single') setFocusRow(anchor.row);
@@ -226,8 +223,8 @@ function BookReader({ book, docked, canDock, onClose, onToggleDock }: { book: Bo
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
       const root = viewport.current, state = current.current;
-      if (!root || !state.model || !active) return;
-      if (state.mode !== 'single') setFocusRow(state.model.locate(root.scrollTop).row);
+      if (!root || !state.model || !active || restore.current) return;
+      if (state.mode !== 'single') setFocusRow(state.model.locate(root.scrollTop + state.origin).row);
       capture();
     });
   }
@@ -238,10 +235,10 @@ function BookReader({ book, docked, canDock, onClose, onToggleDock }: { book: Bo
     const images = [...root.querySelectorAll<HTMLImageElement>(`[data-row="${row}"] img`)];
     const heights = images.filter(image => image.naturalWidth > 0).map(image => Math.min(65536, image.naturalHeight * image.clientWidth / image.naturalWidth));
     if (!heights.length) return;
-    const anchorRow = mode === 'single' ? focusRow : model.locate(root.scrollTop).row;
+    const anchorRow = mode === 'single' ? focusRow : model.locate(root.scrollTop + layout.origin).row;
     const first = anchorRow * columns;
     const page = selectedPage.current >= first && selectedPage.current < first + columns ? selectedPage.current : first;
-    const offset = root.scrollTop - (mode === 'single' ? 0 : model.prefix(anchorRow));
+    const offset = root.scrollTop + layout.origin - (mode === 'single' ? 0 : model.prefix(anchorRow));
     const previousHeight = imageHeights.current.get(page);
     const anchor = { row: anchorRow, page, ratio: previousHeight ? offset / previousHeight : 0, offset };
     for (const image of images) {
@@ -268,12 +265,14 @@ function BookReader({ book, docked, canDock, onClose, onToggleDock }: { book: Bo
       return;
     }
     if (!root || !model) return;
+    const oldOrigin = previousOrigin.current;
+    previousOrigin.current = layout.origin;
     const target = restore.current;
     if (target) {
       const image = root.querySelector<HTMLImageElement>(`img[data-page="${target.page}"]`);
       if (image?.naturalWidth && image.clientHeight) {
         const row = Math.floor(target.page / columns);
-        root.scrollTop = (mode === 'single' ? 0 : model.prefix(row)) + target.ratio * image.clientHeight;
+        root.scrollTop = (mode === 'single' ? 0 : model.prefix(row) - layout.origin) + target.ratio * image.clientHeight;
         restore.current = undefined; adjustment.current = undefined;
         capture();
       }
@@ -281,10 +280,13 @@ function BookReader({ book, docked, canDock, onClose, onToggleDock }: { book: Bo
       const anchor = adjustment.current; adjustment.current = undefined;
       const image = root.querySelector<HTMLImageElement>(`img[data-page="${anchor.page}"]`);
       const offset = anchor.ratio && image?.naturalWidth ? anchor.ratio * image.clientHeight : anchor.offset;
-      root.scrollTop = (mode === 'single' ? 0 : model.prefix(anchor.row)) + offset;
+      root.scrollTop = (mode === 'single' ? 0 : model.prefix(anchor.row) - layout.origin) + offset;
+      capture();
+    } else if (oldOrigin !== layout.origin) {
+      root.scrollTop += oldOrigin - layout.origin;
       capture();
     }
-  }, [active, model, revision, mode, columns, focusRow]);
+  }, [active, model, revision, mode, columns, focusRow, layout.origin]);
 
   useEffect(() => {
     const root = viewport.current;
@@ -328,7 +330,7 @@ function BookReader({ book, docked, canDock, onClose, onToggleDock }: { book: Bo
   // 当前所在的卷/话：按页码在各卷起始页里找（页信息可能还没取到）
   const chapters = boot?.chapters ?? [];
   const chapterIndex = chapters.reduce((found, c, i) => c.first_page <= pageIndex ? i : found, 0);
-  const visibleEnd = model && viewport.current ? model.locate(viewport.current.scrollTop + viewport.current.clientHeight).row + 1 : focusRow + 2;
+  const visibleEnd = model && viewport.current ? model.locate(viewport.current.scrollTop + layout.origin + viewport.current.clientHeight).row + 1 : focusRow + 2;
   const chapterLabel = chapters.length > 1 ? chapterName(chapters[chapterIndex], chapterIndex) : '';
   const unit = chapters.length > 1 && chapterName(chapters[0], 0).endsWith('卷') ? '卷' : '话';
   const prev = () => goTo(pageIndex - columns), next = () => goTo(pageIndex + columns);
@@ -376,9 +378,9 @@ function BookReader({ book, docked, canDock, onClose, onToggleDock }: { book: Bo
   const iconButton = 'rounded-md px-3 py-2 text-sm hover:bg-white/10 disabled:opacity-40';
   return <div ref={shell} className="relative h-full w-full overflow-hidden" style={{ background }}
     onPointerMove={hover} onPointerEnter={() => { hovered.current = true; }} onPointerLeave={() => { hovered.current = false; }}>
-    {boot && model ? <div ref={viewport} className="h-full overflow-auto overscroll-contain" onScroll={scroll} onClick={tap}
+    {boot && model ? <div ref={viewport} className="h-full overflow-auto overscroll-contain" style={{ overflowAnchor: 'none' }} onScroll={scroll} onClick={tap}
       onWheel={() => { restore.current = undefined; if (menu) hideMenu(); }} onTouchStart={() => { restore.current = undefined; }} onTouchMove={() => { if (menu) hideMenu(); }}>
-      {mode !== 'single' ? <div style={{ height: model.prefix(window.start) }} /> : null}
+      {mode !== 'single' ? <div style={{ height: layout.top }} /> : null}
       {Array.from({ length: window.end - window.start }, (_, rowOffset) => {
         const row = window.start + rowOffset;
         return <div key={row} data-row={row} className={`flex items-start ${prefs.dir === 'rtl' ? 'flex-row-reverse' : ''} ${mode === 'single' ? 'h-full items-center justify-center' : ''}`} style={mode === 'single' ? undefined : { height: model.height(row) }}>
@@ -393,7 +395,7 @@ function BookReader({ book, docked, canDock, onClose, onToggleDock }: { book: Bo
           })}
         </div>;
       })}
-      {mode !== 'single' ? <div style={{ height: model.total() - model.prefix(window.end) }} /> : null}
+      {mode !== 'single' ? <div style={{ height: layout.bottom }} /> : null}
       {mode !== 'single' ? <div style={{ height: viewport.current?.clientHeight ?? 600 }} /> : null}
     </div> : <div className="flex h-full items-center justify-center p-6 text-center text-sm text-[#8b949e]">{error || '正在打开书包…'}</div>}
     {/* 提示与错误浮在顶部，不占阅读区 */}

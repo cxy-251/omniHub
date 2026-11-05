@@ -114,6 +114,9 @@ func Open(path string) (*DB, error) {
 	if _, err := db.Exec(feedSchema); err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
+	if _, err := db.Exec(musicSchema); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
 	return &DB{db: db}, nil
 }
 
@@ -123,7 +126,7 @@ func (d *DB) Close() error { return d.db.Close() }
 // SaveManga persists a UUID-qualified book position for one authenticated account.
 // An identical position does not update SQLite pages or timestamps.
 func (d *DB) SaveManga(ctx context.Context, p *manga.MangaProgress) error {
-	if p == nil || p.UserID <= 0 || strings.IndexByte(p.MangaID, ':') < 1 || len(p.MangaID) > 4096 || p.ChapterIndex < 0 || p.ChapterIndex > 20000 || p.PageIndex < 0 || p.PageIndex > 20000 || math.IsNaN(p.ScrollOffsetRatio) || math.IsInf(p.ScrollOffsetRatio, 0) || p.ScrollOffsetRatio < 0 || p.ScrollOffsetRatio > 1 {
+	if p == nil || p.UserID <= 0 || strings.IndexByte(p.MangaID, ':') < 1 || len(p.MangaID) > 4096 || p.ChapterIndex < 0 || p.ChapterIndex >= manga.MaxPages || p.PageIndex < 0 || p.PageIndex >= manga.MaxPages || math.IsNaN(p.ScrollOffsetRatio) || math.IsInf(p.ScrollOffsetRatio, 0) || p.ScrollOffsetRatio < 0 || p.ScrollOffsetRatio > 1 {
 		return ErrInvalidProgress
 	}
 	mode := p.PositionMode
@@ -177,7 +180,7 @@ func (d *DB) Manga(ctx context.Context, userID int64, id string) (*manga.MangaPr
 	if err != nil {
 		return nil, err
 	}
-	if p.ChapterIndex < 0 || p.ChapterIndex > 20000 || p.PageIndex < 0 || p.PageIndex > 20000 || math.IsNaN(p.ScrollOffsetRatio) || math.IsInf(p.ScrollOffsetRatio, 0) || p.ScrollOffsetRatio < 0 || p.ScrollOffsetRatio > 1 || (p.PositionMode != "book" && p.PositionMode != "page") {
+	if p.ChapterIndex < 0 || p.ChapterIndex >= manga.MaxPages || p.PageIndex < 0 || p.PageIndex >= manga.MaxPages || math.IsNaN(p.ScrollOffsetRatio) || math.IsInf(p.ScrollOffsetRatio, 0) || p.ScrollOffsetRatio < 0 || p.ScrollOffsetRatio > 1 || (p.PositionMode != "book" && p.PositionMode != "page") {
 		return nil, ErrInvalidProgress
 	}
 	p.UpdatedAt, err = time.Parse(time.RFC3339, updated)

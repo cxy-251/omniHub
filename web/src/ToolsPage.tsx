@@ -64,7 +64,7 @@ function Clipboard() {
     area.remove();
   };
   return <div className={card}>
-    <h3 className="font-semibold">📋 剪贴板 <span className="text-xs font-normal text-muted">各设备之间传文字和链接（服务重启后清空）</span></h3>
+    <p className="text-xs text-muted">服务重启后清空</p>
     <div className="flex gap-2">
       <textarea className={`${select} min-h-10 flex-1`} rows={2} value={text} onChange={e => setText(e.target.value)} placeholder="输入要发送的文字或链接（Ctrl+Enter 发送）"
         onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send(); }} />
@@ -113,7 +113,7 @@ function SharedFiles() {
   const regular = files.filter(f => !f.is_dir);
   return <div className={card}
     onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); void upload(e.dataTransfer.files); }}>
-    <h3 className="font-semibold">📁 共享文件 <span className="text-xs font-normal text-muted">资源库 media_library/shared，可拖文件到这里</span></h3>
+    <p className="text-xs text-muted">可拖入文件上传</p>
     <div className="flex flex-wrap items-center gap-2">
       <input ref={input} type="file" multiple className="hidden" onChange={e => void upload(e.target.files)} />
       <button className={primaryButton} disabled={!!progress} onClick={() => input.current?.click()}>上传文件</button>
@@ -139,7 +139,6 @@ function MetricsCard() {
   usePoll(() => { api<Metrics>('/api/tools/metrics').then(v => { setM(v); setErr(''); }).catch((e: Error) => setErr(e.message)); }, 3000);
   const bar = (used: number, total: number) => <span className="block h-1.5 overflow-hidden rounded bg-line"><span className="block h-full bg-[#58a6ff]" style={{ width: `${total ? used / total * 100 : 0}%` }} /></span>;
   return <div className={card}>
-    <h3 className="font-semibold">📊 主机状态</h3>
     {err ? <p className="text-sm text-danger">{err}</p> : null}
     {m ? <div className="grid gap-3 sm:grid-cols-2">
       <div className="space-y-1 text-sm"><p>内存 <span className="text-muted">可用 {size(m.mem_avail_bytes)} / {size(m.mem_total_bytes)}</span></p>{bar(m.mem_total_bytes - m.mem_avail_bytes, m.mem_total_bytes)}</div>
@@ -172,7 +171,6 @@ function Network() {
   const scan = () => { setDevices(undefined); setMsg('正在扫描…'); api<Device[]>('/api/tools/lanscan').then(d => { setDevices(d); setMsg(''); }).catch((e: Error) => setMsg(e.message)); };
   const wake = () => { post('/api/tools/wol', { mac: mac.trim() }).then(() => setMsg(`已向 ${mac.trim()} 发送唤醒包`)).catch((e: Error) => setMsg(`唤醒失败：${e.message}`)); };
   return <div className={card}>
-    <h3 className="font-semibold">🌐 网络</h3>
     <div className="flex flex-wrap items-center gap-2">
       <button className={button} disabled={busy} onClick={() => void test()}>测速（本机 ↔ 服务）</button>
       <span className="text-sm text-muted">{speed}</span>

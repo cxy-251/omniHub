@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { api, post } from './api';
+import { useVisiblePolling } from './useVisiblePolling';
 import DirectoryPicker from './DirectoryPicker';
 import { button, primaryButton } from './ui';
+import PhoneThumbnails, { type PhoneReview } from './PhoneThumbnails';
 
 type Stats = { videos: number; videos_probed: number; albums: number; thumbnails: number; thumbnail_failures: number; albums_imported: number; albums_on_disk: number; albums_cleanable: number };
-type Worker = { thumbnails_enabled: boolean; job: string; done: number; total: number; last_job: string; last_error: string; last_note: string; detail?: string };
+type Worker = { thumbnails_enabled: boolean; job: string; done: number; total: number; last_job: string; last_error: string; last_note: string; detail?: string; logs?: {time: string; message: string}[]; phone_review?: PhoneReview };
 type Library = { library_id: string; name: string; stats: Stats; error?: string; copy_source?: boolean };
-type Status = { worker: Worker; libraries: Library[] | null; copy_targets: { library_id: string; name: string }[] | null };
+type Status = { worker: Worker; libraries: Library[] | null; copy_targets: { library_id: string; name: string }[] | null; phone_maintenance?: boolean };
 type Plan = { files: number; bytes: number; creators: string[] | number | null; conflicts: string[] | null; phone_free?: number; not_on_phone?: number; not_on_keep?: number };
 // review：先读出计划给人看，确认后才执行；start 为空表示没有要做的
 type Review = { text: string; warn: string; start: string; action: string; body: unknown };
 
-const jobNames: Record<string, string> = { scan: '扫描', import: '图集入库', clean: '清理已入库原目录', thumbnails: '生成缩略图', merge: '合并其他设备的数据', copy: '补充到其他资源库', phone: '同步到手机', 'clean-phone': '清理已同步到手机的视频' };
+const jobNames: Record<string, string> = { queued: '等待任务', 'phone-thumbs-history': '读取手机回收记录', 'phone-thumbs-plan': '核对手机旧封面', 'phone-thumbs-clean': '回收手机旧封面', 'phone-thumbs-restore': '恢复手机旧封面', scan: '扫描', import: '图集入库', clean: '清理已入库原目录', thumbnails: '生成缩略图', merge: '合并其他设备的数据', copy: '补充到其他资源库', phone: '同步到手机', 'clean-phone': '清理已同步到手机的视频' };
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
 const creatorsText = (list: string[]) => list.length ? `\n${list.slice(0, 8).join('、')}${list.length > 8 ? ' 等' : ''}` : '';
 const conflictsText = (list: string[]) => list.length ? `${list.length} 个同名文件大小不同，不会覆盖：${list.slice(0, 5).join('、')}` : '';
@@ -37,13 +39,7 @@ export default function ShortVideoAdmin() {
   const w = status?.worker;
   const busy = !!w?.job;
   const thumbsRunning = !!w?.thumbnails_enabled && processed.some(l => !l.error && l.stats.thumbnails + l.stats.thumbnail_failures < l.stats.videos + l.stats.albums);
-  useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    if (!busy && !thumbsRunning) return () => controller.abort();
-    const timer = setInterval(() => void load(controller.signal), 2000);
-    return () => { controller.abort(); clearInterval(timer); };
-  }, [load, busy, thumbsRunning]);
+  useVisiblePolling(load, busy || thumbsRunning ? 2000 : null);
 
   async function act(action: string, body: unknown = {}) {
     try { await post(`/api/media/shortvideo/admin/${action}`, body); } catch (e) { setError((e as Error).message); }
@@ -77,12 +73,11 @@ export default function ShortVideoAdmin() {
   const importable = processed.reduce((n, l) => n + (l.error ? 0 : l.stats.albums_on_disk - l.stats.albums_cleanable), 0);
   const mergeTargets = libraries.filter(l => !l.error);
   return <section className="space-y-4">
-    <h2 className="text-xl font-semibold">短视频</h2>
     {error ? <p role="alert" className="text-danger">{error}</p> : null}
     <div className="space-y-3 rounded-lg border border-line bg-panel p-4">
       <label className="flex items-center gap-3"><input type="checkbox" checked={!!w?.thumbnails_enabled} disabled={!w} onChange={e => void act('thumbnails', { enabled: e.target.checked })} />
         <span>生成缩略图</span></label>
-      <p className="text-sm text-muted">开启后在后台逐个生成（低优先级，480px 宽），存入各库的 shortvideo/thumbnails.db；作品旁边有 z6x hub 以前生成的封面（.thumbs/）时直接转存，不再跑 ffmpeg。手机电池温度到 40°C 暂停，降到 37°C 以下继续。关闭后立即停止，只显示已有缩略图。</p>
+      <details className="settings-help"><summary>缩略图生成说明</summary><p>后台逐个生成并存入数据库，已有旧封面直接转存。手机电池温度到 40°C 暂停，降到 37°C 以下继续。关闭后停止生成，已有缩略图仍可使用。</p></details>
       <div className="flex flex-wrap gap-2">
         <button className={button} disabled={busy} onClick={() => void act('scan')}>重新扫描</button>
         <button className={button} disabled={busy || importable <= 0} onClick={() => void act('import')}>图集入库（{importable}）</button>
@@ -112,6 +107,8 @@ export default function ShortVideoAdmin() {
 • 清理：手机上有同名同大小的文件、且 SD 卡已有的博主那边也补上了，才移进回收站；downloaded.txt 全部保留。`}</p>
       </div> : null}
       {loading ? <p role="status" className="text-sm">{loading}</p> : null}
+      {status?.phone_maintenance ? <PhoneThumbnails busy={busy} review={w?.phone_review} act={act} /> : null}
+      {w?.logs?.length ? <details><summary className="cursor-pointer text-sm">过程日志（最近 {w.logs.length} 条）</summary><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-background p-2 text-xs">{w.logs.map(l => `${l.time} ${l.message}`).join('\n')}</pre></details> : null}
       {review ? <div className="space-y-2 rounded-md border border-primary p-3 text-sm">
         <p className="whitespace-pre-line break-all">{review.text}</p>
         {review.warn ? <p className="whitespace-pre-line break-all text-[#d29922]">{review.warn}</p> : null}

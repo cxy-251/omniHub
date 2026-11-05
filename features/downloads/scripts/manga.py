@@ -2,11 +2,12 @@
 """JM 漫画下载：按本子 ID 整本下载并封成 CBZ（封面、metadata.json、ComicInfo.xml、按章节分目录的原图）。
 由 omniHub 服务按需调用；完成后服务端更新漫画索引。
 
-已有同 ID 的 CBZ 且章节数不少于线上时跳过；线上有新章节时整本重下，新包完成后旧包移入系统回收站（gio trash）。
+已有同 ID 的 CBZ 复用已保存的章节，只下载缺少的章节；新包完成后旧包移入系统回收站（gio trash）。
 下载中间文件放在 --work 下（本次任务自己的临时目录），成功封箱后删除；失败时保留，下次接着下。
 移植自 omni-deck omni/features/manga/service.py 的下载与封箱部分。
 """
 import argparse
+import contextlib
 import html
 import json
 import os
@@ -101,25 +102,88 @@ def comic_info(meta):
     )
 
 
-def pack(work, target, meta):
+def existing_chapters(path, photos):
+    """按章节 ID 复用新包；旧包只复用目录名完全匹配的章节，不猜测编号。"""
+    if not path:
+        return {}
+    meta = cbz_metadata(path)
+    manifest = meta.get("chapters")
+    known = {}
+    if manifest is not None:
+        if not isinstance(manifest, list):
+            raise RuntimeError("旧包章节记录损坏，保留原包")
+        for chapter in manifest:
+            if not isinstance(chapter, dict) or not chapter.get("id") or not chapter.get("directory"):
+                raise RuntimeError("旧包章节记录不完整，保留原包")
+            key = str(chapter["id"])
+            if key in known:
+                raise RuntimeError("旧包章节编号重复，保留原包")
+            known[key] = chapter
+    groups = {}
+    with zipfile.ZipFile(path) as archive:
+        for info in archive.infolist():
+            if info.is_dir() or not info.filename.lower().endswith(IMAGE_EXTS) or info.filename.lower() in ("cover.jpg", "cover.webp", "cover.png"):
+                continue
+            parts = info.filename.split("/")
+            if len(parts) != 2 or any(p in ("", ".", "..") or "\\" in p for p in parts):
+                raise RuntimeError("旧包图片目录不符合章节格式，保留原包")
+            groups.setdefault(parts[0], []).append(info.filename)
+    reusable, claimed = {}, set()
+    for photo in photos:
+        key = str(photo.photo_id)
+        chapter = known.get(key) if manifest is not None else {"directory": chapter_dirname(photo)}
+        if not chapter:
+            continue
+        directory = chapter["directory"]
+        files = groups.get(directory, [])
+        if directory in claimed:
+            raise RuntimeError("旧包章节目录重复，保留原包")
+        claimed.add(directory)
+        if files and len(files) == len(set(files)) and chapter.get("pages", len(files)) == len(files):
+            reusable[key] = sorted(files, key=natural_key)
+    if groups.keys() - claimed:
+        raise RuntimeError("线上章节与旧包不一致，无法安全增量更新，已保留原包")
+    return reusable
+
+
+def pack(work, target, meta, existing=None, reusable=None):
     """原图不重新压缩（ZIP_STORED），先写 .part 再原子替换。"""
     part = target + ".part"
-    chapters = sorted((d for d in os.listdir(work) if os.path.isdir(os.path.join(work, d))), key=natural_key)
-    with zipfile.ZipFile(part, "w", compression=zipfile.ZIP_STORED) as zf:
+    reusable = reusable or {}
+    with contextlib.ExitStack() as stack:
+        old = stack.enter_context(zipfile.ZipFile(existing)) if existing else None
+        zf = stack.enter_context(zipfile.ZipFile(part, "w", compression=zipfile.ZIP_STORED))
         cover = os.path.join(work, "cover.jpg")
-        if os.path.isfile(cover):
+        if os.path.isfile(cover) and os.path.getsize(cover):
             zf.write(cover, "cover.jpg")
+        elif old:
+            for name in ("cover.jpg", "cover.webp", "cover.png"):
+                if name in old.namelist():
+                    zf.writestr(name, old.read(name))
+                    break
+        pages = 0
+        for chapter in meta["chapters"]:
+            ch = chapter["directory"]
+            count = 0
+            if chapter["id"] in reusable:
+                for name in reusable[chapter["id"]]:
+                    with old.open(name) as source, zf.open(f"{ch}/{name.rsplit('/', 1)[-1]}", "w") as dest:
+                        shutil.copyfileobj(source, dest)
+                    count += 1
+            else:
+                for f in sorted(os.listdir(os.path.join(work, ch)), key=natural_key):
+                    source = os.path.join(work, ch, f)
+                    if f.lower().endswith(IMAGE_EXTS) and os.path.isfile(source) and not os.path.islink(source):
+                        zf.write(source, f"{ch}/{f}")
+                        count += 1
+            if not count:
+                raise RuntimeError(f"章节没有图片，保留原包：{ch}")
+            chapter["pages"] = count
+            pages += count
+        if pages == 0:
+            raise RuntimeError("没有下载到任何图片")
         zf.writestr("metadata.json", json.dumps(meta, ensure_ascii=False, indent=2))
         zf.writestr("ComicInfo.xml", comic_info(meta))
-        pages = 0
-        for ch in chapters:
-            for f in sorted(os.listdir(os.path.join(work, ch)), key=natural_key):
-                if f.lower().endswith(IMAGE_EXTS):
-                    zf.write(os.path.join(work, ch, f), f"{ch}/{f}")
-                    pages += 1
-    if pages == 0:
-        os.remove(part)
-        raise RuntimeError("没有下载到任何图片")
     return part, pages
 
 
@@ -135,22 +199,28 @@ def download_album(client, aid, dest, work_root):
     online = len(photos)
     book = download_album.book  # (第几本, 共几本)，任务进度按本算，步骤里再写到第几章
     log(f"《{title}》共 {online} 章")
+    if not online:
+        raise RuntimeError("线上没有可用章节，保留原包")
     existing = find_existing(dest, aid)
+    reusable = existing_chapters(existing, photos)
     if existing:
-        meta = cbz_metadata(existing)
-        if int(meta.get("local_chapters") or 0) >= online:
-            log(f"已是最新（{meta.get('local_chapters')}/{online} 章），跳过：{os.path.basename(existing)}")
+        if len(reusable) == online:
+            log(f"已是最新（{online}/{online} 章），跳过：{os.path.basename(existing)}")
             return True
-        log(f"本地 {meta.get('local_chapters')} 章，线上 {online} 章，重新下载整本")
+        log(f"复用本地 {len(reusable)} 章，仅下载缺少的 {online - len(reusable)} 章")
     target = existing or os.path.join(dest, sanitize(title) + ".cbz")
     if not existing and os.path.exists(target):
         target = os.path.join(dest, f"{sanitize(title, 160)} [{aid}].cbz")
+        if os.path.exists(target):
+            raise RuntimeError(f"目标文件已存在且编号不同，保留原文件：{target}")
 
     work = os.path.join(work_root, str(aid))
     os.makedirs(work, exist_ok=True)
     opt = option_for(work)
     failed = []
     for i, photo in enumerate(photos, 1):
+        if str(photo.photo_id) in reusable:
+            continue
         log(f"[{i}/{online}] {chapter_dirname(photo)}")
         progress(book[0] - 1, book[1], f"第 {book[0]}/{book[1]} 本《{title}》第 {i}/{online} 章")
         for attempt in range(1, 4):
@@ -171,12 +241,15 @@ def download_album(client, aid, dest, work_root):
         log(f"封面下载失败：{e}")
 
     meta = {
+        **(cbz_metadata(existing) if existing else {}),
         "id": str(aid), "title": title,
         "author": ", ".join(detail.authors or []), "description": detail.description or "",
         "tags": list(detail.tags or []), "online_chapters": online, "local_chapters": online,
-        "is_complete": True, "verified": True, "updated_at": time.time(),
+        "download_complete": True, "completion_status": "unknown", "verified": True, "updated_at": time.time(),
+        "chapters": [{"id": str(photo.photo_id), "directory": chapter_dirname(photo)} for photo in photos],
     }
-    part, pages = pack(work, target, meta)
+    meta.pop("is_complete", None)
+    part, pages = pack(work, target, meta, existing, reusable)
     if os.path.exists(target):
         trash(target)
     os.replace(part, target)

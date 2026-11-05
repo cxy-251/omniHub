@@ -301,6 +301,7 @@ func (m *MetaDB) Ratios(f PhotoFilter) ([]int, error) {
 // FeedRow 是推荐用的照片概要。
 type FeedRow struct {
 	ID          string
+	Filename    string
 	Width       int
 	Height      int
 	ColorFamily int
@@ -309,7 +310,7 @@ type FeedRow struct {
 
 // FeedRows 按 ListPhotos 的顺序返回全部照片的概要（推荐排序与多联放映用）。
 func (m *MetaDB) FeedRows() ([]FeedRow, error) {
-	rows, err := m.db.Query("SELECT id, COALESCE(width,0), COALESCE(height,0), COALESCE(color_family,-1), COALESCE(color_hex,'') FROM photos WHERE deleted_at IS NULL ORDER BY created_at DESC, id ASC")
+	rows, err := m.db.Query("SELECT id, COALESCE(filename,''), COALESCE(width,0), COALESCE(height,0), COALESCE(color_family,-1), COALESCE(color_hex,'') FROM photos WHERE deleted_at IS NULL ORDER BY created_at DESC, id ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +318,7 @@ func (m *MetaDB) FeedRows() ([]FeedRow, error) {
 	var out []FeedRow
 	for rows.Next() {
 		var r FeedRow
-		if err := rows.Scan(&r.ID, &r.Width, &r.Height, &r.ColorFamily, &r.ColorHex); err != nil {
+		if err := rows.Scan(&r.ID, &r.Filename, &r.Width, &r.Height, &r.ColorFamily, &r.ColorHex); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

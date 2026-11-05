@@ -2,15 +2,15 @@ package games
 
 import (
 	"bufio"
-	"strings"
-	"os/exec"
 	"context"
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,14 +20,15 @@ import (
 // LaunchOptions 描述一次游戏启动。Argv 由 Command 生成（原生程序 / Proton / Lime3DS / Ren'Py），
 // 不是 shell 文本；WorkDir 为工作目录（主程序所在目录），Env 追加在系统环境之后，不能覆盖存档目录。
 type LaunchOptions struct {
-	GameDir string
-	WorkDir string
-	Argv    []string
-	Env     []string
-	Scope   string // systemd 用户 scope 单元名；为空时不建 scope
-	UserID  int64
-	IsAdmin bool
-	LogsDir string
+	GameDir       string
+	WorkDir       string
+	Argv          []string
+	Env           []string
+	Scope         string // systemd 用户 scope 单元名；为空时不建 scope
+	UserID        int64
+	IsAdmin       bool
+	LogsDir       string
+	ResourceOwner *LaunchedGame // 可选：本次控制会话实际使用的常驻游戏，用其 scope 采样和看门狗。
 }
 
 // LaunchedGame identifies a detached process and exposes completion without

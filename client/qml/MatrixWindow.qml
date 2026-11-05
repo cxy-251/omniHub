@@ -8,9 +8,11 @@ DarkWindow {
     property string domain: "shortvideo"
     title: domain === "gallery" ? "omniHub 相册轮播" : "omniHub 多联放映"
     property var audioEngine: null
+    signal audioOpenRequested()
     MatrixView {
         id: matrixView
-        anchors.fill: parent
+        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+        anchors.bottom: audioBar.visible ? audioBar.top : parent.bottom
         detached: true
         domain: window.domain
         audioEngine: window.audioEngine
@@ -18,6 +20,17 @@ DarkWindow {
         onExitRequested: window.close()
         onFullscreenToggled: window.visibility = window.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen
         Component.onCompleted: forceActiveFocus()
+    }
+    Loader {
+        id: audioBar
+        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+        height: item ? item.implicitHeight : 0
+        active: !!window.audioEngine
+        visible: active && window.audioEngine.active
+        sourceComponent: AudioBar {
+            engine: window.audioEngine
+            onOpenRequested: window.audioOpenRequested()
+        }
     }
     onClosing: matrixView.savePositions()
 }

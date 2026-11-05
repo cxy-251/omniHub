@@ -7,10 +7,13 @@
         <file>qml/PlayerView.qml</file>
         <file>qml/GamesView.qml</file>
         <file>qml/SC2Panel.qml</file>
+        <file>qml/SC2AfterGame.qml</file>
         <file>qml/TouchControls.qml</file>
         <file>qml/LibraryView.qml</file>
         <file>qml/SettingsView.qml</file>
         <file>qml/ShortVideoAdmin.qml</file>
+        <file>qml/DeviceManager.qml</file>
+        <file>qml/PhoneThumbnails.qml</file>
         <file>qml/AccountsAdmin.qml</file>
         <file>qml/ShortVideoView.qml</file>
         <file>qml/MatrixView.qml</file>
@@ -22,10 +25,13 @@
         <file>qml/AudioBar.qml</file>
         <file>qml/AudioView.qml</file>
         <file>qml/MusicPane.qml</file>
+        <file>qml/MusicRatingButtons.qml</file>
+        <file>qml/MusicCollections.qml</file>
         <file>qml/MegaPanel.qml</file>
         <file>qml/DownloadsView.qml</file>
         <file>qml/DownloadForm.qml</file>
         <file>qml/MangaPanel.qml</file>
+        <file>qml/BTMangaPanel.qml</file>
         <file>qml/PagedModel.qml</file>
         <file>qml/Chip.qml</file>
         <file>qml/Toggle.qml</file>

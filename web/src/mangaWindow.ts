@@ -2,6 +2,7 @@ export type PageAnchor = { row: number; ratio: number };
 const estimate = 320;
 const maxMeasured = 64;
 const maxHeight = 65536;
+const maxPadding = 1_000_000;
 
 // MangaWindow represents every page without every DOM node. A bounded set of
 // measured heights and a Fenwick tree keep scroll lookup/updates logarithmic.
@@ -11,7 +12,8 @@ export class MangaWindow {
   private readonly measured = new Map<number, number>();
 
   constructor(count: number) {
-    if (!Number.isInteger(count) || count < 1 || count > 20000) throw new RangeError('漫画页数超出范围');
+    // The entry budget matches the server; DOM geometry stays bounded separately.
+    if (!Number.isInteger(count) || count < 1 || count > 500000) throw new RangeError('漫画页数超出范围');
     this.count = count; this.tree = new Float64Array(count + 1);
   }
 
@@ -29,6 +31,14 @@ export class MangaWindow {
   }
 
   total() { return this.prefix(this.count); }
+
+  // Browser layout heights are finite. Rebase around the visible pages instead
+  // of creating a book-sized spacer; progress/chapter controls still span all pages.
+  layout(start: number, end: number) {
+    const before = this.prefix(start);
+    const top = Math.min(before, maxPadding);
+    return { top, bottom: Math.min(this.total() - this.prefix(end), maxPadding), origin: before - top };
+  }
 
   locate(offset: number): PageAnchor {
     const y = Math.max(0, Math.min(this.total(), Number.isFinite(offset) ? offset : 0));

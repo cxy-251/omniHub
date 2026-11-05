@@ -98,11 +98,15 @@ func (m *Manager) Start(ctx context.Context, key string, opt LaunchOptions) (Run
 		delete(m.sessions, oldest.status.ID)
 	}
 	watchCtx, cancel := context.WithCancel(context.Background())
+	resources := game
+	if opt.ResourceOwner != nil {
+		resources = opt.ResourceOwner
+	}
 	session := &runSession{status: RunStatus{ID: rand.Text(), Key: key, UserID: opt.UserID, PID: game.PID, State: "running", StartedAt: game.StartTime, LogPath: game.LogPath}, game: game, done: make(chan struct{}), cancel: cancel,
-		sampler: newProfileSampler(game.PID, game.scope)}
+		sampler: newProfileSampler(resources.PID, resources.scope)}
 	m.sessions[session.status.ID] = session
 	m.active = session
-	if err := StartWatchdog(watchCtx, game, time.Second, WatchdogCallbacks{
+	if err := StartWatchdog(watchCtx, resources, time.Second, WatchdogCallbacks{
 		OnWarning: func(int64) { m.warning(session, "系统可用内存不足，请保存游戏进度") },
 		OnKilled:  func(int64) { m.warning(session, "系统内存临界，已请求强制停止游戏") },
 		OnError:   func(err error) { m.warning(session, "内存看门狗不可用："+err.Error()) },

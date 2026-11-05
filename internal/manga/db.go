@@ -15,7 +15,8 @@ import (
 
 // DB 封装 manga 专区的独立数据库（第 7.1.1 节）。
 type DB struct {
-	db *sql.DB
+	db               *sql.DB
+	completionColumn bool
 }
 
 // OpenDB 打开或创建 manga/manga.db。
@@ -42,6 +43,11 @@ func openDB(mangaDir string, readOnly bool) (*DB, error) {
 
 	}
 
+	var exists int
+	if err := db.QueryRow("SELECT count(*) FROM pragma_table_info('mangas') WHERE name='completion_known'").Scan(&exists); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	mDB.completionColumn = exists != 0
 	return mDB, nil
 }
 
@@ -61,6 +67,7 @@ func (d *DB) migrate() error {
 		chapter_count INTEGER NOT NULL DEFAULT 0,
 		total_pages INTEGER NOT NULL DEFAULT 0,
 		is_complete INTEGER NOT NULL DEFAULT 0,
+		completion_known INTEGER NOT NULL DEFAULT 0,
 		rel_path TEXT NOT NULL,
 		custom_cover TEXT NOT NULL DEFAULT '',
 		updated_at TEXT NOT NULL
@@ -82,8 +89,20 @@ func (d *DB) migrate() error {
 		FOREIGN KEY(manga_id) REFERENCES mangas(id) ON DELETE CASCADE
 	);
 	`
-	_, err := d.db.Exec(schema)
-	return err
+	if _, err := d.db.Exec(schema); err != nil {
+		return err
+	}
+	var exists int
+	if err := d.db.QueryRow("SELECT count(*) FROM pragma_table_info('mangas') WHERE name='completion_known'").Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		// Old is_complete values mixed download completeness with publication
+		// status. Preserve them, but require explicit evidence before labelling.
+		_, err := d.db.Exec("ALTER TABLE mangas ADD COLUMN completion_known INTEGER NOT NULL DEFAULT 0")
+		return err
+	}
+	return nil
 }
 
 // UpsertManga 插入或更新漫画信息。
@@ -111,8 +130,8 @@ func (d *DB) UpsertMangaContext(ctx context.Context, m *Manga) error {
 	_, err = d.db.ExecContext(ctx, `
 		INSERT INTO mangas (
 			id, title, author, description, tags_json, chapter_count,
-			total_pages, is_complete, rel_path, custom_cover, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			total_pages, is_complete, completion_known, rel_path, custom_cover, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			title = excluded.title,
 			author = excluded.author,
@@ -121,11 +140,12 @@ func (d *DB) UpsertMangaContext(ctx context.Context, m *Manga) error {
 			chapter_count = excluded.chapter_count,
 			total_pages = excluded.total_pages,
 			is_complete = excluded.is_complete,
+			completion_known = excluded.completion_known,
 			rel_path = excluded.rel_path,
 			updated_at = excluded.updated_at
- WHERE (mangas.rel_path!=excluded.rel_path OR mangas.title!=excluded.title OR mangas.author!=excluded.author OR mangas.description!=excluded.description OR mangas.tags_json!=excluded.tags_json OR mangas.chapter_count!=excluded.chapter_count OR mangas.total_pages!=excluded.total_pages OR mangas.is_complete!=excluded.is_complete)`,
+ WHERE (mangas.rel_path!=excluded.rel_path OR mangas.title!=excluded.title OR mangas.author!=excluded.author OR mangas.description!=excluded.description OR mangas.tags_json!=excluded.tags_json OR mangas.chapter_count!=excluded.chapter_count OR mangas.total_pages!=excluded.total_pages OR mangas.is_complete!=excluded.is_complete OR mangas.completion_known!=excluded.completion_known)`,
 		m.ID, m.Title, m.Author, m.Description, string(tagsRaw),
-		m.ChapterCount, m.TotalPages, compInt, m.RelPath, m.CustomCover, nowStr,
+		m.ChapterCount, m.TotalPages, compInt, m.CompletionKnown, m.RelPath, m.CustomCover, nowStr,
 	)
 	return err
 }
@@ -248,11 +268,16 @@ func (d *DB) RenamePath(ctx context.Context, from, to string) error {
 }
 
 func (d *DB) listMangas(limit, offset int) ([]*Manga, error) {
-	query := `
+	known := "0 AS completion_known"
+	if d.completionColumn {
+		known = "completion_known"
+	}
+	// Read-only libraries may still contain the older schema; do not migrate them.
+	query := fmt.Sprintf(`
 		SELECT id, title, author, description, tags_json, chapter_count,
-		       total_pages, is_complete, rel_path, custom_cover
+		       total_pages, is_complete, %s, rel_path, custom_cover
 		FROM mangas ORDER BY title ASC, id ASC
-	`
+	`, known)
 	var args []any
 	if limit > 0 {
 		query += " LIMIT ? OFFSET ?"
@@ -271,7 +296,7 @@ func (d *DB) listMangas(limit, offset int) ([]*Manga, error) {
 		var compInt int
 		if err := rows.Scan(
 			&m.ID, &m.Title, &m.Author, &m.Description, &tagsStr,
-			&m.ChapterCount, &m.TotalPages, &compInt, &m.RelPath, &m.CustomCover,
+			&m.ChapterCount, &m.TotalPages, &compInt, &m.CompletionKnown, &m.RelPath, &m.CustomCover,
 		); err != nil {
 			return nil, err
 		}

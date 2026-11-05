@@ -7,7 +7,8 @@ Rectangle {
     id: bar
     required property var engine
     signal openRequested()
-    height: 52
+    implicitHeight: 52
+    height: implicitHeight
     color: "#161b22"
     Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: "#30363d" }
 
@@ -52,6 +53,7 @@ Rectangle {
             HoverHandler { cursorShape: Qt.PointingHandCursor }
         }
 
+        MusicRatingButtons { engine: bar.engine; trackId: bar.engine.track ? bar.engine.track.id : "" }
         IconButton { glyph: "prev"; size: 32; onClicked: bar.engine.previousMedia(); ToolTip.text: "上一集" }
         IconButton { glyph: "replay_10"; size: 32; onClicked: bar.engine.seekBy(-bar.engine.skipBack); ToolTip.text: "后退 10 秒" }
         IconButton { glyph: bar.mpv.playing ? "pause" : "play"; size: 40; onClicked: bar.engine.togglePlay() }

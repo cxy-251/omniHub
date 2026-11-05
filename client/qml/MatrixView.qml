@@ -18,6 +18,21 @@ FocusScope {
     // 全局音声播放引擎（伴听用）；伴听进行时所有视频屏静音。
     property var audioEngine: null
     property var audioAlbums: []
+    property var audioArtists: []
+    readonly property var accompanyOptions: {
+        var list = [{value: "", label: "🎧 伴听：关"}]
+        if (audioArtists.length) {
+            list.push({value: "@music/liked", label: "音乐 · 我的点赞", music: true})
+            audioArtists.filter(function (a) { return a.main_artist }).forEach(function (a) {
+                list.push({value: a.id, label: "音乐 · " + a.title, music: true})
+            })
+        }
+        audioAlbums.forEach(function (a) { list.push({value: a.id, label: "有声书 · " + a.title, title: a.title}) })
+        // An album already playing from the music page may not be a whole-artist queue.
+        if (audioEngine && audioEngine.active && !list.some(function (a) { return a.value === audioEngine.albumId }))
+            list.push({value: audioEngine.albumId, label: "当前 · " + audioEngine.albumTitle})
+        return list
+    }
     readonly property bool accompanying: !!(audioEngine && audioEngine.player.playing)
     property bool fullscreen: false
     signal exitRequested()
@@ -45,6 +60,14 @@ FocusScope {
 
     FeedApi { id: feed; domain: matrix.domain }
     ApiClient { id: api }
+    function refreshAudioArtists() {
+        if (audioEngine) api.getJSON("/api/media/audio/artists", function (list) { matrix.audioArtists = list })
+    }
+    Connections {
+        target: matrix.audioEngine
+        function onMusicChanged(catalog) { if (catalog) matrix.refreshAudioArtists() }
+        function onErrorChanged() { if (matrix.audioEngine.error) matrix.say(matrix.audioEngine.error) }
+    }
 
     // 开发验证：OMNIHUB_DEV_MATRIX=<秒> 自动全部播放，并按这个间隔打印各屏丢帧统计。
     Timer {
@@ -67,16 +90,15 @@ FocusScope {
         property var slots: []
     }
 
-    // 频道：推荐、我的点赞、平台（短视频）、📌 固定的分组、其余分组。
+    // 频道：推荐、我的点赞、平台（短视频与相册图库）、📌 固定的分组、其余分组。
     readonly property var channels: {
         var list = [{value: "recommend", label: "推荐"}, {value: "liked", label: "♥ 我的点赞"}]
-        if (isVideo) {
-            var seen = {}
-            feed.groups.forEach(function (g) { if (!seen[g.platform]) { seen[g.platform] = true; list.push({value: "tag:platform:" + g.platform, label: g.platform}) } })
-        }
+        var seen = {}
+        feed.groups.forEach(function (g) { if (g.platform && !seen[g.platform]) { seen[g.platform] = true; list.push({value: "tag:platform:" + g.platform, label: g.platform}) } })
+        var groups = isVideo ? feed.groups : feed.groups.filter(function (g) { return !g.platform && g.count > 0 })
         var label = function (g, pinned) { return (pinned ? "📌 " : "") + (g.platform ? g.platform + " · " : "") + g.label + "（" + g.count + "）" }
-        feed.pins.forEach(function (id) { var g = feed.groups.find(function (x) { return x.id === id }); if (g) list.push({value: "group:" + g.id, label: label(g, true)}) })
-        feed.groups.forEach(function (g) { if (feed.pins.indexOf(g.id) < 0) list.push({value: "group:" + g.id, label: label(g, false)}) })
+        feed.pins.forEach(function (id) { var g = groups.find(function (x) { return x.id === id }); if (g) list.push({value: "group:" + g.id, label: label(g, true)}) })
+        groups.forEach(function (g) { if (feed.pins.indexOf(g.id) < 0) list.push({value: "group:" + g.id, label: label(g, false)}) })
         return list
     }
     // 旧版保存的频道（""、"抖音"、"抖音/博主"）换成新写法。
@@ -106,6 +128,7 @@ FocusScope {
         if (!prefs.shortcutsSeen) { say("按 ? 查看快捷键"); prefs.shortcutsSeen = true }
         feed.loadGroups()
         if (audioEngine) api.getJSON("/api/media/audio/albums?limit=100", function (list) { matrix.audioAlbums = list })
+        refreshAudioArtists()
     }
     function setSlot(i, changes) {
         var all = matrix.slots.slice()
@@ -152,7 +175,7 @@ FocusScope {
         else { trashArmed = true; trashDisarm.restart(); say("再按一次移到回收站") }
     }
     function toggleAccompany() {
-        if (!audioEngine || !audioEngine.active) { say("先在顶栏选一张伴听专辑"); return }
+        if (!audioEngine || !audioEngine.active) { say("先在顶栏选择伴听音乐或有声书"); return }
         audioEngine.togglePlay()
     }
 
@@ -245,21 +268,22 @@ FocusScope {
                     onClicked: matrix.trashFocused()
                     ToolTip.visible: hovered; ToolTip.text: "移到回收站（Delete 按两次）"
                 }
-                // 伴听：选一张音声专辑，从上次听到的地方接着放；选「关」暂停。底部播放条可切集、调倍速。
+                // 伴听共用全局引擎：音乐集合／歌手队列，有声书继续断点；选「关」暂停。
                 ComboBox {
                     id: albumBox
-                    visible: !!matrix.audioEngine && matrix.audioAlbums.length > 0
+                    visible: !!matrix.audioEngine && matrix.accompanyOptions.length > 1
                     Layout.preferredWidth: 160
                     implicitHeight: 28
                     font.pixelSize: 13
                     textRole: "label"; valueRole: "value"
-                    model: [{value: "", label: "🎧 伴听：关"}].concat(matrix.audioAlbums.map(function (a) { return {value: a.id, label: "🎧 " + a.title} }))
-                    currentIndex: matrix.accompanying ? Math.max(0, indexOfValue(matrix.audioEngine.albumId)) : 0
+                    model: matrix.accompanyOptions
+                    currentIndex: matrix.accompanying ? Math.max(0, matrix.accompanyOptions.findIndex(function (a) { return a.value === matrix.audioEngine.albumId })) : 0
                     onActivated: {
                         if (!currentValue) { matrix.audioEngine.player.pause(); return }
-                        var album = matrix.audioAlbums.find(function (a) { return a.id === currentValue })
+                        var source = matrix.accompanyOptions[currentIndex]
                         if (matrix.audioEngine.albumId === currentValue && matrix.audioEngine.active) matrix.audioEngine.player.play()
-                        else matrix.audioEngine.continueAlbum(album.id, album.title)
+                        else if (source.music) matrix.audioEngine.open(source.value, source.label.slice("音乐 · ".length), 0, true)
+                        else matrix.audioEngine.continueAlbum(source.value, source.title)
                     }
                     ToolTip.visible: hovered && matrix.accompanying
                     ToolTip.text: matrix.accompanying && matrix.audioEngine.track ? "正在伴听：" + matrix.audioEngine.track.title : ""

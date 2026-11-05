@@ -11,6 +11,9 @@ Item {
     required property var engine
     property var albums: []
     property var artists: []
+    property string musicCollection: "all"
+    property bool otherArtists: false
+    readonly property var visibleArtists: artists.filter(function (a) { return !!a.main_artist !== view.otherArtists })
     readonly property bool music: prefs.section === "music"
     readonly property var selectedArtist: artists.find(function (a) { return a.id === prefs.artist }) || null
     property var recent: []
@@ -26,6 +29,7 @@ Item {
     ApiClient { id: api; onErrorChanged: view.error = error }
 
     function refresh() {
+        engine.refreshMusic()
         api.getJSON("/api/media/audio/albums?limit=100", function (list) {
             view.albums = list
             if (!view.selected && list.length) prefs.album = list[0].id
@@ -41,6 +45,7 @@ Item {
         if (request) { prefs.album = request; pendingPlay = true }
         refresh()
     }
+    Connections { target: view.engine; function onMusicChanged(catalog) { if (catalog) view.refresh() } }
     property bool devStarted: false
     // 开发验证：devScroll < 0 时自动「继续收听」所选专辑，每 -devScroll 毫秒打印播放状态。
     Timer {
@@ -110,6 +115,24 @@ Item {
                         Chip { text: "音乐"; selected: view.music; onClicked: prefs.section = "music" }
                         Chip { text: "有声书"; selected: !view.music; onClicked: prefs.section = "book" }
                     }
+                    Column {
+                        visible: view.music
+                        width: side.width; spacing: 4
+                        Flow {
+                            width: parent.width; spacing: 4
+                            Repeater {
+                                model: [["all", "全部音乐"], ["liked", "我的点赞"], ["disliked", "不喜欢"]]
+                                delegate: Chip { required property var modelData; text: modelData[1]; selected: view.musicCollection === modelData[0]
+                                    onClicked: view.musicCollection = modelData[0] }
+                            }
+                            Chip { text: "回收记录"; visible: view.engine.musicCanTrash; selected: view.musicCollection === "trash"; onClicked: view.musicCollection = "trash" }
+                        }
+                        Row {
+                            spacing: 4
+                            Chip { text: "常听歌手"; selected: !view.otherArtists; onClicked: { view.otherArtists = false; view.musicCollection = "all" } }
+                            Chip { text: "其他歌手"; selected: view.otherArtists; onClicked: { view.otherArtists = true; view.musicCollection = "other" } }
+                        }
+                    }
                     Label { visible: view.recent.length > 0; text: "继续收听"; color: "#8b949e"; font.pixelSize: 12; topPadding: 4; bottomPadding: 4; leftPadding: 4 }
                     Repeater {
                         model: view.recent
@@ -133,9 +156,9 @@ Item {
                             }
                         }
                     }
-                    Label { text: view.music ? "歌手" : "专辑"; color: "#8b949e"; font.pixelSize: 12; topPadding: 8; bottomPadding: 4; leftPadding: 4 }
+                    Label { text: view.music ? (view.otherArtists ? "其他歌手" : "常听歌手") : "专辑"; color: "#8b949e"; font.pixelSize: 12; topPadding: 8; bottomPadding: 4; leftPadding: 4 }
                 }
-                model: view.music ? view.artists : view.albums
+                model: view.music ? view.visibleArtists : view.albums
                 delegate: ItemDelegate {
                     required property var modelData
                     width: side.width
@@ -166,19 +189,25 @@ Item {
                             }
                         }
                     }
-                    onClicked: if (view.music) prefs.artist = modelData.id; else prefs.album = modelData.id
+                    onClicked: if (view.music) { prefs.artist = modelData.id; view.musicCollection = "" } else prefs.album = modelData.id
                 }
             }
         }
 
         // 右栏（音乐）：歌手的单曲与专辑
         MusicPane {
-            visible: view.music
+            visible: view.music && view.musicCollection === ""
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.margins: 10
             engine: view.engine
             artist: view.selectedArtist
+        }
+        MusicCollections {
+            visible: view.music && view.musicCollection !== ""
+            Layout.fillWidth: true; Layout.fillHeight: true; Layout.margins: 10
+            engine: view.engine
+            collection: view.musicCollection || "all"
         }
 
         // 右栏（有声书）：专辑分集

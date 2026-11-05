@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -17,10 +18,11 @@ import (
 // Metadata contains optional labels and one embedded picture. Missing tags are
 // empty; malformed or over-budget metadata returns an error, never partial data.
 type Metadata struct {
-	Title    string `json:"title"`
-	Artist   string `json:"artist"`
-	Album    string `json:"album"`
-	HasCover bool   `json:"has_cover"`
+	Title           string `json:"title"`
+	Artist          string `json:"artist"`
+	RequestedArtist string `json:"requested_artist,omitempty"`
+	Album           string `json:"album"`
+	HasCover        bool   `json:"has_cover"`
 	// 风格与 Last.fm 数据：下载音乐时写进文件（GENRE / LASTFM_*），播放时显示
 	Genre           string  `json:"genre,omitempty"`
 	LastfmListeners int64   `json:"lastfm_listeners,omitempty"`
@@ -522,6 +524,17 @@ func (r *tagInput) mp4(start, end int64, depth int, item string, result *Metadat
 // extraTag 认风格与 omniHub 下载时写的 Last.fm 字段（键不分大小写），其余忽略。
 func extraTag(key, value string, result *Metadata) {
 	value = strings.TrimSpace(value)
+	if strings.EqualFold(key, "SOURCE_INFO") && len(value) <= 1<<20 {
+		var source struct {
+			Music struct {
+				Owner string `json:"owner"`
+			} `json:"youtube_music"`
+		}
+		if json.Unmarshal([]byte(value), &source) == nil && len(source.Music.Owner) <= 512 {
+			result.RequestedArtist = source.Music.Owner
+		}
+		return
+	}
 	if len(value) > 512 || value == "" {
 		return
 	}
@@ -530,6 +543,8 @@ func extraTag(key, value string, result *Metadata) {
 		if result.Genre == "" {
 			result.Genre = value
 		}
+	case "MUSIC_REQUESTED_ARTIST":
+		result.RequestedArtist = value
 	case "LASTFM_LISTENERS":
 		result.LastfmListeners, _ = strconv.ParseInt(value, 10, 64)
 	case "LASTFM_PLAYCOUNT":
