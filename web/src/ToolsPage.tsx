@@ -1,12 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { api, post, request } from './api';
+import { lazyPage, PageBoundary, PageLoading } from './PageBoundary';
 import { button, chip, primaryButton, select, store, stored } from './ui';
 
-// 局域网小工具：剪贴板、共享文件（media_library/shared）、硬件看板、测速、唤醒与局域网扫描。
+const DevTools = lazyPage(() => import('./DevTools'));
+const ColorTools = lazyPage(() => import('./ColorTools'));
+
+// 局域网小工具：剪贴板、共享文件（media_library/shared）、开发工具、颜色与渐变、硬件看板、测速、唤醒与局域网扫描。
 // 所有内容都以文本节点渲染（旧版用 innerHTML 拼接剪贴板和文件名，别的设备能注入脚本）。
 type Clip = { id: number; content: string; created_at: string };
 type Shared = { name: string; size_bytes: number; mod_time: string; is_dir: boolean };
 type Metrics = { os: string; num_cpu: number; mem_total_bytes: number; mem_avail_bytes: number; disk_free_bytes: number; disk_total_bytes: number };
+type LargeFile = { library: string; rel_path: string; size_bytes: number; mod_time: string };
 type Device = { ip: string; mac: string; hostname: string; device: string };
 
 const card = 'space-y-2 rounded-lg border border-line bg-panel p-3';
@@ -24,7 +29,14 @@ function usePoll(fn: () => void, ms: number) {
 }
 
 // 每个工具单独分级（设置 → 子分区 tools/…），这里只显示当前账号能用的。
-const tools = [['clipboard', '📋 剪贴板'], ['shared', '📁 共享文件'], ['status', '📊 主机状态'], ['network', '🌐 网络']] as const;
+const tools = [
+  ['clipboard', '📋 剪贴板'],
+  ['shared', '📁 共享文件'],
+  ['dev', '🛠️ 开发工具'],
+  ['color', '🎨 颜色与渐变'],
+  ['status', '📊 主机状态'],
+  ['network', '🌐 网络'],
+] as const;
 
 export default function ToolsPage({ sections }: { sections: string[] }) {
   const available = tools.filter(([id]) => sections.includes(`tools/${id}`));
@@ -35,9 +47,11 @@ export default function ToolsPage({ sections }: { sections: string[] }) {
     <div className="flex flex-wrap gap-1.5">
       {available.map(([id, label]) => <button key={id} className={chip(current === id)} onClick={() => setTab(id)}>{label}</button>)}
     </div>
-    <div className="max-w-3xl">
+    <div className="max-w-4xl">
       {current === 'clipboard' ? <Clipboard /> : null}
       {current === 'shared' ? <SharedFiles /> : null}
+      {current === 'dev' ? <PageBoundary name="开发工具"><Suspense fallback={<PageLoading />}><DevTools /></Suspense></PageBoundary> : null}
+      {current === 'color' ? <PageBoundary name="颜色与渐变"><Suspense fallback={<PageLoading />}><ColorTools /></Suspense></PageBoundary> : null}
       {current === 'status' ? <MetricsCard /> : null}
       {current === 'network' ? <Network /> : null}
     </div>
@@ -85,12 +99,36 @@ function Clipboard() {
 
 const chunkSize = 4 << 20;
 
+function previewKind(name: string): 'text' | 'image' | 'audio' | 'video' | null {
+  const idx = name.lastIndexOf('.');
+  if (idx < 0) return null;
+  const ext = name.slice(idx).toLowerCase();
+  if (['.txt', '.md', '.json', '.log', '.csv', '.yaml', '.yml', '.ini', '.conf', '.toml', '.xml'].includes(ext)) return 'text';
+  if (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif'].includes(ext)) return 'image';
+  if (['.mp3', '.wav', '.ogg', '.flac', '.m4a'].includes(ext)) return 'audio';
+  if (['.mp4', '.webm'].includes(ext)) return 'video';
+  return null;
+}
+
 function SharedFiles() {
   const [files, setFiles] = useState<Shared[]>([]);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [previewName, setPreviewName] = useState<string>('');
+  const [previewText, setPreviewText] = useState<string>('');
   const [msg, setMsg] = useState('');
   const [progress, setProgress] = useState<string>();
   const input = useRef<HTMLInputElement>(null);
-  const load = () => { api<Shared[]>('/api/tools/shared/files').then(setFiles).catch((e: Error) => setMsg(e.message)); };
+  const cameraInput = useRef<HTMLInputElement>(null);
+  const load = () => {
+    api<Shared[]>('/api/tools/shared/files').then(list => {
+      setFiles(list);
+      setSelected(old => {
+        const keep: Record<string, boolean> = {};
+        for (const f of list) if (!f.is_dir && old[f.name]) keep[f.name] = true;
+        return keep;
+      });
+    }).catch((e: Error) => setMsg(e.message));
+  };
   useEffect(load, []);
   const upload = async (list: FileList | null) => {
     if (!list?.length) return;
@@ -108,24 +146,88 @@ function SharedFiles() {
     }
     setProgress(undefined);
     if (input.current) input.current.value = '';
+    if (cameraInput.current) cameraInput.current.value = '';
     load();
   };
   const regular = files.filter(f => !f.is_dir);
+  const selectedNames = regular.filter(f => selected[f.name]).map(f => f.name);
+  const allSelected = regular.length > 0 && selectedNames.length === regular.length;
+
+  const toggleAll = () => {
+    if (allSelected) { setSelected({}); return; }
+    const next: Record<string, boolean> = {};
+    for (const f of regular) next[f.name] = true;
+    setSelected(next);
+  };
+
+  const removeFiles = async (names: string[]) => {
+    if (!names.length) return;
+    setMsg('');
+    try {
+      await post('/api/tools/shared/delete', { names });
+      if (names.includes(previewName)) { setPreviewName(''); setPreviewText(''); }
+      setMsg(`已将 ${names.length} 个文件移入回收站`);
+      load();
+    } catch (e) {
+      setMsg(`删除失败：${(e as Error).message}`);
+    }
+  };
+
+  const togglePreview = async (name: string) => {
+    if (previewName === name) { setPreviewName(''); setPreviewText(''); return; }
+    setPreviewName(name);
+    setPreviewText('');
+    if (previewKind(name) === 'text') {
+      try {
+        const res = await request(`/api/tools/shared/preview?name=${encodeURIComponent(name)}`);
+        setPreviewText(await res.text());
+      } catch (e) {
+        setPreviewText(`读取预览失败：${(e as Error).message}`);
+      }
+    }
+  };
+
+  const zipHref = selectedNames.length > 0
+    ? `/api/tools/shared/zip?files=${encodeURIComponent(selectedNames.join(','))}`
+    : '/api/tools/shared/zip';
+
   return <div className={card}
     onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); void upload(e.dataTransfer.files); }}>
-    <p className="text-xs text-muted">可拖入文件上传</p>
+    <p className="text-xs text-muted">可拖入文件上传，同名文件拒绝覆盖</p>
     <div className="flex flex-wrap items-center gap-2">
       <input ref={input} type="file" multiple className="hidden" onChange={e => void upload(e.target.files)} />
+      <input ref={cameraInput} type="file" accept="image/*,video/*" capture="environment" className="hidden" onChange={e => void upload(e.target.files)} />
       <button className={primaryButton} disabled={!!progress} onClick={() => input.current?.click()}>上传文件</button>
-      <a className={`${button} ${regular.length ? '' : 'pointer-events-none opacity-50'}`} href="/api/tools/shared/zip">打包下载全部</a>
+      <button className={button} disabled={!!progress} onClick={() => cameraInput.current?.click()}>拍照/录像直传</button>
+      <a className={`${button} ${regular.length ? '' : 'pointer-events-none opacity-50'}`} href={zipHref}>
+        {selectedNames.length > 0 ? `打包下载选中 (${selectedNames.length})` : '打包下载全部'}
+      </a>
+      {regular.length > 0 ? <button className={button} onClick={toggleAll}>{allSelected ? '取消全选' : '全选'}</button> : null}
+      {selectedNames.length > 0 ? <button className={button} onClick={() => void removeFiles(selectedNames)}>移入回收站 ({selectedNames.length})</button> : null}
       <button className={button} onClick={load}>刷新</button>
       {progress ? <span className="text-sm text-muted">{progress}</span> : msg ? <span className="text-sm text-muted">{msg}</span> : null}
     </div>
     <ul className="max-h-[60vh] space-y-1 overflow-y-auto">
-      {regular.map(f => <li key={f.name} className="flex items-center gap-2 rounded border border-line bg-background px-2 py-1 text-sm">
-        <a className="min-w-0 flex-1 truncate text-primary hover:underline" href={`/api/tools/shared/file?name=${encodeURIComponent(f.name)}`} download={f.name}>{f.name}</a>
-        <span className="shrink-0 text-xs text-muted">{size(f.size_bytes)} · {f.mod_time.slice(5, 16)}</span>
-      </li>)}
+      {regular.map(f => {
+        const kind = previewKind(f.name);
+        const isPreviewing = previewName === f.name;
+        const previewUrl = `/api/tools/shared/preview?name=${encodeURIComponent(f.name)}`;
+        return <li key={f.name} className="space-y-1.5 rounded border border-line bg-background px-2 py-1 text-sm">
+          <div className="flex items-center gap-2">
+            <input type="checkbox" checked={!!selected[f.name]} onChange={e => setSelected(old => ({ ...old, [f.name]: e.target.checked }))} />
+            <a className="min-w-0 flex-1 truncate text-primary hover:underline" href={`/api/tools/shared/file?name=${encodeURIComponent(f.name)}`} download={f.name}>{f.name}</a>
+            <span className="shrink-0 text-xs text-muted">{size(f.size_bytes)} · {f.mod_time.slice(5, 16)}</span>
+            {kind ? <button className="shrink-0 text-xs text-primary hover:underline" onClick={() => void togglePreview(f.name)}>{isPreviewing ? '收起' : '预览'}</button> : null}
+            <button className="shrink-0 text-xs text-muted hover:text-danger" onClick={() => void removeFiles([f.name])}>回收</button>
+          </div>
+          {isPreviewing ? <div className="rounded border border-line bg-panel p-2">
+            {kind === 'image' ? <img src={previewUrl} alt={f.name} className="max-h-72 max-w-full rounded object-contain" /> : null}
+            {kind === 'audio' ? <audio src={previewUrl} controls className="w-full" /> : null}
+            {kind === 'video' ? <video src={previewUrl} controls className="max-h-72 max-w-full rounded" /> : null}
+            {kind === 'text' ? <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{previewText || '加载中…'}</pre> : null}
+          </div> : null}
+        </li>;
+      })}
       {!regular.length ? <li className="text-sm text-muted">还没有共享文件</li> : null}
     </ul>
     <p className="text-xs text-muted">挂成网络盘（WebDAV，局域网内）：<code className="select-all">{`${window.location.protocol}//${window.location.host}/dav/`}</code>，
@@ -135,8 +237,14 @@ function SharedFiles() {
 
 function MetricsCard() {
   const [m, setM] = useState<Metrics>();
+  const [topFiles, setTopFiles] = useState<LargeFile[]>();
+  const [scanning, setScanning] = useState(false);
   const [err, setErr] = useState('');
   usePoll(() => { api<Metrics>('/api/tools/metrics').then(v => { setM(v); setErr(''); }).catch((e: Error) => setErr(e.message)); }, 3000);
+  const scanTop = () => {
+    setScanning(true);
+    api<LargeFile[]>('/api/tools/disk-top').then(list => { setTopFiles(list); setScanning(false); }).catch((e: Error) => { setErr(e.message); setScanning(false); });
+  };
   const bar = (used: number, total: number) => <span className="block h-1.5 overflow-hidden rounded bg-line"><span className="block h-full bg-[#58a6ff]" style={{ width: `${total ? used / total * 100 : 0}%` }} /></span>;
   return <div className={card}>
     {err ? <p className="text-sm text-danger">{err}</p> : null}
@@ -145,6 +253,21 @@ function MetricsCard() {
       <div className="space-y-1 text-sm"><p>资源库磁盘 <span className="text-muted">可用 {size(m.disk_free_bytes)} / {size(m.disk_total_bytes)}</span></p>{bar(m.disk_total_bytes - m.disk_free_bytes, m.disk_total_bytes)}</div>
       <p className="text-xs text-muted">{m.os} · {m.num_cpu} 核</p>
     </div> : <p className="text-sm text-muted">读取中…</p>}
+    <div className="border-t border-line pt-2">
+      <div className="flex items-center gap-2">
+        <button className={button} disabled={scanning} onClick={scanTop}>{scanning ? '扫描中…' : '扫描资源库大文件 (Top 20)'}</button>
+        {topFiles ? <span className="text-xs text-muted">共列出前 {topFiles.length} 个大文件</span> : null}
+      </div>
+      {topFiles ? <ul className="mt-2 max-h-64 space-y-1 overflow-y-auto">
+        {topFiles.map((f, idx) => <li key={`${f.library}:${f.rel_path}`} className="flex items-center gap-2 rounded border border-line bg-background px-2 py-1 text-xs">
+          <span className="w-6 shrink-0 font-mono text-muted">#{idx + 1}</span>
+          <span className="shrink-0 rounded bg-panel px-1.5 py-0.5 text-muted">{f.library}</span>
+          <span className="min-w-0 flex-1 truncate font-mono" title={f.rel_path}>{f.rel_path}</span>
+          <span className="shrink-0 font-mono text-primary">{size(f.size_bytes)}</span>
+        </li>)}
+        {!topFiles.length ? <li className="text-xs text-muted">未找到文件</li> : null}
+      </ul> : null}
+    </div>
   </div>;
 }
 

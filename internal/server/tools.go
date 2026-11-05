@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,24 +12,34 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"omnihub/internal/auth"
+	"omnihub/internal/platform"
 	"omnihub/internal/tools"
 )
 
-// 局域网小工具：剪贴板、共享文件、硬件看板、测速、唤醒与局域网扫描。
-// 都按「工具」分区等级放行；会动到本机或局域网的操作（上传、唤醒、扫描）另外不许从外网来。
+// 局域网小工具：剪贴板、共享文件、开发工具、颜色与渐变、硬件看板、测速、唤醒与局域网扫描。
+// 都按「工具」分区等级放行；会动到本机或局域网的操作（上传、删除、唤醒、扫描）另外不许从外网来。
 const (
-	maxClipboardBytes = 64 << 10
-	maxUploadChunk    = 8 << 20
+	maxClipboardBytes  = 64 << 10
+	maxUploadChunk     = 8 << 20
+	maxTextPreviewByte = 256 << 10
 )
 
-// 每个工具单独分级（子分区 tools/<名字>，在设置页修改）：剪贴板、共享文件默认「用户」，
+// 每个工具单独分级（子分区 tools/<名字>，在设置页修改）：剪贴板、共享文件、开发工具、颜色与渐变默认「用户」，
 // 主机状态、网络默认「管理员」。「工具」分区本身不再设门槛：能用至少一个工具就显示。
 var toolDefaults = []struct {
 	name  string
 	level int
-}{{"clipboard", auth.LevelVIP0}, {"shared", auth.LevelVIP0}, {"status", auth.LevelAdmin}, {"network", auth.LevelAdmin}}
+}{
+	{"clipboard", auth.LevelVIP0},
+	{"shared", auth.LevelVIP0},
+	{"dev", auth.LevelVIP0},
+	{"color", auth.LevelVIP0},
+	{"status", auth.LevelAdmin},
+	{"network", auth.LevelAdmin},
+}
 
 // allowedTools 返回当前账号能用的工具名。
 func (r *Router) allowedTools(req *http.Request) ([]string, error) {
@@ -256,6 +267,105 @@ func (r *Router) handleToolsSharedZip(w http.ResponseWriter, req *http.Request) 
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="shared.zip"`)
 	_ = tools.StreamZipArchive(dir, names, w)
+}
+
+// handleToolsSharedDelete 把共享目录下的指定文件移入系统回收站（仅允许局域网请求）。
+func (r *Router) handleToolsSharedDelete(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !r.toolsAllowed(w, req, "shared", true) {
+		return
+	}
+	dir, err := r.sharedDir()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	var p struct {
+		Names []string `json:"names"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 64<<10)).Decode(&p); err != nil || len(p.Names) == 0 || len(p.Names) > 200 {
+		http.Error(w, "invalid file list", http.StatusBadRequest)
+		return
+	}
+	deleted := 0
+	for _, name := range p.Names {
+		if err := tools.TrashShared(dir, name, platform.Trash); err != nil {
+			if errors.Is(err, tools.ErrInvalidName) {
+				http.Error(w, "invalid filename", http.StatusBadRequest)
+				return
+			}
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			http.Error(w, "移入回收站失败: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		deleted++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "deleted": deleted})
+}
+
+// handleToolsSharedPreview 对安全的纯文本、图片、音视频提供受控内联预览（禁止 html/svg 执行）。
+func (r *Router) handleToolsSharedPreview(w http.ResponseWriter, req *http.Request) {
+	if !r.toolsAllowed(w, req, "shared", false) {
+		return
+	}
+	dir, err := r.sharedDir()
+	if err != nil {
+		http.NotFound(w, req)
+		return
+	}
+	name := req.URL.Query().Get("name")
+	ct, ok := tools.PreviewContentType(name)
+	if !ok {
+		http.Error(w, "preview not supported for this file type", http.StatusUnsupportedMediaType)
+		return
+	}
+	file, info, err := tools.OpenShared(dir, name)
+	if err != nil {
+		http.NotFound(w, req)
+		return
+	}
+	defer file.Close()
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'")
+	if strings.HasPrefix(ct, "text/plain") {
+		w.Header().Set("Content-Type", ct)
+		data, readErr := io.ReadAll(io.LimitReader(file, maxTextPreviewByte))
+		if readErr != nil {
+			http.Error(w, "read failed", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+		return
+	}
+	w.Header().Set("Content-Type", ct)
+	http.ServeContent(w, req, "", info.ModTime(), file)
+}
+
+// handleToolsDiskTop 扫描在线资源库中占用空间最大的前 20 个文件。
+func (r *Router) handleToolsDiskTop(w http.ResponseWriter, req *http.Request) {
+	if !r.toolsAllowed(w, req, "status", false) {
+		return
+	}
+	var roots []struct{ Name, Path string }
+	for _, lib := range r.libMgr.ListLibraries() {
+		if lib.IsOnline && lib.RootPath != "" {
+			roots = append(roots, struct{ Name, Path string }{Name: lib.Name, Path: lib.RootPath})
+		}
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), 8*time.Second)
+	defer cancel()
+	files, err := tools.ScanTopFiles(ctx, roots, 20)
+	if err != nil && len(files) == 0 {
+		http.Error(w, "disk scan interrupted: "+err.Error(), http.StatusRequestTimeout)
+		return
+	}
+	writeJSON(w, http.StatusOK, files)
 }
 
 func (r *Router) handleToolsSpeed(w http.ResponseWriter, req *http.Request) {

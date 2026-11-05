@@ -5,7 +5,7 @@ type Device = { id: string; user_id: number; username: string; device_name: stri
 type Devices = { devices: Device[]; current_device_id: string; can_enroll: boolean; lan: boolean; capacity: number; lifetime_days: number };
 // 工具按单个工具分级（子分区 tools/…）；任务与设置只对管理员角色开放，不在这里设等级。
 const sections = [['gallery', '相册'], ['shortvideo', '短视频'], ['text', '文本'], ['audio', '音声'], ['manga', '漫画'], ['games', '游戏']] as const;
-const subsectionNames: Record<string, string> = { 'tools/clipboard': '工具 · 剪贴板', 'tools/shared': '工具 · 共享文件', 'tools/status': '工具 · 主机状态', 'tools/network': '工具 · 网络（测速/唤醒/扫描）' };
+const subsectionNames: Record<string, string> = { 'tools/clipboard': '工具 · 剪贴板', 'tools/shared': '工具 · 共享文件', 'tools/dev': '工具 · 开发工具', 'tools/color': '工具 · 颜色与渐变', 'tools/status': '工具 · 主机状态', 'tools/network': '工具 · 网络（测速/唤醒/扫描）' };
 const levels = [0, 1, 2, 3, 4, 99];
 const levelNames: Record<number, string> = { 0: '游客', 1: '用户', 2: 'VIP1', 3: 'VIP2', 4: 'VIP3', 99: '管理员' };
 type Subsection = { id: string; section: string; required_level: number; explicit: boolean };

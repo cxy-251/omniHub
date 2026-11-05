@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -139,4 +140,61 @@ func StreamZipArchive(sharedDir string, filenames []string, w io.Writer) error {
 		}
 	}
 	return zw.Close()
+}
+
+// TrashShared 验证共享目录下普通文件存在后，调用系统回收站函数将其移入回收站。
+func TrashShared(sharedDir, name string, trash func(string) error) error {
+	if !validName(name) {
+		return ErrInvalidName
+	}
+	if trash == nil {
+		return errors.New("trash function unavailable")
+	}
+	root, err := os.OpenRoot(sharedDir)
+	if err != nil {
+		return err
+	}
+	info, err := root.Lstat(name)
+	_ = root.Close()
+	if err != nil || !info.Mode().IsRegular() {
+		return fs.ErrNotExist
+	}
+	return trash(filepath.Join(sharedDir, name))
+}
+
+// PreviewContentType 根据扩展名返回允许在浏览器内联预览的 MIME 类型（禁止 html/svg 等可执行类型）。
+func PreviewContentType(name string) (string, bool) {
+	ext := strings.ToLower(path.Ext(name))
+	switch ext {
+	case ".txt", ".md", ".json", ".log", ".csv", ".yaml", ".yml", ".ini", ".conf", ".toml", ".xml":
+		return "text/plain; charset=utf-8", true
+	case ".jpg", ".jpeg":
+		return "image/jpeg", true
+	case ".png":
+		return "image/png", true
+	case ".webp":
+		return "image/webp", true
+	case ".gif":
+		return "image/gif", true
+	case ".bmp":
+		return "image/bmp", true
+	case ".avif":
+		return "image/avif", true
+	case ".mp3":
+		return "audio/mpeg", true
+	case ".wav":
+		return "audio/wav", true
+	case ".ogg":
+		return "audio/ogg", true
+	case ".flac":
+		return "audio/flac", true
+	case ".m4a":
+		return "audio/mp4", true
+	case ".mp4":
+		return "video/mp4", true
+	case ".webm":
+		return "video/webm", true
+	default:
+		return "", false
+	}
 }
