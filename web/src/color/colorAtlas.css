@@ -1,0 +1,680 @@
+/* ==========================================================================
+   OmniHub Color & Gradient Workbench (Spectrum Atlas + Gradient Atlas + Lab)
+   ========================================================================== */
+
+.omnihub-color-suite {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.omnihub-color-suite--fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  padding: 16px;
+  overflow-y: auto;
+  background: #0b0e14;
+}
+
+.writing-vertical {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+
+/* ---------------- Mode Switcher Header ---------------- */
+.color-suite-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(16, 19, 26, 0.78);
+  backdrop-filter: blur(24px) saturate(140%);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.24);
+}
+
+.color-suite-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.color-suite-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 15px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all 180ms ease;
+}
+
+.color-suite-tab:hover {
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.color-suite-tab[data-active="true"] {
+  background: linear-gradient(135deg, rgba(137, 217, 188, 0.24), rgba(88, 166, 255, 0.24));
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(137, 217, 188, 0.45), 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+
+.color-suite-tab__badge {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+/* ==========================================================================
+   1. SPECTRUM ATLAS · 中国色 3D 地形与宣纸典藏长卷
+   ========================================================================== */
+
+.spectrum-stage {
+  --active-color: #83CBAC;
+  --active-light: #B8E4D1;
+  --active-soft: #EBF7F2;
+  --active-dark: #4A7D68;
+  --active-ink: #14110D;
+  position: relative;
+  min-height: 760px;
+  border-radius: 14px;
+  overflow: hidden;
+  color: var(--active-ink);
+  background:
+    radial-gradient(circle at 46% 18%, var(--active-light), transparent 46%),
+    radial-gradient(circle at 12% 82%, rgba(255, 255, 255, 0.42), transparent 34%),
+    linear-gradient(180deg, var(--active-soft), var(--active-light) 54%, var(--active-dark));
+  transition: background 560ms cubic-bezier(0.22, 1, 0.36, 1), color 280ms ease;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+/* 宣纸纤维与水墨颗粒层 */
+.spectrum-paper-grain {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.68;
+  background-image:
+    radial-gradient(circle at 28% 18%, rgba(255, 255, 255, 0.38) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 72% 62%, rgba(35, 28, 20, 0.12) 0 0.8px, transparent 1.4px),
+    repeating-linear-gradient(90deg, rgba(20, 16, 10, 0.038) 0 1px, transparent 1px 7px),
+    repeating-linear-gradient(0deg, rgba(20, 16, 10, 0.024) 0 1px, transparent 1px 11px),
+    radial-gradient(circle at 50% 42%, transparent 0 48%, rgba(30, 24, 18, 0.2) 100%);
+  background-size: 5px 5px, 6px 6px, 100% 100%, 100% 100%, 100% 100%;
+  mix-blend-mode: multiply;
+}
+
+.spectrum-layout {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 16px;
+  padding: 18px;
+  min-height: 760px;
+}
+
+.spectrum-main-viewport {
+  position: relative;
+  min-height: 720px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 顶部悬浮模式切换与色系条 */
+.spectrum-top-bar {
+  position: relative;
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.spectrum-pill-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(20, 16, 12, 0.16);
+  background: rgba(255, 252, 244, 0.62);
+  backdrop-filter: blur(22px) saturate(130%);
+  box-shadow: 0 12px 34px rgba(52, 37, 18, 0.12);
+}
+
+.spectrum-pill-btn {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: rgba(18, 15, 11, 0.64);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: all 160ms ease;
+}
+
+.spectrum-pill-btn:hover {
+  color: rgba(18, 15, 11, 0.92);
+}
+
+.spectrum-pill-btn[data-active="true"] {
+  background: rgba(255, 255, 255, 0.88);
+  color: #14110d;
+  box-shadow: 0 4px 14px rgba(32, 24, 14, 0.14);
+}
+
+.spectrum-family-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.spectrum-family-chip {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(20, 16, 12, 0.15);
+  background: rgba(255, 252, 244, 0.48);
+  color: rgba(18, 15, 11, 0.68);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  backdrop-filter: blur(14px);
+  transition: all 160ms ease;
+}
+
+.spectrum-family-chip:hover,
+.spectrum-family-chip[data-active="true"] {
+  background: rgba(255, 255, 255, 0.86);
+  border-color: rgba(20, 16, 12, 0.36);
+  color: #14110d;
+  transform: translateY(-1px);
+}
+
+/* 3D 圆盘地形舞台 */
+.spectrum-3d-stage {
+  position: relative;
+  flex: 1;
+  min-height: 640px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(20, 16, 12, 0.12);
+  background: radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.26), rgba(20, 16, 12, 0.06));
+}
+
+.spectrum-3d-canvas {
+  width: 100%;
+  height: 100%;
+  min-height: 640px;
+  display: block;
+  cursor: grab;
+}
+
+.spectrum-3d-canvas:active {
+  cursor: grabbing;
+}
+
+/* 巨幅竖排宋刻汉字水印浮层 */
+.spectrum-giant-calligraphy {
+  position: absolute;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: rgba(22, 18, 12, 0.82);
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", Georgia, serif;
+  font-size: clamp(56px, 7.6vw, 128px);
+  font-weight: 900;
+  line-height: 0.94;
+  letter-spacing: 0.04em;
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.38),
+    0 24px 64px rgba(35, 26, 16, 0.22);
+  user-select: none;
+  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 左下角诗词印章与读数 */
+.spectrum-poetic-seal {
+  position: absolute;
+  left: 20px;
+  bottom: 18px;
+  z-index: 4;
+  pointer-events: none;
+  max-width: 440px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(20, 16, 12, 0.14);
+  background: rgba(255, 252, 244, 0.56);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 14px 36px rgba(42, 30, 15, 0.12);
+}
+
+.spectrum-poetic-seal__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.spectrum-poetic-seal__stamp {
+  display: inline-grid;
+  place-items: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #9d2933;
+  color: #fbf7ef;
+  font-family: "Songti SC", "STSong", serif;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.spectrum-poetic-seal__pinyin {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  color: rgba(20, 16, 12, 0.58);
+}
+
+.spectrum-poetic-seal__poem {
+  margin: 0;
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: rgba(20, 16, 12, 0.88);
+  line-height: 1.5;
+}
+
+/* 右下角 3D 交互提示与悬停气泡 */
+.spectrum-3d-hud {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(20, 16, 12, 0.14);
+  background: rgba(255, 252, 244, 0.58);
+  backdrop-filter: blur(16px);
+  font-size: 11px;
+  font-weight: 800;
+  color: rgba(20, 16, 12, 0.68);
+}
+
+/* 2D 宣纸典藏竹简网格 */
+.spectrum-archive-wrap {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 14px;
+  flex: 1;
+  min-height: 640px;
+}
+
+.spectrum-archive-sidebar {
+  border-radius: 10px;
+  border: 1px solid rgba(20, 16, 12, 0.16);
+  background: rgba(255, 252, 244, 0.56);
+  backdrop-filter: blur(26px);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.spectrum-archive-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  grid-auto-rows: 186px;
+  gap: 9px;
+  max-height: 650px;
+  overflow-y: auto;
+  padding: 2px 4px 16px;
+  scrollbar-color: rgba(20, 16, 12, 0.24) transparent;
+}
+
+.spectrum-slip-card {
+  position: relative;
+  border: 1px solid rgba(20, 16, 12, 0.14);
+  border-radius: 9px;
+  padding: 12px 8px 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.36);
+  color: rgba(18, 15, 11, 0.82);
+  cursor: pointer;
+  isolation: isolate;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+
+.spectrum-slip-card::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  content: "";
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), transparent 48%), var(--slip-color);
+  opacity: 0.14;
+}
+
+.spectrum-slip-card:hover,
+.spectrum-slip-card[data-selected="true"] {
+  transform: translateY(-3px);
+  border-color: rgba(20, 16, 12, 0.46);
+  background: rgba(255, 255, 255, 0.64);
+  box-shadow: 0 16px 36px rgba(38, 27, 12, 0.15);
+}
+
+.spectrum-slip-card__cap {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 8px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--slip-color);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28), 0 6px 14px rgba(35, 24, 12, 0.14);
+  transition: height 180ms ease;
+}
+
+.spectrum-slip-card:hover .spectrum-slip-card__cap,
+.spectrum-slip-card[data-selected="true"] .spectrum-slip-card__cap {
+  height: 24px;
+}
+
+.spectrum-slip-card__name {
+  position: absolute;
+  top: 40px;
+  right: 12px;
+  max-height: 98px;
+  color: rgba(16, 13, 10, 0.9);
+  font-family: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.spectrum-slip-card__pinyin {
+  position: absolute;
+  top: 40px;
+  left: 10px;
+  max-height: 98px;
+  color: rgba(18, 15, 11, 0.46);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.spectrum-slip-card__hex {
+  position: absolute;
+  left: 8px;
+  bottom: 24px;
+  color: rgba(18, 15, 11, 0.72);
+  font-size: 10px;
+  font-weight: 850;
+  font-family: monospace;
+}
+
+.spectrum-slip-card__dots {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 3px;
+}
+
+.spectrum-slip-card__dots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(18, 15, 11, 0.36);
+  background: var(--slip-color);
+}
+
+/* 右侧宣纸毛玻璃 Inspector（含 SVG CMYK 动态圆环仪表盘） */
+.spectrum-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.spectrum-panel {
+  border-radius: 10px;
+  border: 1px solid rgba(20, 16, 12, 0.16);
+  background: rgba(255, 252, 244, 0.58);
+  box-shadow: 0 24px 68px rgba(52, 37, 18, 0.15);
+  backdrop-filter: blur(28px) saturate(130%);
+  overflow: hidden;
+}
+
+.spectrum-cmyk-rings {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 14px 16px 10px;
+  border-top: 1px solid rgba(20, 16, 12, 0.1);
+}
+
+.spectrum-cmyk-gauge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.spectrum-cmyk-gauge span {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: rgba(18, 15, 11, 0.55);
+}
+
+.spectrum-rgb-bars {
+  display: grid;
+  gap: 6px;
+  padding: 6px 16px 14px;
+}
+
+.spectrum-rgb-bar {
+  display: grid;
+  grid-template-columns: 18px 1fr 34px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.spectrum-rgb-bar__track {
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(20, 16, 12, 0.1);
+  overflow: hidden;
+}
+
+.spectrum-rgb-bar__fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ==========================================================================
+   2. GRADIENT ATLAS · 流体极光与 120 经典渐变实验室
+   ========================================================================== */
+
+.gradient-atlas-stage {
+  --atlas-ink: rgba(255, 255, 255, 0.95);
+  --atlas-muted: rgba(255, 255, 255, 0.64);
+  --atlas-faint: rgba(255, 255, 255, 0.12);
+  --atlas-panel: rgba(8, 10, 18, 0.52);
+  --atlas-panel-strong: rgba(8, 10, 18, 0.74);
+  --atlas-border: rgba(255, 255, 255, 0.18);
+  --atlas-shadow: rgba(0, 0, 0, 0.36);
+  --atlas-accent: #7dd3fc;
+  position: relative;
+  min-height: 760px;
+  border-radius: 14px;
+  overflow: hidden;
+  color: var(--atlas-ink);
+  background: #070a12;
+  border: 1px solid var(--atlas-border);
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.38);
+}
+
+.gradient-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.gradient-backdrop__paint {
+  position: absolute;
+  inset: -2%;
+  transition: background-image 420ms ease, background-color 420ms ease;
+}
+
+.gradient-backdrop__glow-a {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 18% 18%, var(--atlas-glow), transparent 36%);
+  mix-blend-mode: screen;
+}
+
+.gradient-backdrop__glow-b {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 82% 74%, rgba(255, 255, 255, 0.18), transparent 32%);
+  mix-blend-mode: overlay;
+}
+
+.gradient-backdrop__vignette {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 34%, transparent 0 36%, rgba(0, 0, 0, 0.18) 68%, rgba(0, 0, 0, 0.52) 100%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.18), transparent 34%, rgba(0, 0, 0, 0.18));
+}
+
+.gradient-backdrop__grain {
+  position: absolute;
+  inset: 0;
+  opacity: 0.16;
+  mix-blend-mode: soft-light;
+  background-image:
+    radial-gradient(circle at 25% 35%, rgba(255, 255, 255, 0.95) 0 0.7px, transparent 1px),
+    radial-gradient(circle at 75% 65%, rgba(0, 0, 0, 0.8) 0 0.7px, transparent 1px);
+  background-size: 4px 4px, 5px 5px;
+}
+
+.gradient-workbench {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 320px minmax(320px, 1fr) 370px;
+  gap: 16px;
+  padding: 18px;
+  min-height: 760px;
+  align-items: stretch;
+}
+
+.gradient-glass-panel {
+  border: 1px solid var(--atlas-border);
+  border-radius: 10px;
+  background: var(--atlas-panel);
+  box-shadow: 0 24px 80px var(--atlas-shadow);
+  backdrop-filter: blur(34px) saturate(135%);
+  display: flex;
+  flex-direction: column;
+  max-height: 724px;
+  overflow: hidden;
+}
+
+.gradient-center-stage {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 36px 14px 6px;
+}
+
+.gradient-hero-title {
+  margin: auto 0;
+  text-shadow: 0 18px 64px rgba(0, 0, 0, 0.34);
+}
+
+.gradient-hero-title h1 {
+  margin: 0;
+  color: var(--atlas-ink);
+  font-size: clamp(44px, 5.2vw, 78px);
+  font-weight: 900;
+  line-height: 0.96;
+  letter-spacing: -0.02em;
+}
+
+.gradient-hero-title p {
+  max-width: 540px;
+  margin: 18px 0 0;
+  color: var(--atlas-muted);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.6;
+}
+
+/* ==========================================================================
+   3. CHROMA LAB · 360° 几何配色色轮与 WCAG 工程实验台
+   ========================================================================== */
+
+.chroma-lab-grid {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 1220px) {
+  .spectrum-layout {
+    grid-template-columns: 1fr;
+  }
+  .spectrum-archive-wrap {
+    grid-template-columns: 1fr;
+  }
+  .gradient-workbench {
+    grid-template-columns: 1fr;
+  }
+  .gradient-glass-panel {
+    max-height: 520px;
+  }
+  .chroma-lab-grid {
+    grid-template-columns: 1fr;
+  }
+}
