@@ -114,7 +114,7 @@ function Shell() {
         {current === 'audio' ? <AudioPage /> : null}
         {current === 'text' ? <TextPage active /> : null}
         {current === 'manga' ? <MangaLibrary active /> : null}
-        {current === 'games' ? <GameLibrary /> : null}
+        {current === 'games' ? <GameLibrary loggedIn={!!status?.logged_in} /> : null}
         {current === 'tools' ? <ToolsPage sections={sections} isAdmin={status?.user.role === 'admin'} /> : null}
         {current === 'admin' ? <AdminCenter /> : null}
       </Suspense></PageBoundary>

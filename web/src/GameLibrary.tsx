@@ -4,7 +4,7 @@ import { button, chip, explain, notify, select, store, stored } from './ui';
 
 type Game = { id: string; name: string; category: string; library_id: string; favorite?: boolean; last_played_at?: string; play_time_sec?: number };
 type Grant = { token: string; kind: 'html' | 'retro'; url: string; expires_at: string; system?: string; bios?: string; bios_missing?: string; unsupported?: boolean; bios_lacking?: string[] };
-const categories = [['', '全部'], ['fav', '★ 收藏'], ['rpg', 'RPG'], ['slg', 'SLG'], ['retro', '模拟器']] as const;
+const allCategories = [['rpg', 'RPG'], ['slg', 'SLG'], ['retro', '模拟器']] as const;
 const art = (g: Game) => `/api/games/art?${new URLSearchParams({ library_id: g.library_id, id: g.id })}`;
 // 模拟器游戏按系列分组（同 omni-deck），卡片上标机种（游戏目录名末尾括号，如 (GBA)）。
 const franchises: [string, string, RegExp][] = [
@@ -23,14 +23,21 @@ const playUrl = (g: Game) => `/#play/${encodeURIComponent(g.library_id)}/${encod
 
 // 网页游戏（RPG/SLG 的 HTML 版与复古模拟器）：服务端一次返回全部（几百个），这里按分类、收藏、名字筛选。
 // 点卡片在新标签页打开（GamePlayer），每个标签各自申请、各自释放游戏授权，可以同时开几个。
-export default function GameLibrary() {
+export default function GameLibrary({ loggedIn = false }: { loggedIn?: boolean }) {
   const [category, setCategory] = useState(() => stored('omnihub.games.category', ''));
   const [query, setQuery] = useState('');
   const [revision, setRevision] = useState(0);
   const [games, setGames] = useState<Game[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => store('omnihub.games.category', category), [category]);
+  const presentCats = allCategories.filter(([val]) => games.some(g => g.category === val));
+  const categories: (readonly [string, string])[] = [
+    ['', '全部'],
+    ...(loggedIn ? [['fav', '★ 收藏'] as const] : []),
+    ...presentCats,
+  ];
+  const activeCat = categories.some(([val]) => val === category) ? category : '';
+  useEffect(() => store('omnihub.games.category', activeCat), [activeCat]);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setError('');
@@ -47,23 +54,24 @@ export default function GameLibrary() {
       .catch((failure: Error) => notify(explain(failure, '收藏')));
   };
   const needle = query.trim().toLowerCase();
-  const shown = games.filter(g => (category === 'fav' ? g.favorite : !category || g.category === category) && (!needle || g.name.toLowerCase().includes(needle)));
+  const shown = games.filter(g => (activeCat === 'fav' ? g.favorite : !activeCat || g.category === activeCat) && (!needle || g.name.toLowerCase().includes(needle)));
+  const isRetroGroupView = (activeCat === 'retro' || (activeCat === '' && presentCats.length === 1 && presentCats[0][0] === 'retro')) && !needle;
   return <section className="space-y-3">
     <div className="flex flex-wrap items-center gap-1.5">
-      {categories.map(([value, label]) => <button key={value} className={chip(category === value)} onClick={() => setCategory(value)}>{label}</button>)}
+      {categories.map(([value, label]) => <button key={value} className={chip(activeCat === value)} onClick={() => setCategory(value)}>{label}</button>)}
       <input className={`${select} ml-auto w-44`} placeholder="搜索游戏" value={query} onChange={e => setQuery(e.target.value)} />
       <button className={button} disabled={loading} onClick={() => setRevision(value => value + 1)}>刷新</button>
     </div>
     {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
-    {loading ? <p role="status">正在加载游戏…</p> : category === 'retro' && !needle ? <div className="space-y-4">
+    {loading ? <p role="status">正在加载游戏…</p> : isRetroGroupView ? <div className="space-y-4">
       {[...franchises.map(([key, label]) => [key, label] as const), ['other', '🕹️ 其他复古经典'] as const].map(([key, label]) => {
         const list = shown.filter(g => franchiseOf(g) === key);
         return list.length ? <div key={key} className="space-y-2"><h3 className="text-sm font-semibold text-muted">{label} <span className="text-xs">{list.length}</span></h3>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">{list.map(game => <Card key={game.id} game={game} onFavorite={favorite} />)}</div></div> : null;
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">{list.map(game => <Card key={game.id} game={game} loggedIn={loggedIn} onFavorite={favorite} />)}</div></div> : null;
       })}
     </div> : <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
-      {shown.map(game => <Card key={game.id} game={game} onFavorite={favorite} />)}
-      {!shown.length ? <p className="col-span-full text-muted">{category === 'fav' ? '还没有收藏的游戏。' : '没有匹配的游戏。'}</p> : null}
+      {shown.map(game => <Card key={game.id} game={game} loggedIn={loggedIn} onFavorite={favorite} />)}
+      {!shown.length ? <p className="col-span-full text-muted">{activeCat === 'fav' ? '还没有收藏的游戏。' : '没有匹配的游戏。'}</p> : null}
     </div>}
   </section>;
 }
@@ -74,7 +82,7 @@ function playTime(sec: number) {
   return h > 0 ? `${h} 小时 ${m} 分` : `${Math.max(1, m)} 分钟`;
 }
 
-function Card({ game, onFavorite }: { game: Game; onFavorite(g: Game): void }) {
+function Card({ game, loggedIn, onFavorite }: { game: Game; loggedIn: boolean; onFavorite(g: Game): void }) {
   const system = game.category === 'retro' ? systemOf(game) : '';
   return <article className="group relative overflow-hidden rounded-lg border border-line bg-panel hover:border-primary">
         <a className="block" href={playUrl(game)} target="_blank" rel="noopener" title={`在新标签页打开 ${game.name}`}>
@@ -86,7 +94,7 @@ function Card({ game, onFavorite }: { game: Game; onFavorite(g: Game): void }) {
           <p className="truncate px-2 pt-1 text-sm">{system ? game.name.replace(/\s*\([^()]+\)\s*$/, '') : game.name}</p>
           <p className="truncate px-2 pb-1.5 text-xs text-muted">{game.category === 'retro' ? `模拟器 · ${system || '未知机种'}` : game.category.toUpperCase()}{game.play_time_sec ? ` · ${playTime(game.play_time_sec)}` : ''}</p>
         </a>
-        <button className={`absolute right-1 top-1 rounded-full bg-black/60 px-1.5 text-sm ${game.favorite ? 'text-[#e3b341]' : 'text-white/70 opacity-60 hover:opacity-100'}`} onClick={() => onFavorite(game)} title={game.favorite ? '取消收藏' : '收藏'}>{game.favorite ? '★' : '☆'}</button>
+        {loggedIn ? <button className={`absolute right-1 top-1 rounded-full bg-black/60 px-1.5 text-sm ${game.favorite ? 'text-[#e3b341]' : 'text-white/70 opacity-60 hover:opacity-100'}`} onClick={() => onFavorite(game)} title={game.favorite ? '取消收藏' : '收藏'}>{game.favorite ? '★' : '☆'}</button> : null}
       </article>;
 }
 
