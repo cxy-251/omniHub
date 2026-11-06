@@ -117,8 +117,13 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
   };
   useEffect(() => {
     setPage(1);
+    setArmed(false);
     finish();
-    if (post) { shown.current = { post, at: Date.now(), pages: 1 }; sendEvent('shortvideo', post.id, 'view'); }
+    if (post) {
+      shown.current = { post, at: Date.now(), pages: 1 };
+      sendEvent('shortvideo', post.id, 'view');
+      if (post.kind === 'video') video.current?.play().catch(() => undefined);
+    }
   }, [post?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => finish(), []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (shown.current) shown.current.pages = Math.max(shown.current.pages, page); }, [page]);

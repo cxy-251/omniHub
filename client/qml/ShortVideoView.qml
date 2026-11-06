@@ -238,11 +238,14 @@ Item {
             finish()
             page = 1
             pagesSeen = 1
+            trashing = false
+            trashArmed = false
             if (post) { shown = post; shownAt = Date.now(); feed.event(post, "view") }
         }
         onPageChanged: pagesSeen = Math.max(pagesSeen, page)
         Component.onDestruction: finish()
         property bool trashArmed: false
+        property bool trashing: false
         Timer { id: trashDisarm; interval: 3000; onTriggered: viewer.trashArmed = false }
         // 3 秒内点两次（或按两次 Delete）。完成后留在查看界面，同一位置换成下一个作品。
         property string notice: ""
@@ -253,8 +256,12 @@ Item {
             trashArmed = false
             var target = post
             shown = null
-            video.source = ""
-            feed.trash(target, function () { paged.reset(); viewer.say("已移到系统回收站") })
+            trashing = true
+            feed.trash(target, function () { viewer.trashing = false; paged.reset(); viewer.say("已移到系统回收站") })
+        }
+        Connections {
+            target: feed
+            function onErrorChanged() { if (feed.error) viewer.trashing = false }
         }
         function next() { if (view.openIndex < paged.total - 1) view.openIndex++ }
         function prev() { if (view.openIndex > 0) view.openIndex-- }
@@ -277,7 +284,7 @@ Item {
             anchors.fill: parent
             anchors.bottomMargin: 0
             visible: viewer.isVideo
-            source: viewer.isVideo ? view.localFile(viewer.post, viewer.post.id) : ""
+            source: viewer.isVideo && !viewer.trashing ? view.localFile(viewer.post, viewer.post.id) : ""
             volume: viewPrefs.muted ? 0 : viewPrefs.volume
             onPlaybackEnded: { feed.event(viewer.post, "complete"); viewer.shown = null; viewer.next() }
         }
@@ -293,7 +300,7 @@ Item {
         // 图集背景音乐：音频不需要画面，用 1 像素透明播放器播放磁盘上的 mp3。
         MpvItem {
             width: 1; height: 1; opacity: 0
-            source: viewer.post && !viewer.isVideo && viewer.post.music ? view.localFile(viewer.post, viewer.post.music) : ""
+            source: viewer.post && !viewer.isVideo && !viewer.trashing && viewer.post.music ? view.localFile(viewer.post, viewer.post.music) : ""
             volume: viewPrefs.muted ? 0 : viewPrefs.volume
             onPlaybackEnded: restart()
         }
