@@ -14,6 +14,7 @@ const AudioPage = lazyPage(() => import('./AudioWorkspace'));
 const TextPage = lazyPage(() => import('./TextPage'));
 const MangaLibrary = lazyPage(() => import('./MangaLibrary'));
 const GameLibrary = lazyPage(() => import('./GameLibrary'));
+const WebLabPage = lazyPage(() => import('./WebLabPage'));
 const ToolsPage = lazyPage(() => import('./ToolsPage'));
 const AdminCenter = lazyPage(() => import('./AdminCenter'));
 const GamePlayer = lazyPage(() => import('./GameLibrary').then(m => ({ default: m.GamePlayer })));
@@ -115,6 +116,7 @@ function Shell() {
         {current === 'text' ? <TextPage active /> : null}
         {current === 'manga' ? <MangaLibrary active /> : null}
         {current === 'games' ? <GameLibrary loggedIn={!!status?.logged_in} /> : null}
+        {current === 'weblab' ? <WebLabPage sections={sections} /> : null}
         {current === 'tools' ? <ToolsPage sections={sections} isAdmin={status?.user.role === 'admin'} /> : null}
         {current === 'admin' ? <AdminCenter /> : null}
       </Suspense></PageBoundary>

@@ -4,8 +4,8 @@ import { api, request, type Status, type User } from './api';
 type Device = { id: string; user_id: number; username: string; device_name: string; ip: string; created_at: string; expires_at: string };
 type Devices = { devices: Device[]; current_device_id: string; can_enroll: boolean; lan: boolean; capacity: number; lifetime_days: number };
 // 工具按单个工具分级（子分区 tools/…）；任务与设置只对管理员角色开放，不在这里设等级。
-const sections = [['gallery', '相册'], ['shortvideo', '短视频'], ['text', '文本'], ['audio', '音声'], ['manga', '漫画'], ['games', '游戏']] as const;
-const subsectionNames: Record<string, string> = { 'gallery/default': 'gallery/默认相册', 'shortvideo/mainstream': 'shortvideo/抖音·快手·小红书·TikTok', 'games/emulator': '游戏 · 模拟器', 'games/other': '游戏 · 其他', 'tools/clipboard': '工具 · 剪贴板', 'tools/shared': '工具 · 共享文件', 'tools/dev': '工具 · 开发工具', 'tools/color': '工具 · 颜色与渐变', 'tools/status': '工具 · 主机状态', 'tools/network': '工具 · 网络（测速/唤醒/扫描）' };
+const sections = [['gallery', '相册'], ['shortvideo', '短视频'], ['text', '文本'], ['audio', '音声'], ['manga', '漫画'], ['games', '游戏'], ['weblab', '实验室']] as const;
+const subsectionNames: Record<string, string> = { 'gallery/default': 'gallery/默认相册', 'shortvideo/mainstream': 'shortvideo/抖音·快手·小红书·TikTok', 'games/emulator': '游戏 · 模拟器', 'games/other': '游戏 · 其他', 'weblab/rubiks': '实验室 · 3D 魔方', 'weblab/fluid': '实验室 · WebGL 流体', 'weblab/fourier': '实验室 · 傅里叶与双摆', 'weblab/slides': '实验室 · 网页幻灯片', 'tools/clipboard': '工具 · 剪贴板', 'tools/shared': '工具 · 共享文件', 'tools/dev': '工具 · 开发工具', 'tools/color': '工具 · 颜色与渐变', 'tools/status': '工具 · 主机状态', 'tools/network': '工具 · 网络（测速/唤醒/扫描）' };
 const levels = [0, 1, 2, 3, 4, 99];
 const levelNames: Record<number, string> = { 0: '游客', 1: '用户', 2: 'VIP1', 3: 'VIP2', 4: 'VIP3', 99: '管理员' };
 type Subsection = { id: string; section: string; required_level: number; explicit: boolean };

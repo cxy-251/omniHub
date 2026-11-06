@@ -2,7 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 
 export const tabs = [
   ['shortvideo', '短视频'], ['gallery', '相册'], ['audio', '音声'], ['text', '文本'],
-  ['manga', '漫画'], ['games', '游戏'], ['tools', '工具'], ['admin', '设置'],
+  ['manga', '漫画'], ['games', '游戏'], ['weblab', '实验室'], ['tools', '工具'], ['admin', '设置'],
 ] as const;
 export type Tab = typeof tabs[number][0];
 type NavProps = { visible: readonly (typeof tabs[number])[]; current?: Tab; account?: ReactNode; onChoose(id: Tab): void };
@@ -13,6 +13,7 @@ const paths: Record<Tab, React.ReactNode> = {
   text: <><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M7 8h10M7 12h10M7 16h7" /></>,
   manga: <><path d="M12 5c-3-2-6-2-10-1v15c4-1 7-1 10 1 3-2 6-2 10-1V4c-4-1-7-1-10 1Zm0 0v15" /></>,
   games: <><path d="M7 6h10c3 0 4 5 5 11 0 3-3 3-6-1H8c-3 4-6 4-6 1 1-6 2-11 5-11Z" /><path d="M5 11h6M8 8v6M16 10h.01M19 13h.01" /></>,
+  weblab: <><path d="M12 2 3 7l9 5 9-5-9-5Z" /><path d="m3 17 9 5 9-5M3 12l9 5 9-5" /></>,
   tools: <path d="m14 6 4 4 4-4a7 7 0 0 1-9 9l-7 7-4-4 7-7a7 7 0 0 1 9-9Z" />,
   admin: <><path d="m10 2 4 0 1 3 3 1 3-1 2 4-2 3 0 2 1 3-3 3-3-1-3 1-1 3-4-1-1-3-3-1-3 1-2-4 2-3 0-2-1-3 3-3 3 1Z" transform="translate(1 0) scale(.9)" /><circle cx="12" cy="12" r="3" /></>,
 };

@@ -49,6 +49,32 @@ func (r *Router) handleSections(w http.ResponseWriter, req *http.Request) {
 			allowed = append(allowed, section)
 		}
 	}
+	// 实验室：先满足 weblab 分区门槛，再按子分区（weblab/<子项>）过滤可见模块。
+	if r.sectionEnabled("weblab") {
+		level, err := r.authDB.GetSectionRequiredLevel("weblab")
+		if err != nil {
+			http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if u.Level >= level {
+			c, err := r.accessFor(req)
+			if err != nil {
+				http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			var labs []string
+			for _, sub := range weblabSubsections {
+				id := "weblab/" + sub
+				if c.allowsSub("weblab", id) {
+					labs = append(labs, id)
+				}
+			}
+			if len(labs) > 0 {
+				allowed = append(allowed, "weblab")
+				allowed = append(allowed, labs...)
+			}
+		}
+	}
 	// 工具：能用至少一个就显示「工具」，并列出能用的工具（tools/<名字>）。
 	if r.sectionEnabled("tools") {
 		tools, err := r.allowedTools(req)

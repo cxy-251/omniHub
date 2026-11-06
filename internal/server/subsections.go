@@ -202,6 +202,8 @@ func (r *Router) allowPath(w http.ResponseWriter, req *http.Request, logical str
 	return true
 }
 
+var weblabSubsections = []string{"rubiks", "fluid", "fourier", "slides"}
+
 // handleAdminSubsections 列出各在线库中实际存在的子分类及其生效等级，供权限矩阵展示与修改
 // （修改仍走 /api/admin/permissions，section_id 填子分类 ID）。
 func (r *Router) handleAdminSubsections(w http.ResponseWriter, req *http.Request) {
@@ -264,6 +266,11 @@ func (r *Router) handleAdminSubsections(w http.ResponseWriter, req *http.Request
 	for _, id := range []string{"games/emulator", "games/other"} {
 		_, explicit := c.stored[id]
 		seen[id] = entry{ID: id, Section: "games", RequiredLevel: c.requiredLevel("games", id), Explicit: explicit}
+	}
+	for _, sub := range weblabSubsections {
+		id := "weblab/" + sub
+		_, explicit := c.stored[id]
+		seen[id] = entry{ID: id, Section: "weblab", RequiredLevel: c.requiredLevel("weblab", id), Explicit: explicit}
 	}
 	for _, t := range toolDefaults {
 		id := "tools/" + t.name
