@@ -49,9 +49,9 @@ function MusicPane({ artist }: { artist?: Artist }) {
       <button className={chip(engine?.albumId === scope && engine?.mode === 'list')} onClick={() => album ? loop(album.id, album.album) : loop(artist.id, artist.title)}>
         {album ? '🔁 循环这张专辑' : '🔁 循环这个歌手'}</button>
       <button className={`ml-auto ${chip(review)}`} onClick={() => setReview(v => !v)}>歌词待处理</button>
-      <button className={chip(artist.main_artist)} onClick={() => {
+      {engine?.music.can_rate ? <button className={chip(artist.main_artist)} onClick={() => {
         void post('/api/media/audio/music/artist', { id: artist.id, main: !artist.main_artist }).then(() => engine?.refreshMusic(true)).catch((e: Error) => setError(e.message));
-      }}>{artist.main_artist ? '归入其他歌手' : '设为常听歌手'}</button>
+      }}>{artist.main_artist ? '归入其他歌手' : '设为常听歌手'}</button> : null}
     </div>
     {error ? <p className="text-sm text-danger">{error}</p> : null}
     <p className="text-xs text-muted">{engine?.albumId === artist.id ? '正在按歌手播放：播完一首接下一首单曲，单曲完了接各张专辑'
@@ -144,7 +144,7 @@ export default function AudioPage({ active }: { active: boolean }) {
         <button className={chip(section === 'book')} onClick={() => setSection('book')}>有声书</button>
       </div>
       {section === 'music' ? <div className="space-y-2 py-2">
-        <div className="flex flex-wrap gap-1">{[['all', '全部音乐'], ['liked', '我的点赞'], ['disliked', '不喜欢'], ...(engine?.music.can_trash ? [['trash', '回收记录']] : [])].map(([key, title]) =>
+        <div className="flex flex-wrap gap-1">{[['all', '全部音乐'], ...(engine?.music.can_rate ? [['liked', '我的点赞'], ['disliked', '不喜欢']] : []), ...(engine?.music.can_trash ? [['trash', '回收记录']] : [])].map(([key, title]) =>
           <button key={key} className={chip(musicCollection === key)} onClick={() => setMusicCollection(key)}>{title}</button>)}</div>
         <div className="flex gap-1"><button className={chip(!otherArtists)} onClick={() => { setOtherArtists(false); setMusicCollection('all'); }}>常听歌手</button><button className={chip(otherArtists)} onClick={() => { setOtherArtists(true); setMusicCollection('other'); }}>其他歌手</button></div>
       </div> : null}

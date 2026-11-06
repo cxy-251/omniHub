@@ -88,9 +88,10 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             spacing: 4
-            Chip { text: "浏览"; selected: true }
-            Chip { text: view.matrixWindowOpen ? "多联放映（窗口）" : "多联放映"; onClicked: if (view.matrixWindowOpen) view.matrixWindowRequested(); else view.mode = "matrix" }
-            Divider { Layout.leftMargin: 2; Layout.rightMargin: 2 }
+            readonly property bool canMatrix: view.platforms.some(function (p) { return p !== "MV" }) && view.platform !== "MV" && view.channel.indexOf("group:MV/") !== 0
+            Chip { text: "浏览"; selected: true; visible: parent.canMatrix }
+            Chip { text: view.matrixWindowOpen ? "多联放映（窗口）" : "多联放映"; visible: parent.canMatrix; onClicked: if (view.matrixWindowOpen) view.matrixWindowRequested(); else view.mode = "matrix" }
+            Divider { Layout.leftMargin: 2; Layout.rightMargin: 2; visible: parent.canMatrix }
             ComboBox {
                 visible: view.platforms.length > 1
                 implicitHeight: 28; Layout.preferredWidth: 110; font.pixelSize: 12
@@ -131,15 +132,16 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            readonly property int columns: Math.max(2, Math.round(width / 210))
+            readonly property bool isLandscape: view.platform === "MV" || view.channel.indexOf("group:MV/") === 0
+            readonly property int columns: Math.max(2, Math.round(width / (isLandscape ? 260 : 210)))
             cellWidth: Math.floor(width / columns)
-            cellHeight: cellWidth * 16 / 9 + 42
+            cellHeight: cellWidth * (isLandscape ? 9 / 16 : 16 / 9) + 42
             model: paged.total
             cacheBuffer: cellHeight * 2
             ScrollBar.vertical: ScrollBar { minimumSize: 0.05 }
             delegate: Item {
                 required property int index
-                readonly property var modelData: { paged.revision; return paged.item(index) || {id: "", kind: "", title: "", published: "", creator_id: "/", has_thumbnail: false} }
+                readonly property var modelData: { paged.revision; return paged.item(index) || {id: "", kind: "", title: "", published: "", creator_id: "/", has_thumbnail: false, width: 0, height: 0} }
                 width: grid.cellWidth
                 height: grid.cellHeight
                 Rectangle {
@@ -152,8 +154,8 @@ Item {
                     Image {
                         id: thumb
                         width: parent.width
-                        height: width * 16 / 9
-                        fillMode: Image.PreserveAspectCrop
+                        height: width * (grid.isLandscape ? 9 / 16 : 16 / 9)
+                        fillMode: (!grid.isLandscape && modelData.width > modelData.height && modelData.height > 0) ? Image.PreserveAspectFit : Image.PreserveAspectCrop
                         asynchronous: true
                         sourceSize.width: 360
                         source: modelData.has_thumbnail ? view.apiQuery("/api/media/shortvideo/thumbnail", modelData) : ""

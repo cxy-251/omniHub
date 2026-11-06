@@ -54,4 +54,17 @@ func TestMarkedNSFWAccess(t *testing.T) {
 	if !c.shortVideo("X/作者/2026-10-01_a_1.mp4") || c.galleryCollection("X") {
 		t.Error("an explicit level opens only that subsection")
 	}
+	c.stored["shortvideo/mainstream"] = 2
+	c.stored["games"] = 0
+	c.stored["games/other"] = 3
+	c.memo = map[string]bool{}
+	if c.shortVideo("抖音/作者/a.mp4") || c.shortVideo("快手/作者/a.mp4") || c.shortVideo("小红书/作者/a.mp4") || c.shortVideo("TikTok/作者/a.mp4") {
+		t.Error("merged mainstream shortvideo platforms must share shortvideo/mainstream level")
+	}
+	if !c.shortVideo("MV/歌手/a.mp4") {
+		t.Error("non-mainstream platform MV should still follow section level")
+	}
+	if !c.gameCategory("retro") || !c.gameCategory("3ds") || c.gameCategory("rpg") || c.gameCategory("steam") {
+		t.Error("emulator games (retro/3ds) and other games must follow their respective subsections")
+	}
 }

@@ -6,13 +6,13 @@ import './channels.css';
 
 type Props = {
   groups: Group[]; pins: string[]; channel: string; onPick(channel: string): void;
-  filters?: { channel: string; label: string }[]; showHidden?: boolean;
+  filters?: { channel: string; label: string }[]; showHidden?: boolean; loggedIn?: boolean;
   basicItems?: { channel: string; label: string }[];
   groupLabel?: string; onPin?(id: string, pinned: boolean): void;
 };
 
 /** Common channels stay visible; the searchable group panel mounts only on demand. */
-export default function ChannelBar({ groups, pins, channel, onPick, filters = [], basicItems, showHidden = false, groupLabel = '分类', onPin }: Props) {
+export default function ChannelBar({ groups, pins, channel, onPick, filters = [], basicItems, showHidden = false, loggedIn = true, groupLabel = '分类', onPin }: Props) {
   const [open, setOpen] = useState(false);
   const panelId = useId(), toggle = useRef<HTMLButtonElement>(null);
   const byId = useMemo(() => new Map(groups.map(g => [g.id, g])), [groups]);
@@ -24,7 +24,8 @@ export default function ChannelBar({ groups, pins, channel, onPick, filters = []
     ? [...groups.filter(g => pinned.has(g.id)), ...groups.filter(g => !pinned.has(g.id))]
     : pins.flatMap(id => { const g = byId.get(id); return g ? [g] : []; }).slice(0, 6);
   if (!inlineAll && current && !common.some(g => g.id === current.id)) common.push(current);
-  const basics = [...(basicItems ?? [{ channel: 'recommend', label: '推荐' }, { channel: 'liked', label: '♥ 我的点赞' }]), ...filters];
+  const defaultBasics = loggedIn ? [{ channel: 'recommend', label: '推荐' }, { channel: 'liked', label: '♥ 我的点赞' }] : [{ channel: 'recommend', label: '推荐' }];
+  const basics = [...(basicItems ?? defaultBasics), ...filters];
   return <div className="channel-picker" onKeyDown={e => {
     if (e.key === 'Escape' && open) { e.stopPropagation(); setOpen(false); toggle.current?.focus(); }
   }}>

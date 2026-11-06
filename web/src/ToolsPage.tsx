@@ -38,7 +38,7 @@ const tools = [
   ['network', '🌐 网络'],
 ] as const;
 
-export default function ToolsPage({ sections }: { sections: string[] }) {
+export default function ToolsPage({ sections, isAdmin = false }: { sections: string[]; isAdmin?: boolean }) {
   const available = tools.filter(([id]) => sections.includes(`tools/${id}`));
   const [tab, setTab] = useState(() => stored('omnihub.tools.tab', 'clipboard'));
   useEffect(() => store('omnihub.tools.tab', tab), [tab]);
@@ -49,7 +49,7 @@ export default function ToolsPage({ sections }: { sections: string[] }) {
     </div>
     <div className="max-w-4xl">
       {current === 'clipboard' ? <Clipboard /> : null}
-      {current === 'shared' ? <SharedFiles /> : null}
+      {current === 'shared' ? <SharedFiles isAdmin={isAdmin} /> : null}
       {current === 'dev' ? <PageBoundary name="开发工具"><Suspense fallback={<PageLoading />}><DevTools /></Suspense></PageBoundary> : null}
       {current === 'color' ? <PageBoundary name="颜色与渐变"><Suspense fallback={<PageLoading />}><ColorTools /></Suspense></PageBoundary> : null}
       {current === 'status' ? <MetricsCard /> : null}
@@ -110,7 +110,7 @@ function previewKind(name: string): 'text' | 'image' | 'audio' | 'video' | null 
   return null;
 }
 
-function SharedFiles() {
+function SharedFiles({ isAdmin = false }: { isAdmin?: boolean }) {
   const [files, setFiles] = useState<Shared[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [previewName, setPreviewName] = useState<string>('');
@@ -202,8 +202,8 @@ function SharedFiles() {
       <a className={`${button} ${regular.length ? '' : 'pointer-events-none opacity-50'}`} href={zipHref}>
         {selectedNames.length > 0 ? `打包下载选中 (${selectedNames.length})` : '打包下载全部'}
       </a>
-      {regular.length > 0 ? <button className={button} onClick={toggleAll}>{allSelected ? '取消全选' : '全选'}</button> : null}
-      {selectedNames.length > 0 ? <button className={button} onClick={() => void removeFiles(selectedNames)}>移入回收站 ({selectedNames.length})</button> : null}
+      {isAdmin && regular.length > 0 ? <button className={button} onClick={toggleAll}>{allSelected ? '取消全选' : '全选'}</button> : null}
+      {isAdmin && selectedNames.length > 0 ? <button className={button} onClick={() => void removeFiles(selectedNames)}>移入回收站 ({selectedNames.length})</button> : null}
       <button className={button} onClick={load}>刷新</button>
       {progress ? <span className="text-sm text-muted">{progress}</span> : msg ? <span className="text-sm text-muted">{msg}</span> : null}
     </div>
@@ -214,11 +214,11 @@ function SharedFiles() {
         const previewUrl = `/api/tools/shared/preview?name=${encodeURIComponent(f.name)}`;
         return <li key={f.name} className="space-y-1.5 rounded border border-line bg-background px-2 py-1 text-sm">
           <div className="flex items-center gap-2">
-            <input type="checkbox" checked={!!selected[f.name]} onChange={e => setSelected(old => ({ ...old, [f.name]: e.target.checked }))} />
+            {isAdmin ? <input type="checkbox" checked={!!selected[f.name]} onChange={e => setSelected(old => ({ ...old, [f.name]: e.target.checked }))} /> : null}
             <a className="min-w-0 flex-1 truncate text-primary hover:underline" href={`/api/tools/shared/file?name=${encodeURIComponent(f.name)}`} download={f.name}>{f.name}</a>
             <span className="shrink-0 text-xs text-muted">{size(f.size_bytes)} · {f.mod_time.slice(5, 16)}</span>
             {kind ? <button className="shrink-0 text-xs text-primary hover:underline" onClick={() => void togglePreview(f.name)}>{isPreviewing ? '收起' : '预览'}</button> : null}
-            <button className="shrink-0 text-xs text-muted hover:text-danger" onClick={() => void removeFiles([f.name])}>回收</button>
+            {isAdmin ? <button className="shrink-0 text-xs text-muted hover:text-danger" onClick={() => void removeFiles([f.name])}>回收</button> : null}
           </div>
           {isPreviewing ? <div className="rounded border border-line bg-panel p-2">
             {kind === 'image' ? <img src={previewUrl} alt={f.name} className="max-h-72 max-w-full rounded object-contain" /> : null}

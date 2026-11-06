@@ -2,7 +2,7 @@ import type { Engine } from './AudioEngine';
 import { chip } from './ui';
 
 export function MusicRatingButtons({ id, engine }: { id: string; engine?: Engine }) {
-  if (!engine || !id.includes(':media_library/audio/music/')) return null;
+  if (!engine || !engine.music.can_rate || !id.includes(':media_library/audio/music/')) return null;
   const rating = engine.music.ratings[id] ?? 0;
   const rate = (value: number) => { void engine.rateMusic(id, rating === value ? 0 : value).catch(() => undefined); };
   return <span className="inline-flex shrink-0 gap-1">

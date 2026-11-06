@@ -59,12 +59,17 @@ func (r *Router) handleGameList(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
+	access, err := r.accessFor(req)
+	if err != nil {
+		http.Error(w, "permission store unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	want := req.URL.Query().Get("category")
 	user := auth.UserFromContext(req.Context())
 	seen := map[string]bool{}
 	out := []gameEntry{}
 	for _, category := range gameCategoriesFor(req) {
-		if want != "" && want != category {
+		if want != "" && want != category || !access.gameCategory(category) {
 			continue
 		}
 		for _, lib := range libs {
@@ -87,7 +92,7 @@ func (r *Router) handleGameList(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	// 星际争霸 2 不在资源库里，作为 Wine 分类的一张卡片（规格 10.1）。
-	if r.sc2Available() && auth.ClientFromContext(req.Context()) == auth.TargetGUI && (want == "" || want == "wine") {
+	if r.sc2Available() && auth.ClientFromContext(req.Context()) == auth.TargetGUI && (want == "" || want == "wine") && access.gameCategory("wine") {
 		out = append(out, gameEntry{Entry: games.Entry{ID: sc2GameID, Name: "星际争霸 II", Category: "wine", Folder: "StarCraft II"}, Kind: "sc2"})
 	}
 	// 账号收藏与游玩时长（时长按 100 个一批查询）。
@@ -220,6 +225,10 @@ func (r *Router) handleGameArt(w http.ResponseWriter, req *http.Request) {
 		http.NotFound(w, req)
 		return
 	}
+	if access, err := r.accessFor(req); err != nil || !access.gameCategory(category) {
+		http.Error(w, "forbidden: insufficient permission level", http.StatusForbidden)
+		return
+	}
 	store := r.gameArtStore(libID)
 	var art games.Art
 	if data, mime, ok := func() ([]byte, string, bool) {
@@ -257,9 +266,13 @@ func (r *Router) handleGameArt(w http.ResponseWriter, req *http.Request) {
 // handleGameIcon 返回游戏图标（omni.json icon 或常见文件名）。
 func (r *Router) handleGameIcon(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
-	_, dir, err := r.gameDir(q.Get("library_id"), q.Get("id"))
+	category, dir, err := r.gameDir(q.Get("library_id"), q.Get("id"))
 	if err != nil {
 		http.NotFound(w, req)
+		return
+	}
+	if access, err := r.accessFor(req); err != nil || !access.gameCategory(category) {
+		http.Error(w, "forbidden: insufficient permission level", http.StatusForbidden)
 		return
 	}
 	icon := q.Get("icon")
@@ -303,6 +316,10 @@ func (r *Router) handleGameLaunch(w http.ResponseWriter, req *http.Request) {
 	category, dir, err := r.gameDir(input.LibraryID, input.ID)
 	if err != nil {
 		http.Error(w, err.Error(), 404)
+		return
+	}
+	if access, err := r.accessFor(req); err != nil || !access.gameCategory(category) {
+		http.Error(w, "forbidden: insufficient permission level", http.StatusForbidden)
 		return
 	}
 	nativeOK := false

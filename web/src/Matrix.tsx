@@ -115,7 +115,7 @@ function Screen({ domain, slot, index, focused, playing, audible, slideSeconds, 
   </div>;
 }
 
-export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): void }) {
+export default function Matrix({ domain, isAdmin = false, loggedIn = false, onExit }: { domain: Domain; isAdmin?: boolean; loggedIn?: boolean; onExit(): void }) {
   const isVideo = domain === 'shortvideo';
   // 多联放映盖住整个窗口，底下的页面不跟着滚
   useEffect(() => { document.body.style.overflow = 'hidden'; return () => { document.body.style.overflow = ''; }; }, []);
@@ -142,7 +142,7 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
     api<Artist[]>('/api/media/audio/artists', { signal: controller.signal }).then(setArtists).catch(() => undefined);
     return () => controller.abort();
   }, [audio?.musicCatalogVersion]);
-  const musicCollections: Album[] = artists.length ? [
+  const musicCollections: Album[] = artists.length && loggedIn ? [
     { id: '@music/liked', title: '我的点赞' },
   ] : [];
   const mainArtists = artists.filter(a => a.main_artist);
@@ -181,15 +181,16 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
   const cfg = prefs.slots[focused];
   const focusedHandle = handles.current[focused];
 
-  const channels = [{ value: 'recommend', label: '推荐' }, { value: 'liked', label: '♥ 我的点赞' }];
-  for (const p of [...new Set(groups.map(g => g.platform))]) if (p) channels.push({ value: `tag:platform:${p}`, label: p });
-  const shownGroups = isVideo ? groups : groups.filter(g => !g.platform && g.count > 0);
+  const channels = loggedIn ? [{ value: 'recommend', label: '推荐' }, { value: 'liked', label: '♥ 我的点赞' }] : [{ value: 'recommend', label: '推荐' }];
+  const matrixGroups = isVideo ? groups.filter(g => g.platform !== 'MV') : groups;
+  for (const p of [...new Set(matrixGroups.map(g => g.platform))]) if (p) channels.push({ value: `tag:platform:${p}`, label: p });
+  const shownGroups = isVideo ? matrixGroups : matrixGroups.filter(g => !g.platform && g.count > 0);
   const groupLabel = (g: { label: string; platform?: string; count: number }) => `${g.platform ? `${g.platform} · ` : ''}${g.label}（${g.count}）`;
   for (const id of pins) { const g = shownGroups.find(x => x.id === id); if (g) channels.push({ value: `group:${g.id}`, label: `📌 ${groupLabel(g)}` }); }
   for (const g of shownGroups) if (!pins.includes(g.id)) channels.push({ value: `group:${g.id}`, label: groupLabel(g) });
 
   const trashFocused = () => {
-    if (!focusedHandle?.item) return;
+    if (!focusedHandle?.item || !isAdmin) return;
     if (trashArmed) {
       setTrashArmed(false);
       focusedHandle.trash().then(() => setToast('已移到回收站')).catch((e: Error) => setToast(/admin/i.test(e.message) ? '只有管理员能移到回收站（需本机或局域网登录）' : `移到回收站失败：${e.message}`));
@@ -212,8 +213,8 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
     else if (k === 'ArrowRight') h.step(1);
     else if (k === 'ArrowLeft') h.step(-1);
     else if ((k === 'ArrowUp' || k === 'ArrowDown') && isVideo) h.seekBy(k === 'ArrowUp' ? -5 : 5);
-    else if (k === 'z' || k === 'Z') { h.toggleLike(); if (h.item) setToast(h.item.liked ? '已取消点赞' : `♥ 已点赞（屏 ${focused + 1}）`); }
-    else if (k === 'Delete') trashFocused();
+    else if ((k === 'z' || k === 'Z') && loggedIn) { h.toggleLike(); if (h.item) setToast(h.item.liked ? '已取消点赞' : `♥ 已点赞（屏 ${focused + 1}）`); }
+    else if (k === 'Delete' && isAdmin) trashFocused();
     else if ((k === 'm' || k === 'M') && isVideo) setSlot(focused, { muted: !prefs.slots[focused].muted });
     else return;
     e.preventDefault();
@@ -247,8 +248,8 @@ export default function Matrix({ domain, onExit }: { domain: Domain; onExit(): v
       <button className={chip(false)} onClick={() => focusedHandle?.togglePause()} title="空格">⏯</button>
       <button className={chip(false)} onClick={() => focusedHandle?.step(1)} title="→">▶▶</button>
       {isVideo ? <button className={chip(cfg.muted)} onClick={() => setSlot(focused, { muted: !cfg.muted })} title="M">{cfg.muted ? '🔇' : '🔊'}</button> : null}
-      <button className={chip(!!focusedHandle?.item?.liked)} disabled={!focusedHandle?.item} onClick={() => focusedHandle?.toggleLike()} title="Z">{focusedHandle?.item?.liked ? '♥ 已赞' : '♡ 点赞'}</button>
-      <button className={chip(trashArmed)} disabled={!focusedHandle?.item} onClick={trashFocused} title="Delete 按两次">{trashArmed ? '再点一次确认' : '🗑 回收站'}</button>
+      {loggedIn ? <button className={chip(!!focusedHandle?.item?.liked)} disabled={!focusedHandle?.item} onClick={() => focusedHandle?.toggleLike()} title="Z">{focusedHandle?.item?.liked ? '♥ 已赞' : '♡ 点赞'}</button> : null}
+      {isAdmin ? <button className={chip(trashArmed)} disabled={!focusedHandle?.item} onClick={trashFocused} title="Delete 按两次">{trashArmed ? '再点一次确认' : '🗑 回收站'}</button> : null}
       {audio && (artists.length || albums.length || currentUnlisted) ? <select aria-label="伴听" className={`${select} max-w-44`} value={accompanying ? audio.albumId : ''} title="伴听：音乐或有声书（B 暂停/继续）" onChange={e => {
         const id = e.target.value;
         if (!id) { if (audio.playing) audio.toggle(); }

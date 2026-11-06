@@ -244,6 +244,9 @@ func (r *Router) runShortVideoJob(job string) {
 	case "clean-phone":
 		r.cleanSyncedShortVideo()
 		return
+	case "clean-partials":
+		r.cleanPartialsShortVideo()
+		return
 	}
 	if to, ok := strings.CutPrefix(job, "copy\x00"); ok {
 		r.copyShortVideo(to)
@@ -538,10 +541,31 @@ func (r *Router) cleanSyncedShortVideo() {
 	w.poke()
 }
 
+// cleanPartialsShortVideo 扫描并把所有在线可写库的残片文件（.part/.ytdl/.temp.mp4/.aria2/.tmp/.rotate.mp4 与 0 字节媒体）移入回收站。
+func (r *Router) cleanPartialsShortVideo() {
+	w := r.svJobs
+	_, dirs, _ := r.writableStores(false)
+	plan, err := shortvideo.PlanPartials(dirs)
+	if err != nil {
+		w.finish("clean-partials", "", err)
+		return
+	}
+	ctx := w.begin("clean-partials", plan.Files)
+	cleaned, err := shortvideo.CleanPartials(ctx, plan, platform.Trash, func(done int) {
+		w.progress(0)
+	})
+	note := fmt.Sprintf("移进回收站 %d 个残片文件（%.1f MB）", cleaned, float64(plan.Bytes)/1e6)
+	if errors.Is(err, context.Canceled) {
+		note, err = "已取消；"+note, nil
+	}
+	w.finish("clean-partials", note, err)
+	w.poke()
+}
+
 // thumbnailPass 为各库生成一批缩略图（limit 大于 0 时最多这么多个），返回处理数量；有显式任务等待或开关关闭时提前返回。
 func (r *Router) thumbnailPass(limit int) int {
 	w := r.svJobs
-	stores, dirs, _ := r.writableStores(true)
+	stores, dirs, _ := r.writableStores(false)
 	processed := 0
 	for i, s := range stores {
 		// 每次取一批要把全部作品和缩略图记录读一遍，手机上有 10 万个作品，批小了会反复全表读取
@@ -801,13 +825,22 @@ func (r *Router) handleShortVideoAdmin(w http.ResponseWriter, req *http.Request)
 		}
 		writeJSON(w, http.StatusOK, plan)
 		return
-	case "phone", "clean-phone":
+	case "phone", "clean-phone", "clean-partials":
 		select {
 		case jobs.requests <- action:
 		default:
 			http.Error(w, "too many queued jobs", http.StatusTooManyRequests)
 			return
 		}
+	case "partials-plan":
+		_, dirs, _ := r.writableStores(false)
+		plan, err := shortvideo.PlanPartials(dirs)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, plan)
+		return
 	case "cancel":
 		jobs.mu.Lock()
 		if jobs.cancelJob != nil {

@@ -559,7 +559,7 @@ func (s svFeed) snapshotKey(req *http.Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	key := ""
+	key := "v2:"
 	for _, lib := range libs {
 		dir, err := s.r.moduleDirectory(lib.RootPath, shortVideoCategory)
 		if err != nil {
@@ -610,7 +610,7 @@ func (s svFeed) items(req *http.Request) (*feed.Catalog, error) {
 				continue
 			}
 			creator := parts[0] + "/" + parts[1]
-			tags := []string{"creator:" + creator, "platform:" + parts[0], "kind:" + string(k.Kind), "perm:shortvideo/" + parts[0]}
+			tags := []string{"creator:" + creator, "platform:" + parts[0], "kind:" + string(k.Kind), "perm:" + shortVideoPermSub(parts[0])}
 			if t := durationTag(k.Duration); t != "" {
 				tags = append(tags, t)
 			}
@@ -733,7 +733,7 @@ func (g galleryFeed) snapshotKey(req *http.Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	key := ""
+	key := "v2:"
 	for _, lib := range libs {
 		for _, c := range g.r.galleryCollections(lib) {
 			key += lib.ID + "/" + c.Key + ":" + fmt.Sprint(c.NSFW) + fileStamp(filepath.Join(c.Dir, "gallery.db")) + fileStamp(filepath.Join(c.Dir, "gallery.db-wal")) + "|"
@@ -834,9 +834,11 @@ func (g galleryFeed) items(req *http.Request) (*feed.Catalog, error) {
 				if sub := photoSubcategory(p.Filename); sub != "" {
 					tags = append(tags, "sub:"+c.Name+"/"+sub)
 				}
-				if c.Key != "" {
-					tags = append(tags, "perm:gallery/"+c.Key)
+				subKey := c.Key
+				if subKey == "" {
+					subKey = "default"
 				}
+				tags = append(tags, "perm:gallery/"+subKey)
 				if c.NSFW {
 					tags = append(tags, "nsfw:"+c.Name)
 				}

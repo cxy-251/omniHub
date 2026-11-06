@@ -5,6 +5,7 @@ import { store, stored } from './ui';
 import { lazyPage, PageBoundary, PageLoading } from './PageBoundary';
 import { tabs, type Tab, WorkbenchNav, CompactNavigation } from './WorkbenchNav';
 import MangaDockHost from './MangaDockHost';
+import { PerfOverlay } from './PerfAdmin';
 
 const PasswordChange = lazyPage(() => import('./PasswordChange'));
 const ShortVideoPage = lazyPage(() => import('./ShortVideoPage'));
@@ -108,18 +109,19 @@ function Shell() {
       {!status && !error ? <p role="status">正在连接服务…</p> : null}
       {status && !visible.length ? <p className="text-muted">当前账号没有可访问的内容，请登录。</p> : null}
       <PageBoundary key={current} name={currentLabel}><Suspense fallback={<PageLoading />}>
-        {current === 'shortvideo' ? <ShortVideoPage active /> : null}
-        {current === 'gallery' ? <GalleryPage active isAdmin={status?.user.role === 'admin'} /> : null}
+        {current === 'shortvideo' ? <ShortVideoPage active isAdmin={status?.user.role === 'admin'} loggedIn={!!status?.logged_in} /> : null}
+        {current === 'gallery' ? <GalleryPage active isAdmin={status?.user.role === 'admin'} loggedIn={!!status?.logged_in} /> : null}
         {current === 'audio' ? <AudioPage /> : null}
         {current === 'text' ? <TextPage active /> : null}
         {current === 'manga' ? <MangaLibrary active /> : null}
         {current === 'games' ? <GameLibrary /> : null}
-        {current === 'tools' ? <ToolsPage sections={sections} /> : null}
+        {current === 'tools' ? <ToolsPage sections={sections} isAdmin={status?.user.role === 'admin'} /> : null}
         {current === 'admin' ? <AdminCenter /> : null}
       </Suspense></PageBoundary>
     </main>
     </div>
     <MangaDockHost />
+    <PerfOverlay />
     <Toast />
     <AudioBar onOpen={() => { choose('audio'); window.location.hash = 'audio/listen'; }} />
   </div>;

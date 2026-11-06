@@ -86,10 +86,32 @@ func subsectionOf(logical string) (section, sub string) {
 			if root.nsfwOnly && dir != "nsfw" {
 				return root.section, ""
 			}
+			if root.section == "shortvideo" {
+				return root.section, shortVideoPermSub(dir)
+			}
 			return root.section, root.prefix + "/" + dir
 		}
 	}
 	return "", ""
+}
+
+// shortVideoPermSub 将抖音、快手、小红书、TikTok 合并为同一个权限子分区 shortvideo/mainstream。
+func shortVideoPermSub(platform string) string {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "抖音", "快手", "小红书", "tiktok":
+		return "shortvideo/mainstream"
+	default:
+		return "shortvideo/" + platform
+	}
+}
+
+// gamePermSub 将游戏分为「模拟器」（retro / 3ds）与「其他」两个权限子分区。
+func gamePermSub(category string) string {
+	cat := strings.TrimSuffix(strings.TrimPrefix(category, "standalone_games/"), "_games")
+	if cat == "retro" || cat == "3ds" {
+		return "games/emulator"
+	}
+	return "games/other"
 }
 
 // accessChecker 在一次请求内缓存各子分类的判定结果。
@@ -113,6 +135,13 @@ func (r *Router) accessFor(req *http.Request) (*accessChecker, error) {
 func (c *accessChecker) requiredLevel(section, sub string) int {
 	if lvl, ok := c.stored[sub]; ok && sub != "" {
 		return lvl
+	}
+	if sub == "shortvideo/mainstream" {
+		for _, legacy := range []string{"shortvideo/抖音", "shortvideo/快手", "shortvideo/小红书", "shortvideo/TikTok"} {
+			if lvl, ok := c.stored[legacy]; ok {
+				return lvl
+			}
+		}
 	}
 	if sub != "" && (path.Base(sub) == "nsfw" || c.nsfw[sub]) {
 		return auth.LevelAdmin
@@ -143,13 +172,18 @@ func (c *accessChecker) allowsSub(section, sub string) bool {
 // shortVideo 判断能否访问短视频作品（ID 是 平台/博主/作品，按平台分级）。
 func (c *accessChecker) shortVideo(id string) bool {
 	platform, _, _ := strings.Cut(id, "/")
-	return c.allowsSub("shortvideo", "shortvideo/"+platform)
+	return c.allowsSub("shortvideo", shortVideoPermSub(platform))
 }
 
-// galleryCollection 判断能否访问相册的图库（key 为空是根目录的相册，跟随「相册」）。
+// gameCategory 判断能否访问某类游戏（retro/3ds 归入模拟器 games/emulator，其余归入 games/other）。
+func (c *accessChecker) gameCategory(category string) bool {
+	return c.allowsSub("games", gamePermSub(category))
+}
+
+// galleryCollection 判断能否访问相册的图库（key 为空是根目录的默认相册，对应子分类 gallery/default，未单独设置时沿用「相册」）。
 func (c *accessChecker) galleryCollection(key string) bool {
 	if key == "" {
-		return c.allowsSub("gallery", "")
+		return c.allowsSub("gallery", "gallery/default")
 	}
 	return c.allowsSub("gallery", "gallery/"+key)
 }
@@ -205,6 +239,9 @@ func (r *Router) handleAdminSubsections(w http.ResponseWriter, req *http.Request
 					continue
 				}
 				id := root.prefix + "/" + e.Name()
+				if root.section == "shortvideo" {
+					id = shortVideoPermSub(e.Name())
+				}
 				_, explicit := c.stored[id]
 				seen[id] = entry{ID: id, Section: root.section, RequiredLevel: c.requiredLevel(root.section, id), Explicit: explicit}
 			}
@@ -215,13 +252,18 @@ func (r *Router) handleAdminSubsections(w http.ResponseWriter, req *http.Request
 			continue
 		}
 		for _, coll := range r.galleryCollections(lib) {
-			if coll.Key == "" {
-				continue
+			subKey := coll.Key
+			if subKey == "" {
+				subKey = "default"
 			}
-			id := "gallery/" + coll.Key
+			id := "gallery/" + subKey
 			_, explicit := c.stored[id]
 			seen[id] = entry{ID: id, Section: "gallery", RequiredLevel: c.requiredLevel("gallery", id), Explicit: explicit}
 		}
+	}
+	for _, id := range []string{"games/emulator", "games/other"} {
+		_, explicit := c.stored[id]
+		seen[id] = entry{ID: id, Section: "games", RequiredLevel: c.requiredLevel("games", id), Explicit: explicit}
 	}
 	for _, t := range toolDefaults {
 		id := "tools/" + t.name

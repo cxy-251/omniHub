@@ -275,6 +275,10 @@ func (r *Router) handleToolsSharedDelete(w http.ResponseWriter, req *http.Reques
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if auth.UserFromContext(req.Context()).Role != auth.RoleAdmin {
+		http.Error(w, "forbidden: admin required", http.StatusForbidden)
+		return
+	}
 	if !r.toolsAllowed(w, req, "shared", true) {
 		return
 	}

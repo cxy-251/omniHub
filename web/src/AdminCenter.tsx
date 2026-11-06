@@ -7,8 +7,9 @@ const LibraryManager = lazyPage(() => import('./LibraryManager'));
 const ShortVideoAdmin = lazyPage(() => import('./ShortVideoAdmin'));
 const NetworkAdmin = lazyPage(() => import('./NetworkAdmin'));
 const GalleryAdmin = lazyPage(() => import('./GalleryAdmin'));
+const PerfAdmin = lazyPage(() => import('./PerfAdmin'));
 
-const tabs = [['accounts', '用户与权限'], ['libraries', '资源库'], ['shortvideo', '短视频'], ['gallery', '相册'], ['network', '网络']] as const;
+const tabs = [['accounts', '用户与权限'], ['libraries', '资源库'], ['shortvideo', '短视频'], ['gallery', '相册'], ['network', '网络'], ['perf', '性能']] as const;
 type Tab = typeof tabs[number][0];
 const accountTabs = [['session', '登录与会话'], ['permissions', '访问权限'], ['users', '用户管理'], ['devices', '信任设备']] as const;
 const subscribe = (fn: () => void) => { window.addEventListener('hashchange', fn); return () => window.removeEventListener('hashchange', fn); };
@@ -31,6 +32,7 @@ export default function AdminCenter() {
       {tab === 'shortvideo' ? <ShortVideoAdmin /> : null}
       {tab === 'gallery' ? <GalleryAdmin /> : null}
       {tab === 'network' ? <NetworkAdmin /> : null}
+      {tab === 'perf' ? <PerfAdmin /> : null}
     </Suspense></PageBoundary>
   </div>;
 }

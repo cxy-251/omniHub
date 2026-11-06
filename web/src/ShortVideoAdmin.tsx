@@ -13,7 +13,7 @@ type Plan = { files: number; bytes: number; creators: string[] | number | null; 
 // review：先读出计划给人看，确认后才执行；start 为空表示没有要做的
 type Review = { text: string; warn: string; start: string; action: string; body: unknown };
 
-const jobNames: Record<string, string> = { queued: '等待任务', 'phone-thumbs-history': '读取手机回收记录', 'phone-thumbs-plan': '核对手机旧封面', 'phone-thumbs-clean': '回收手机旧封面', 'phone-thumbs-restore': '恢复手机旧封面', scan: '扫描', import: '图集入库', clean: '清理已入库原目录', thumbnails: '生成缩略图', merge: '合并其他设备的数据', copy: '补充到其他资源库', phone: '同步到手机', 'clean-phone': '清理已同步到手机的视频' };
+const jobNames: Record<string, string> = { queued: '等待任务', 'phone-thumbs-history': '读取手机回收记录', 'phone-thumbs-plan': '核对手机旧封面', 'phone-thumbs-clean': '回收手机旧封面', 'phone-thumbs-restore': '恢复手机旧封面', scan: '扫描', import: '图集入库', clean: '清理已入库原目录', thumbnails: '生成缩略图', merge: '合并其他设备的数据', copy: '补充到其他资源库', phone: '同步到手机', 'clean-phone': '清理已同步到手机的视频', 'clean-partials': '清理残片文件' };
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
 const creatorsText = (list: string[]) => list.length ? `\n${list.slice(0, 8).join('、')}${list.length > 8 ? ' 等' : ''}` : '';
 const conflictsText = (list: string[]) => list.length ? `${list.length} 个同名文件大小不同，不会覆盖：${list.slice(0, 5).join('、')}` : '';
@@ -68,6 +68,17 @@ export default function ShortVideoAdmin() {
     return { text: p.files > 0 ? `移进回收站：${p.creators} 个博主的 ${p.files} 个文件（${gb(p.bytes)}），都已在手机上（同名同大小）。downloaded.txt 全部保留。` : '没有可以清理的。',
       warn: kept ? `保留不动：${kept}。` : '', start: p.files > 0 ? '移进回收站' : '', action: 'clean-phone', body: {} };
   });
+  const planPartials = () => plan('partials-plan', {}, '正在扫描各短视频库的残片与 0 字节文件…', p => {
+    const samples = (p.creators as string[] | null) ?? [];
+    const mb = `${(p.bytes / 1e6).toFixed(1)} MB`;
+    return {
+      text: p.files > 0 ? `扫描到 ${p.files} 个残片/空文件（共 ${mb}）：\n${samples.slice(0, 10).join('\n')}${samples.length > 10 ? '\n…' : ''}` : '没有发现 .part / .ytdl / .temp.mp4 或 0 字节残片文件。',
+      warn: p.files > 0 ? '确认后将全部移入系统回收站，正常视频、图集与 downloaded.txt 不受影响。' : '',
+      start: p.files > 0 ? '移进回收站' : '',
+      action: 'clean-partials',
+      body: {},
+    };
+  });
 
   const cleanable = processed.reduce((n, l) => n + (l.error ? 0 : l.stats.albums_cleanable), 0);
   const importable = processed.reduce((n, l) => n + (l.error ? 0 : l.stats.albums_on_disk - l.stats.albums_cleanable), 0);
@@ -82,6 +93,7 @@ export default function ShortVideoAdmin() {
         <button className={button} disabled={busy} onClick={() => void act('scan')}>重新扫描</button>
         <button className={button} disabled={busy || importable <= 0} onClick={() => void act('import')}>图集入库（{importable}）</button>
         <button className={button} disabled={busy || cleanable === 0} onClick={() => setConfirmClean(true)}>清理已入库原目录（{cleanable}）</button>
+        <button className={button} disabled={busy || !!loading} onClick={() => void planPartials()}>清理残片文件</button>
         <button className={button} disabled={busy || !mergeTargets.length} onClick={() => { setMerging(m => !m); setMergeTarget(t => t || mergeTargets[0]?.library_id || ''); }}>合并其他设备的数据…</button>
         {busy && w?.job !== 'thumbnails' ? <button className={button} onClick={() => void act('cancel')}>取消当前任务</button> : null}
       </div>

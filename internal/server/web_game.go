@@ -84,6 +84,10 @@ func (r *Router) handleWebGameOpen(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "native game unavailable to web client", 403)
 		return
 	}
+	if access, err := r.accessFor(req); err != nil || !access.gameCategory(gameCategory) {
+		http.Error(w, "forbidden: insufficient permission level", http.StatusForbidden)
+		return
+	}
 	category := "standalone_games/" + gameCategory + "_games"
 	if r.libMgr.IsCategoryDisabled(category) {
 		http.Error(w, "game category disabled", 403)
@@ -213,12 +217,13 @@ func (r *Router) handleWebGameAsset(w http.ResponseWriter, req *http.Request) {
 		}
 		level = user.Level
 	}
-	required, err := r.authDB.GetSectionRequiredLevel("games")
+	stored, err := r.authDB.ListSectionPermissions()
 	if err != nil {
 		http.Error(w, "game permission unavailable", 503)
 		return
 	}
-	if level < required || !r.sectionEnabled("games") || r.libMgr.IsCategoryDisabled(grant.category) {
+	checker := &accessChecker{r: r, level: level, stored: stored, memo: map[string]bool{}}
+	if level < stored["games"] || !checker.gameCategory(grant.category) || !r.sectionEnabled("games") || r.libMgr.IsCategoryDisabled(grant.category) {
 		http.Error(w, "game access disabled", 403)
 		return
 	}

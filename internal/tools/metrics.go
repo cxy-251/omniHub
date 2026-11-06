@@ -4,24 +4,48 @@ import (
 	"container/heap"
 	"context"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
+
+	"omnihub/internal/platform"
 )
 
 // SystemMetrics 记录系统纯只读硬件指标（第 11.4.1 节）。
 type SystemMetrics struct {
-	OS             string `json:"os"`
-	NumCPU         int    `json:"num_cpu"`
-	MemTotalBytes  int64  `json:"mem_total_bytes"`
-	MemAvailBytes  int64  `json:"mem_avail_bytes"`
-	DiskFreeBytes  uint64 `json:"disk_free_bytes"`
-	DiskTotalBytes uint64 `json:"disk_total_bytes"`
+	OS             string  `json:"os"`
+	NumCPU         int     `json:"num_cpu"`
+	CPUPercent     float64 `json:"cpu_percent"`
+	TempCelsius    float64 `json:"temp_celsius,omitempty"`
+	MemTotalBytes  int64   `json:"mem_total_bytes"`
+	MemAvailBytes  int64   `json:"mem_avail_bytes"`
+	DiskFreeBytes  uint64  `json:"disk_free_bytes"`
+	DiskTotalBytes uint64  `json:"disk_total_bytes"`
+	GoGoroutines   int     `json:"go_goroutines"`
+	GoHeapBytes    uint64  `json:"go_heap_bytes"`
+}
+
+func readHwmonTemp() float64 {
+	if t, ok := platform.DeviceTemp(); ok && t > 0 {
+		return math.Round(t*10) / 10
+	}
+	inputs, _ := filepath.Glob("/sys/class/hwmon/hwmon*/temp*_input")
+	for _, p := range inputs {
+		if raw, err := os.ReadFile(p); err == nil {
+			if v, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && v > 1000 && v < 120000 {
+				return math.Round(float64(v)/100) / 10
+			}
+		}
+	}
+	return 0
 }
 
 // LargeFile 描述资源库中占用空间较大的文件条目。
@@ -48,9 +72,17 @@ func (h *fileMinHeap) Pop() any {
 
 // GetSystemMetrics 采集当前系统硬件只读指标，严禁任何修改或电源操作。
 func GetSystemMetrics(rootPath string) *SystemMetrics {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
 	m := &SystemMetrics{
-		OS:     runtime.GOOS,
-		NumCPU: runtime.NumCPU(),
+		OS:           runtime.GOOS,
+		NumCPU:       runtime.NumCPU(),
+		TempCelsius:  readHwmonTemp(),
+		GoGoroutines: runtime.NumGoroutine(),
+		GoHeapBytes:  ms.HeapAlloc,
+	}
+	if pcts, err := cpu.Percent(0, false); err == nil && len(pcts) > 0 {
+		m.CPUPercent = math.Round(pcts[0]*10) / 10
 	}
 
 	if stats, err := mem.VirtualMemory(); err == nil {

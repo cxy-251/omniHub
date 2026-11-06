@@ -25,7 +25,7 @@ ColumnLayout {
     readonly property var levels: [[0, "游客"], [1, "用户"], [2, "VIP1"], [3, "VIP2"], [4, "VIP3"], [99, "管理员"]]
     // 工具按单个工具分级（子分区 tools/…）；任务与设置只对管理员角色开放，不在这里设等级。
     readonly property var sections: [["gallery", "相册"], ["shortvideo", "短视频"], ["text", "文本"], ["audio", "音声"], ["manga", "漫画"], ["games", "游戏"]]
-    readonly property var subsectionNames: ({"tools/clipboard": "工具 · 剪贴板", "tools/shared": "工具 · 共享文件", "tools/dev": "工具 · 开发工具", "tools/color": "工具 · 颜色与渐变", "tools/status": "工具 · 主机状态", "tools/network": "工具 · 网络"})
+    readonly property var subsectionNames: ({"gallery/default": "gallery/默认相册", "shortvideo/mainstream": "shortvideo/抖音·快手·小红书·TikTok", "games/emulator": "游戏 · 模拟器", "games/other": "游戏 · 其他", "tools/clipboard": "工具 · 剪贴板", "tools/shared": "工具 · 共享文件", "tools/dev": "工具 · 开发工具", "tools/color": "工具 · 颜色与渐变", "tools/status": "工具 · 主机状态", "tools/network": "工具 · 网络"})
     function levelIndex(v) { return Math.max(0, levels.findIndex(function (l) { return l[0] === v })) }
 
     ApiClient { id: api; onErrorChanged: if (error) { page.notice = error; page.noticeError = true } }

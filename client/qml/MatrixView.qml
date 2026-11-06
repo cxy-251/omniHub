@@ -94,8 +94,9 @@ FocusScope {
     readonly property var channels: {
         var list = [{value: "recommend", label: "推荐"}, {value: "liked", label: "♥ 我的点赞"}]
         var seen = {}
-        feed.groups.forEach(function (g) { if (g.platform && !seen[g.platform]) { seen[g.platform] = true; list.push({value: "tag:platform:" + g.platform, label: g.platform}) } })
-        var groups = isVideo ? feed.groups : feed.groups.filter(function (g) { return !g.platform && g.count > 0 })
+        var availGroups = isVideo ? feed.groups.filter(function (g) { return g.platform !== "MV" }) : feed.groups
+        availGroups.forEach(function (g) { if (g.platform && !seen[g.platform]) { seen[g.platform] = true; list.push({value: "tag:platform:" + g.platform, label: g.platform}) } })
+        var groups = isVideo ? availGroups : availGroups.filter(function (g) { return !g.platform && g.count > 0 })
         var label = function (g, pinned) { return (pinned ? "📌 " : "") + (g.platform ? g.platform + " · " : "") + g.label + "（" + g.count + "）" }
         feed.pins.forEach(function (id) { var g = groups.find(function (x) { return x.id === id }); if (g) list.push({value: "group:" + g.id, label: label(g, true)}) })
         groups.forEach(function (g) { if (feed.pins.indexOf(g.id) < 0) list.push({value: "group:" + g.id, label: label(g, false)}) })

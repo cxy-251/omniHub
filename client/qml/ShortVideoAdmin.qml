@@ -24,7 +24,7 @@ ColumnLayout {
     readonly property bool thumbsRunning: !!(worker && worker.thumbnails_enabled && processed.some(function (l) { return l.stats && l.stats.thumbnails + l.stats.thumbnail_failures < l.stats.videos + l.stats.albums }))
     readonly property int cleanable: processed.reduce(function (n, l) { return n + (l.stats ? l.stats.albums_cleanable : 0) }, 0)
     readonly property int importable: processed.reduce(function (n, l) { return n + (l.stats ? l.stats.albums_on_disk - l.stats.albums_cleanable : 0) }, 0)
-    readonly property var jobNames: ({queued: "等待任务", "phone-thumbs-history": "读取手机回收记录", "phone-thumbs-plan": "核对手机旧封面", "phone-thumbs-clean": "回收手机旧封面", "phone-thumbs-restore": "恢复手机旧封面", scan: "扫描", import: "图集入库", clean: "清理已入库原目录", thumbnails: "生成缩略图", merge: "合并其他设备的数据", copy: "补充到其他资源库", phone: "同步到手机", "clean-phone": "清理已同步到手机的视频"})
+    readonly property var jobNames: ({queued: "等待任务", "phone-thumbs-history": "读取手机回收记录", "phone-thumbs-plan": "核对手机旧封面", "phone-thumbs-clean": "回收手机旧封面", "phone-thumbs-restore": "恢复手机旧封面", scan: "扫描", import: "图集入库", clean: "清理已入库原目录", thumbnails: "生成缩略图", merge: "合并其他设备的数据", copy: "补充到其他资源库", phone: "同步到手机", "clean-phone": "清理已同步到手机的视频", "clean-partials": "清理残片文件"})
 
     readonly property var mergeTargets: libraries.filter(function (l) { return !l.error })
     FolderDialog {
@@ -76,6 +76,17 @@ ColumnLayout {
                     warn: kept ? "保留不动：" + kept + "。" : "", start: p.files > 0 ? "移进回收站" : "", action: "clean-phone", body: {}}
         })
     }
+    function planPartials() {
+        plan("partials-plan", {}, "正在扫描各短视频库的残片与 0 字节文件…", function (p) {
+            var samples = p.creators || []
+            var mb = (p.bytes / 1e6).toFixed(1) + " MB"
+            return {text: p.files > 0
+                        ? "扫描到 " + p.files + " 个残片/空文件（共 " + mb + "）：\n" + samples.slice(0, 10).join("\n") + (samples.length > 10 ? "\n…" : "")
+                        : "没有发现 .part / .ytdl / .temp.mp4 或 0 字节残片文件。",
+                    warn: p.files > 0 ? "确认后将全部移入系统回收站，正常视频、图集与 downloaded.txt 不受影响。" : "",
+                    start: p.files > 0 ? "移进回收站" : "", action: "clean-partials", body: {}}
+        })
+    }
     function gb(bytes) { return (bytes / 1e9).toFixed(1) + " GB" }
     function act(action, body) { api.send("POST", "/api/media/shortvideo/admin/" + action, body || {}, function () { page.load() }) }
     Component.onCompleted: load()
@@ -108,6 +119,7 @@ ColumnLayout {
                 Button { text: "重新扫描"; enabled: !page.busy; onClicked: page.act("scan") }
                 Button { text: "图集入库（" + page.importable + "）"; enabled: !page.busy && page.importable > 0; onClicked: page.act("import") }
                 Button { text: "清理已入库原目录（" + page.cleanable + "）"; enabled: !page.busy && page.cleanable > 0; onClicked: page.confirmClean = true }
+                Button { text: "清理残片文件"; enabled: !page.busy && page.reviewLoading === ""; onClicked: page.planPartials() }
                 Button { text: "取消当前任务"; visible: page.busy && page.worker.job !== "thumbnails"; onClicked: page.act("cancel") }
                 Button { text: "合并其他设备的数据…"; enabled: !page.busy && page.mergeTargets.length > 0; onClicked: mergeDialog.open() }
             }
