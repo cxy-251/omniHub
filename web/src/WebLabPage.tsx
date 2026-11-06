@@ -44,24 +44,13 @@ export default function WebLabPage({ sections }: { sections: string[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div role="tablist" aria-label="实验室子模块" className="subtabs">
-          {visibleTabs.map(([id, label]) => (
-            <button
-              key={id}
-              role="tab"
-              aria-selected={current === id}
-              onClick={() => {
-                setTab(id);
-                window.location.hash = `weblab/${id}`;
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <span className="text-xs text-muted">交互实验室 · 后续 CocosLab 新仓库模块可直接挂载至此导航栏</span>
-      </div>
+      <nav className="settings-tabs" aria-label="实验室子模块">
+        {visibleTabs.map(([id, label]) => (
+          <a key={id} href={`#weblab/${id}`} aria-current={current === id ? 'page' : undefined} onClick={() => setTab(id)}>
+            {label}
+          </a>
+        ))}
+      </nav>
 
       <PageBoundary key={current} name={ALL_SUBTABS.find(([id]) => id === current)?.[1]}>
         <Suspense fallback={<PageLoading />}>

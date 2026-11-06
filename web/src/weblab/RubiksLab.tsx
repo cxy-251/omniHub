@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { isSolvedState, type SolveResult } from './rubiksSolver';
 
 type Axis = 'x' | 'y' | 'z';
 type FaceKey = 'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz';
@@ -157,13 +158,9 @@ function applyMoveToCubelets(cubelets: Cubelet[], size: number, move: RubiksMove
   });
 }
 
-function isCubeSolved(cubelets: Cubelet[]): boolean {
-  if (!cubelets.length) return true;
-  const ref = cubelets[0].rot;
-  return cubelets.every(c => {
-    const dot = Math.abs(c.rot.x * ref.x + c.rot.y * ref.y + c.rot.z * ref.z + c.rot.w * ref.w);
-    return dot > 0.999;
-  });
+// 按贴纸颜色判断（解算后中心块可能自转，四元数不一定全等）。
+function isCubeSolved(cubelets: Cubelet[], size: number): boolean {
+  return isSolvedState(cubelets, size);
 }
 
 function invertMove(m: RubiksMove): RubiksMove {
@@ -172,33 +169,6 @@ function invertMove(m: RubiksMove): RubiksMove {
   return { axis: m.axis, layers: [...m.layers], dir: invDir, label: m.label.endsWith("'") ? base : `${base}'` };
 }
 
-function sameLayers(a: number[], b: number[]): boolean {
-  return a.length === b.length && a.every((v, i) => v === b[i]);
-}
-
-function simplifyMoveSequence(moves: RubiksMove[]): RubiksMove[] {
-  const stack: RubiksMove[] = [];
-  for (const m of moves) {
-    const prev = stack[stack.length - 1];
-    if (prev && prev.axis === m.axis && sameLayers(prev.layers, m.layers)) {
-      if (prev.dir !== m.dir) {
-        stack.pop();
-        continue;
-      }
-      if (stack.length >= 2) {
-        const prev2 = stack[stack.length - 2];
-        if (prev2.axis === m.axis && sameLayers(prev2.layers, m.layers) && prev2.dir === m.dir) {
-          stack.pop();
-          stack.pop();
-          stack.push(invertMove(m));
-          continue;
-        }
-      }
-    }
-    stack.push(m);
-  }
-  return stack;
-}
 
 function formatMoveLabel(axis: Axis, layer: number, size: number, dir: 1 | -1): string {
   if (layer === size - 1) {
@@ -324,7 +294,7 @@ export default function RubiksLab() {
     hit?: HitFace;
   } | null>(null);
 
-  const solved = useMemo(() => isCubeSolved(cubelets), [cubelets]);
+  const solved = useMemo(() => isCubeSolved(cubelets, size), [cubelets, size]);
 
   // 计时器更新
   useEffect(() => {
@@ -402,20 +372,37 @@ export default function RubiksLab() {
     enqueueMoves([invertMove(last)], { isUndo: true });
   }, [enqueueMoves]);
 
+  const solverWorkerRef = useRef<Worker | null>(null);
+  const [solving, setSolving] = useState(false);
+  const [solveNote, setSolveNote] = useState('');
+  useEffect(() => () => solverWorkerRef.current?.terminate(), []);
+
+  // 按当前贴纸状态求解（与打乱/操作历史无关）：3×3 用 Kociemba 两阶段，2×2 用 BFS 最优解。
   const startSmartSolve = useCallback(() => {
-    if (activeAnimRef.current || queueRef.current.length > 0 || solved) return;
-    const simplified = simplifyMoveSequence(historyRef.current);
-    const solution = simplified.slice().reverse().map(invertMove);
-    if (!solution.length) {
-      resetCube(size);
-      return;
+    if (activeAnimRef.current || queueRef.current.length > 0 || solved || solving) return;
+    if (size > 3) { setSolveNote('4 阶及以上暂未实现状态解算'); return; }
+    if (!solverWorkerRef.current) {
+      solverWorkerRef.current = new Worker(new URL('./rubiksWorker.ts', import.meta.url), { type: 'module' });
     }
-    setSolverPaused(false);
-    enqueueMoves(solution, {
-      isSolver: true,
-      modeLabel: `${size}×${size} 群论消解与反向寻路 (${solution.length} 步)`,
-    });
-  }, [solved, size, enqueueMoves, resetCube]);
+    const worker = solverWorkerRef.current;
+    const id = Date.now();
+    const t0 = performance.now();
+    setSolving(true);
+    setSolveNote('正在根据当前状态求解…（首次需构建查找表）');
+    worker.onmessage = (e: MessageEvent<{ id: number; result: SolveResult | null; error?: string }>) => {
+      if (e.data.id !== id) return;
+      setSolving(false);
+      const r = e.data.result;
+      if (!r) { setSolveNote(`求解失败${e.data.error ? `：${e.data.error}` : ''}`); return; }
+      const ms = Math.round(performance.now() - t0);
+      setSolveNote(`${r.method}：${r.moves.length} 步${r.rotation ? `（先整体转体 ${r.rotation}）` : ''}，用时 ${ms} ms · ${r.formula}`);
+      const moves = parseFormulaString(r.formula, size);
+      if (!moves.length) return;
+      setSolverPaused(false);
+      enqueueMoves(moves, { isSolver: true, modeLabel: `${r.method}（${r.moves.length} 步）` });
+    };
+    worker.postMessage({ id, cubelets: cubeletsRef.current, size });
+  }, [solved, solving, size, enqueueMoves]);
 
   const stepSolverOnce = useCallback(() => {
     if (!solverPausedRef.current || activeAnimRef.current || queueRef.current.length === 0) return;
@@ -472,13 +459,12 @@ export default function RubiksLab() {
           setCubelets(updated);
           if (!anim.isUndo && !anim.isSolver) {
             setHistory(prev => [...prev, anim.move]);
-          } else if (anim.isSolver) {
-            setHistory(prev => prev.slice(0, -1));
           }
           setMoveCount(c => c + 1);
           activeAnimRef.current = null;
           if (queueRef.current.length === 0 && anim.isSolver) {
             setSolverStatus(null);
+            setHistory([]);
           }
         } else {
           anim.angle += step;
@@ -829,10 +815,10 @@ export default function RubiksLab() {
             </button>
             <button
               className="rounded-md border border-primary px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10 disabled:opacity-40"
-              disabled={solved || !!solverStatus}
+              disabled={solved || solving || !!solverStatus}
               onClick={startSmartSolve}
             >
-              智能解算复原
+              {solving ? "求解中…" : "智能解算复原"}
             </button>
             <button
               className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-primary disabled:opacity-40"
@@ -890,6 +876,7 @@ export default function RubiksLab() {
                 </button>
               </div>
             ) : null}
+            {solveNote ? <p className="break-all pt-1 text-xs text-muted">{solveNote}</p> : null}
           </div>
         </section>
 
