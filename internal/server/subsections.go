@@ -202,7 +202,7 @@ func (r *Router) allowPath(w http.ResponseWriter, req *http.Request, logical str
 	return true
 }
 
-var weblabSubsections = []string{"rubiks", "fluid", "fourier", "slides"}
+var weblabSubsections = []string{"rubiks", "fluid", "fourier", "slides", "studio"}
 
 // handleAdminSubsections 列出各在线库中实际存在的子分类及其生效等级，供权限矩阵展示与修改
 // （修改仍走 /api/admin/permissions，section_id 填子分类 ID）。

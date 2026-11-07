@@ -5,12 +5,14 @@ const RubiksLab = lazyPage(() => import('./weblab/RubiksLab'));
 const FluidLab = lazyPage(() => import('./weblab/FluidLab'));
 const FourierPendulumLab = lazyPage(() => import('./weblab/FourierPendulumLab'));
 const SlideDeckLab = lazyPage(() => import('./weblab/SlideDeckLab'));
+const Web3DStudioLab = lazyPage(() => import('./weblab/Web3DStudioLab'));
 
 const ALL_SUBTABS = [
   ['rubiks', '3D 魔方'],
   ['fluid', 'WebGL 流体'],
   ['fourier', '傅里叶与双摆'],
   ['slides', '网页幻灯片'],
+  ['studio', 'Web3D 展廊'],
 ] as const;
 
 type SubTabId = typeof ALL_SUBTABS[number][0];
@@ -58,6 +60,7 @@ export default function WebLabPage({ sections }: { sections: string[] }) {
           {current === 'fluid' ? <FluidLab /> : null}
           {current === 'fourier' ? <FourierPendulumLab /> : null}
           {current === 'slides' ? <SlideDeckLab /> : null}
+          {current === 'studio' ? <Web3DStudioLab /> : null}
         </Suspense>
       </PageBoundary>
     </div>
