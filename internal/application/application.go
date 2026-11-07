@@ -60,6 +60,8 @@ type Application struct {
 	wanEnabled atomic.Bool
 	// Gate 是 main 创建的监听管理（只在可信网络上对外服务）；nil 表示不支持。
 	Gate *network.Gate
+	// TLS 是内置 CA 与 HTTPS 证书管理器。
+	TLS *network.TLSManager
 }
 
 // New 创建服务生命周期控制器。全局状态暂不可用时返回离线实例，不创建替代账号。
@@ -77,6 +79,11 @@ func New(cfg *config.Config, configDir, localToken string) (*Application, error)
 	a := &Application{cfg: ownedConfig, configDir: configDir, localToken: localToken}
 	a.lanEnabled.Store(!ownedConfig.Server.LANDisabled)
 	a.wanEnabled.Store(ownedConfig.Server.WANEnabled)
+	if tlsMgr, err := network.NewTLSManager(configDir, ownedConfig.Server.TLSEnabled, ownedConfig.Server.TLSHosts); err == nil {
+		a.TLS = tlsMgr
+	} else {
+		log.Printf("TLS manager init: %v", err)
+	}
 	if err := state.Recover(a.journalPath(), cfg.StateDirectory); err != nil {
 		log.Printf("Migration requires recovery: %v", err)
 	}
@@ -256,6 +263,17 @@ func (a *Application) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		if a.authorize(w, req) {
 			a.handleHome(w, req)
 		}
+		return
+	case "/api/network/tls":
+		if a.authorize(w, req) {
+			a.handleTLS(w, req)
+		}
+		return
+	case "/api/network/tls/ca.crt":
+		a.handleTLSCADownload(w, req, false)
+		return
+	case "/api/network/tls/ca.mobileconfig":
+		a.handleTLSCADownload(w, req, true)
 		return
 	}
 	if isManagementPath(req.URL.Path) {
@@ -572,8 +590,12 @@ func (a *Application) handleLAN(w http.ResponseWriter, req *http.Request) {
 		port = strconv.Itoa(a.cfg.Server.Port)
 	}
 	urls := []string{}
+	httpsOn := a.TLS != nil && a.TLS.Enabled()
 	for _, ip := range network.GetLocalIPs() {
 		if parsed := net.ParseIP(ip); parsed != nil && parsed.IsPrivate() {
+			if httpsOn {
+				urls = append(urls, "https://"+ip+":"+port)
+			}
 			urls = append(urls, "http://"+ip+":"+port)
 		}
 	}
@@ -770,3 +792,86 @@ func (a *Application) writeHome(w http.ResponseWriter, fresh bool) {
 
 // WANEnabled 返回保存的广域网开关（main 启动时据此拉起隧道）。
 func (a *Application) WANEnabled() bool { return a.wanEnabled.Load() }
+
+func (a *Application) handleTLS(w http.ResponseWriter, req *http.Request) {
+	if a.TLS == nil {
+		http.Error(w, "TLS manager unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	_, port, err := net.SplitHostPort(req.Host)
+	if err != nil || port == "" {
+		port = strconv.Itoa(a.cfg.Server.Port)
+	}
+	if req.Method == http.MethodPost {
+		var in struct {
+			Enabled    *bool    `json:"enabled"`
+			ExtraHosts []string `json:"extra_hosts"`
+			Regenerate bool     `json:"regenerate"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 4096)).Decode(&in); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		if !a.operation.TryLock() {
+			http.Error(w, "configuration change in progress; retry later", http.StatusConflict)
+			return
+		}
+		next, err := cloneConfig(a.cfg)
+		if err == nil {
+			if in.Enabled != nil {
+				next.Server.TLSEnabled = *in.Enabled
+			}
+			if in.ExtraHosts != nil {
+				next.Server.TLSHosts = in.ExtraHosts
+			}
+			if err = a.TLS.Configure(next.Server.TLSEnabled, next.Server.TLSHosts, in.Regenerate); err == nil {
+				if err = config.Save(next); err != nil && config.WriteWasCommitted(err) {
+					err = nil
+				}
+			}
+		}
+		if err == nil {
+			a.cfg = next
+		}
+		a.operation.Unlock()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else if req.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(a.TLS.Status(port))
+}
+
+func (a *Application) handleTLSCADownload(w http.ResponseWriter, req *http.Request, mobileConfig bool) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.TLS == nil {
+		http.Error(w, "TLS manager unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if mobileConfig {
+		data := a.TLS.RootCAMobileConfig()
+		if len(data) == 0 {
+			http.Error(w, "CA not initialized", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-apple-aspen-config")
+		w.Header().Set("Content-Disposition", `attachment; filename="omnihub-root-ca.mobileconfig"`)
+		_, _ = w.Write(data)
+		return
+	}
+	pemBytes := a.TLS.RootCAPEM()
+	if len(pemBytes) == 0 {
+		http.Error(w, "CA not initialized", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.Header().Set("Content-Disposition", `attachment; filename="omnihub-root-ca.crt"`)
+	_, _ = w.Write(pemBytes)
+}

@@ -6,18 +6,32 @@ import { mangaHandlesKeyboard } from './mangaState';
 import { canPlayCodec, webCodecs } from './codecs';
 import { feedPath, feedQuery, newSeed, sendEvent, trash, useGroups, useLiked } from './feed';
 import {
-  button,
   chip,
   divider,
   enterBrowserFullscreen,
   exitBrowserFullscreen,
   getViewerFullscreenPref,
-  iconButton,
   select,
   setViewerFullscreenPref,
   store,
   stored,
 } from './ui';
+import {
+  IconClose,
+  IconExitFullscreen,
+  IconFill,
+  IconFit,
+  IconFullscreen,
+  IconHeart,
+  IconMute,
+  IconNext,
+  IconPause,
+  IconPlay,
+  IconPrev,
+  IconTrash,
+  IconVolume,
+  ViewerIconButton,
+} from './ViewerControls';
 
 const Matrix = lazy(() => import('./Matrix'));
 
@@ -210,17 +224,37 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
     return () => window.removeEventListener('keydown', handler);
   }, []);
   // 点画面：左边三分之一下一个、右边三分之一上一个（图集先翻图片，翻到头再换作品），中间单击唤起/关闭控件（视频双击中间暂停/继续）。
-  // 滑动：左滑/上滑下一个、右滑上一个、下滑返回。控件展开时视频底部留出原生进度条。
-  const press = useRef<{ x: number; y: number } | undefined>(undefined);
+  // 滑动：左滑/上滑下一个、右滑上一个、下拉跟手阻尼与退场动画关闭。控件展开时视频底部留出原生进度条。
+  const press = useRef<{ x: number; y: number; pulling: boolean } | undefined>(undefined);
+  const [pullY, setPullY] = useState(0);
+  const [closing, setClosing] = useState(false);
+  useEffect(() => { setPullY(0); setClosing(false); }, [post?.id]);
   const prevPage = () => { if (page > 1) setPage(page - 1); else onPrev?.(); };
   const nextPage = () => { if (page < pages) setPage(page + 1); else onNext?.(); };
+  function move(e: ReactPointerEvent<HTMLDivElement>) {
+    const start = press.current;
+    if (!start || (!e.buttons && e.pointerType === 'mouse')) return;
+    const dx = e.clientX - start.x, dy = e.clientY - start.y;
+    if (dy > 14 && dy > Math.abs(dx) * 1.15) {
+      start.pulling = true;
+      setPullY(dy * 0.85);
+    } else if (start.pulling) {
+      setPullY(Math.max(0, dy * 0.85));
+    }
+  }
   function release(e: ReactPointerEvent<HTMLDivElement>) {
     const start = press.current;
     press.current = undefined;
-    if (!start || !post) return;
+    if (!start || !post) { setPullY(0); return; }
     const dx = e.clientX - start.x, dy = e.clientY - start.y;
-    if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.2) { if (dx < 0) onNext?.(); else onPrev?.(); return; }
-    if (dy > 90 && dy > Math.abs(dx) * 1.2) { onClose(); return; }
+    if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.2) { setPullY(0); if (dx < 0) onNext?.(); else onPrev?.(); return; }
+    if (dy > 90 && dy > Math.abs(dx) * 1.15) {
+      setClosing(true);
+      setPullY(window.innerHeight * 0.45);
+      window.setTimeout(() => onClose(), 150);
+      return;
+    }
+    setPullY(0);
     if (dy < -80 && Math.abs(dy) > Math.abs(dx) * 1.2) { onNext?.(); return; }
     if (Math.abs(dx) > 12 || Math.abs(dy) > 12) return;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -246,25 +280,32 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
     }
   }
   const fitClass = fillMode === 'cover' ? 'h-full w-full object-cover' : 'h-full w-full object-contain';
+  const pullScale = pullY > 0 ? Math.max(0.82, 1 - pullY / 950) : 1;
+  const bgAlpha = Math.max(0.32, 1 - pullY / 380);
+  const mediaMotionStyle: React.CSSProperties = {
+    transform: `translateY(${pullY}px) scale(${pullScale})`,
+    opacity: closing ? 0 : 1,
+    transition: press.current ? 'none' : 'transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 150ms ease-out',
+  };
   const gestures = <div className={`absolute inset-x-0 top-0 z-10 touch-none ${controlsVisible && post?.kind === 'video' ? 'bottom-14' : 'bottom-0'}`}
-    onPointerDown={e => { press.current = { x: e.clientX, y: e.clientY }; }} onPointerUp={release} onPointerCancel={() => { press.current = undefined; }} />;
-  return <div role="dialog" aria-label="短视频查看器" className="fixed inset-y-0 left-0 z-50 overflow-hidden bg-black text-white select-none" style={{ right: 'var(--manga-dock, 0px)' }}>
-    {controlsVisible ? <div className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/85 via-black/50 to-transparent p-2.5 pb-6">
-      <p className="min-w-0 flex-1 truncate text-sm">{post ? `${post.creator_id.split('/').slice(1).join(' / ')} · ${post.published} · ${post.title}` : '加载中…'}</p>
+    onPointerDown={e => { press.current = { x: e.clientX, y: e.clientY, pulling: false }; }} onPointerMove={move} onPointerUp={release} onPointerCancel={() => { press.current = undefined; setPullY(0); }} />;
+  return <div role="dialog" aria-label="短视频查看器" className="fixed inset-y-0 left-0 z-50 overflow-hidden text-white select-none transition-colors duration-75" style={{ right: 'var(--manga-dock, 0px)', backgroundColor: `rgba(0, 0, 0, ${bgAlpha})` }}>
+    {controlsVisible ? <div className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-3 py-2.5 pb-6">
+      <p className="min-w-0 flex-1 truncate text-sm font-medium drop-shadow">{post ? `${post.creator_id.split('/').slice(1).join(' / ')} · ${post.published} · ${post.title}` : '加载中…'}</p>
       {notice ? <span className={`text-sm ${armed ? 'font-bold text-[#ff7b72]' : 'text-[#3fb950]'}`}>{notice}</span> : null}
-      {loggedIn ? <button className={iconButton} onClick={onLike} title="点赞（Z）">{liked ? <span className="text-[#f778ba]">♥</span> : '♡'}</button> : null}
-      {isAdmin ? <button className={`${iconButton} ${armed ? 'bg-white/20' : ''}`} onClick={doTrash} title="移到系统回收站（Delete 按两次）">🗑</button> : null}
+      {loggedIn ? <ViewerIconButton label={liked ? '取消点赞 (Z)' : '点赞 (Z)'} active={liked} onClick={onLike}><IconHeart filled={liked} /></ViewerIconButton> : null}
+      {isAdmin ? <ViewerIconButton label={armed ? '确认移到系统回收站' : '移到系统回收站 (Delete×2)'} danger={armed} onClick={doTrash}><IconTrash /></ViewerIconButton> : null}
       {post?.kind === 'video' ? <>
-        <button className={iconButton} onClick={togglePlayPause} title="暂停 / 播放（空格或双击画面中间）">{paused ? '▶' : '⏸'}</button>
-        <button className={iconButton} onClick={toggleMute} title="静音切换（M）">{sound.muted ? '🔇' : '🔊'}</button>
+        <ViewerIconButton label={paused ? '继续播放 (空格 / 双击中间)' : '暂停播放 (空格 / 双击中间)'} onClick={togglePlayPause}>{paused ? <IconPlay /> : <IconPause />}</ViewerIconButton>
+        <ViewerIconButton label={sound.muted ? '取消静音 (M)' : '静音 (M)'} active={sound.muted} onClick={toggleMute}>{sound.muted ? <IconMute /> : <IconVolume />}</ViewerIconButton>
       </> : null}
-      <button className={button} onClick={() => setFillMode(m => m === 'contain' ? 'cover' : 'contain')} title="切换完整显示或裁切铺满屏幕">{fillMode === 'cover' ? '适应' : '铺满'}</button>
-      <button className={`${button} ${fsPref ? 'border-primary text-primary' : ''}`} onClick={toggleFullscreen} title="全屏模式（F，跨媒体自动保持）">{fsPref ? '退出全屏' : '全屏'}</button>
-      <button className={button} disabled={!onPrev} onClick={onPrev}>上一个</button>
-      <button className={button} disabled={!onNext} onClick={onNext}>下一个</button>
-      <button className={button} onClick={onClose}>关闭</button>
+      <ViewerIconButton label={fillMode === 'cover' ? '切换为完整适应' : '切换为裁切铺满'} active={fillMode === 'cover'} onClick={() => setFillMode(m => m === 'contain' ? 'cover' : 'contain')}>{fillMode === 'cover' ? <IconFit /> : <IconFill />}</ViewerIconButton>
+      <ViewerIconButton label={fsPref ? '退出全屏 (F)' : '全屏模式 (F，跨媒体自动保持)'} active={fsPref} onClick={toggleFullscreen}>{fsPref ? <IconExitFullscreen /> : <IconFullscreen />}</ViewerIconButton>
+      <ViewerIconButton label="上一个 (← / 右侧点击)" disabled={!onPrev} onClick={onPrev}><IconPrev /></ViewerIconButton>
+      <ViewerIconButton label="下一个 (→ / 左侧点击)" disabled={!onNext} onClick={onNext}><IconNext /></ViewerIconButton>
+      <ViewerIconButton label="关闭 (Esc / 下滑)" onClick={onClose}><IconClose /></ViewerIconButton>
     </div> : null}
-    <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
+    <div className="absolute inset-0 flex items-center justify-center overflow-hidden" style={mediaMotionStyle}>
       {!post ? <p>加载中…</p> : post.kind === 'video' && !canPlayCodec(post.codec)
         ? <p className="max-w-md text-center">这个视频是 {post.codec?.toUpperCase()} 编码，当前浏览器无法解码。请在 Deck 上的 omniHub 客户端中播放。</p>
         : post.kind === 'video'
@@ -277,10 +318,10 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
           {gestures}
           <img key={post.id + page} className={fitClass} src={`/api/media/shortvideo/album/image?${query(post, { index: String(page) })}`} alt={`${page}/${pages}`} />
           {post.music ? <audio key={post.id} ref={applySound} onVolumeChange={e => keepSound(e.currentTarget)} src={`/api/media/shortvideo/stream?${query(post, { music: '1' })}`} autoPlay loop controls className={`absolute bottom-3 left-3 z-20 h-8 ${controlsVisible ? '' : 'hidden'}`} /> : null}
-          {controlsVisible ? <div className="absolute bottom-3 right-3 z-20 flex items-center gap-2 rounded-md bg-black/65 px-2 py-1">
-            <button className={button} disabled={page <= 1} onClick={() => setPage(p => p - 1)}>上一张</button>
-            <span className="text-sm">{page} / {pages}</span>
-            <button className={button} disabled={page >= pages} onClick={() => setPage(p => p + 1)}>下一张</button>
+          {controlsVisible ? <div className="absolute bottom-3 right-3 z-20 flex items-center gap-2 rounded-full border border-white/15 bg-black/65 px-2.5 py-1 backdrop-blur-md">
+            <ViewerIconButton label="上一张图片 (↑)" disabled={page <= 1} onClick={() => setPage(p => p - 1)}><IconPrev /></ViewerIconButton>
+            <span className="px-1 text-xs font-medium">{page} / {pages}</span>
+            <ViewerIconButton label="下一张图片 (↓)" disabled={page >= pages} onClick={() => setPage(p => p + 1)}><IconNext /></ViewerIconButton>
           </div> : null}
         </>}
     </div>

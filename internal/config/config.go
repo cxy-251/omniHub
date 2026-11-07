@@ -35,6 +35,10 @@ type ServerConfig struct {
 	// 连到别的 Wi-Fi 或移动数据时自动停止对外服务。不填时安卓上开、其他系统上关（见 HomeOnlyEnabled）。
 	HomeOnly        *bool            `json:"home_only,omitempty"`
 	TrustedNetworks []TrustedNetwork `json:"trusted_networks,omitempty"`
+	// TLSEnabled 为 true 时在同端口启用内置 Root CA 签发的 HTTPS（兼容明文 HTTP）。
+	TLSEnabled bool `json:"tls_enabled,omitempty"`
+	// TLSHosts 为附加到服务器证书 SAN 的自定义公网 IP、Tailscale IP 或域名列表。
+	TLSHosts []string `json:"tls_hosts,omitempty"`
 }
 
 // TrustedNetwork 是一个可信网络：指纹由路由器的 UPnP 设备标识算出，Name 只用于显示。

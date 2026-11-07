@@ -41,6 +41,8 @@ type Gate struct {
 	probe   func() NetState // 测试时替换
 	// OnExternal 在局域网监听开启或关闭时调用（main 用来开关 mDNS 广播）。
 	OnExternal func(bool)
+	// TLS 不为 nil 时，在同端口自适应支持 TLS (HTTPS) 与明文 HTTP。
+	TLS *TLSManager
 
 	mu      sync.Mutex
 	cfg     GateConfig
@@ -226,9 +228,13 @@ func (g *Gate) serving() string {
 
 // listen 在 host:port 上监听并开始服务；结束时（主动关闭或被系统作废）标记 done。调用时持有 g.mu。
 func (g *Gate) listen(host string) (*gateListener, error) {
-	ln, err := net.Listen("tcp", net.JoinHostPort(host, fmt.Sprint(g.port)))
+	rawLn, err := net.Listen("tcp", net.JoinHostPort(host, fmt.Sprint(g.port)))
 	if err != nil {
 		return nil, fmt.Errorf("listen %s:%d: %w", host, g.port, err)
+	}
+	var ln net.Listener = rawLn
+	if g.TLS != nil {
+		ln = &dualProtocolListener{Listener: rawLn, tlsMgr: g.TLS}
 	}
 	l := &gateListener{ln: ln, srv: g.handler()}
 	go func() {

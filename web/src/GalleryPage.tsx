@@ -6,18 +6,31 @@ import ChannelBar from './ChannelBar';
 import { mangaHandlesKeyboard } from './mangaState';
 import { feedPath, feedQuery, newSeed, restore, sendEvent, trash, useGroups, useLiked } from './feed';
 import {
-  button,
   chip,
   divider,
   enterBrowserFullscreen,
   exitBrowserFullscreen,
   getViewerFullscreenPref,
-  iconButton,
   select,
   setViewerFullscreenPref,
   store,
   stored,
 } from './ui';
+import {
+  IconClose,
+  IconDownload,
+  IconExitFullscreen,
+  IconFill,
+  IconFit,
+  IconFullscreen,
+  IconHeart,
+  IconNext,
+  IconPrev,
+  IconRestore,
+  IconTrash,
+  ViewerIconButton,
+  ViewerIconLink,
+} from './ViewerControls';
 
 const Matrix = lazy(() => import('./Matrix'));
 
@@ -171,18 +184,19 @@ function Viewer({ index, total, photo, liked, restoring, isAdmin, loggedIn, onLi
     return () => window.removeEventListener('keydown', handler);
   }, []);
   const fitClass = fillMode === 'cover' ? 'h-full w-full object-cover' : 'h-full w-full object-contain';
-  return <div role="dialog" aria-label="图片查看器" className="fixed inset-y-0 left-0 z-50 overflow-hidden bg-black text-white select-none" style={{ right: 'var(--manga-dock, 0px)' }}>
-    {controlsVisible ? <div className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/85 via-black/50 to-transparent p-2.5 pb-6">
-      <p className="min-w-0 flex-1 truncate text-sm">{index + 1} / {total}{photo ? ` · ${photo.width}×${photo.height}` : ''}</p>
+  const bgAlpha = Math.max(0.32, 1 - zoom.pullY / 380);
+  return <div role="dialog" aria-label="图片查看器" className="fixed inset-y-0 left-0 z-50 overflow-hidden text-white select-none transition-colors duration-75" style={{ right: 'var(--manga-dock, 0px)', backgroundColor: `rgba(0, 0, 0, ${bgAlpha})` }}>
+    {controlsVisible ? <div className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-3 py-2.5 pb-6">
+      <p className="min-w-0 flex-1 truncate text-sm font-medium drop-shadow">{index + 1} / {total}{photo ? ` · ${photo.width}×${photo.height}` : ''}</p>
       {notice ? <span className={`text-sm ${armed ? 'font-bold text-[#ff7b72]' : 'text-[#3fb950]'}`}>{notice}</span> : null}
-      {loggedIn ? <button className={iconButton} onClick={onLike} title="点赞（Z）">{liked ? <span className="text-[#f778ba]">♥</span> : '♡'}</button> : null}
-      {isAdmin ? <button className={`${iconButton} ${armed ? 'bg-white/20' : ''}`} onClick={doTrash} title={restoring ? '从回收站恢复（Delete 按两次）' : '移到回收站（Delete 按两次；只在 omniHub 里隐藏）'}>{restoring ? '↩' : '🗑'}</button> : null}
-      {photo ? <a className={iconButton} href={`/api/media/gallery/original?${query(photo)}&download=1`} download={photo.filename} title="下载原图">⤓</a> : null}
-      <button className={button} onClick={() => setFillMode(m => m === 'contain' ? 'cover' : 'contain')} title="切换完整显示或裁切铺满屏幕">{fillMode === 'cover' ? '适应' : '铺满'}</button>
-      <button className={`${button} ${fsPref ? 'border-primary text-primary' : ''}`} onClick={toggleFullscreen} title="全屏模式（F，跨媒体自动保持）">{fsPref ? '退出全屏' : '全屏'}</button>
-      <button className={button} disabled={index <= 0} onClick={goPrev}>上一张</button>
-      <button className={button} disabled={index >= total - 1} onClick={goNext}>下一张</button>
-      <button className={button} onClick={onClose}>关闭</button>
+      {loggedIn ? <ViewerIconButton label={liked ? '取消点赞 (Z)' : '点赞 (Z)'} active={liked} onClick={onLike}><IconHeart filled={liked} /></ViewerIconButton> : null}
+      {isAdmin ? <ViewerIconButton label={restoring ? (armed ? '确认从回收站恢复' : '从回收站恢复 (Delete×2)') : (armed ? '确认移到回收站' : '移到回收站 (Delete×2)')} danger={armed} onClick={doTrash}>{restoring ? <IconRestore /> : <IconTrash />}</ViewerIconButton> : null}
+      {photo ? <ViewerIconLink label="下载原图" href={`/api/media/gallery/original?${query(photo)}&download=1`} download={photo.filename}><IconDownload /></ViewerIconLink> : null}
+      <ViewerIconButton label={fillMode === 'cover' ? '切换为完整适应' : '切换为裁切铺满'} active={fillMode === 'cover'} onClick={() => setFillMode(m => m === 'contain' ? 'cover' : 'contain')}>{fillMode === 'cover' ? <IconFit /> : <IconFill />}</ViewerIconButton>
+      <ViewerIconButton label={fsPref ? '退出全屏 (F)' : '全屏模式 (F，跨媒体自动保持)'} active={fsPref} onClick={toggleFullscreen}>{fsPref ? <IconExitFullscreen /> : <IconFullscreen />}</ViewerIconButton>
+      <ViewerIconButton label="上一张 (← / 右侧点击)" disabled={index <= 0} onClick={goPrev}><IconPrev /></ViewerIconButton>
+      <ViewerIconButton label="下一张 (→ / 左侧点击)" disabled={index >= total - 1} onClick={goNext}><IconNext /></ViewerIconButton>
+      <ViewerIconButton label="关闭 (Esc / 下滑)" onClick={onClose}><IconClose /></ViewerIconButton>
     </div> : null}
     <div className="absolute inset-0 flex touch-none items-center justify-center overflow-hidden" {...zoom.handlers}
       onClick={e => {
@@ -207,17 +221,18 @@ function Viewer({ index, total, photo, liked, restoring, isAdmin, loggedIn, onLi
 }
 
 // useZoom：大图缩放与平移。滚轮或双指捏合 1～5 倍，双击在 1 倍与 2.5 倍间切换，放大后拖动平移；
-// 未放大时支持左右滑动切换图片、下滑关闭；放大状态或刚拖动过时，点击不触发翻页。key 变化（换图）时复位。
+// 未放大时支持左右滑动切换图片、下拉跟手阻尼与退场动画关闭；放大状态或刚拖动过时，点击不触发翻页。
 function useZoom(
   key: string | undefined,
   swipe?: { onSwipeLeft?: () => void; onSwipeRight?: () => void; onSwipeDown?: () => void },
 ) {
   const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
+  const [pullY, setPullY] = useState(0);
+  const [closing, setClosing] = useState(false);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
-  const gesture = useRef({ moved: false, pinch: 0, startX: 0, startY: 0 });
-  useEffect(() => setView({ scale: 1, x: 0, y: 0 }), [key]);
+  const gesture = useRef({ moved: false, pinch: 0, startX: 0, startY: 0, pulling: false });
+  useEffect(() => { setView({ scale: 1, x: 0, y: 0 }); setPullY(0); setClosing(false); }, [key]);
   const clamp = (scale: number) => Math.min(5, Math.max(1, scale));
-  // 以 (cx, cy)（相对容器中心）为不动点缩放；to 由当前倍数算出新倍数（连续事件不会读到旧状态）。
   const zoomAt = (to: (scale: number) => number, cx: number, cy: number) => setView(v => {
     const next = clamp(to(v.scale));
     if (next === 1) return { scale: 1, x: 0, y: 0 };
@@ -233,8 +248,12 @@ function useZoom(
     onDoubleClick: (e: React.MouseEvent) => { const [cx, cy] = center(e); zoomAt(s => s > 1 ? 1 : 2.5, cx, cy); },
     onPointerDown: (e: React.PointerEvent) => {
       pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pointers.current.size === 1) gesture.current = { moved: false, pinch: 0, startX: e.clientX, startY: e.clientY };
-      if (pointers.current.size === 2) { const [a, b] = [...pointers.current.values()]; gesture.current.pinch = Math.hypot(a.x - b.x, a.y - b.y); }
+      if (pointers.current.size === 1) gesture.current = { moved: false, pinch: 0, startX: e.clientX, startY: e.clientY, pulling: false };
+      if (pointers.current.size === 2) {
+        setPullY(0);
+        const [a, b] = [...pointers.current.values()];
+        gesture.current.pinch = Math.hypot(a.x - b.x, a.y - b.y);
+      }
     },
     onPointerMove: (e: React.PointerEvent) => {
       const last = pointers.current.get(e.pointerId);
@@ -253,33 +272,57 @@ function useZoom(
       } else if (view.scale > 1 && (e.buttons || e.pointerType !== 'mouse')) {
         if (Math.abs(dx) + Math.abs(dy) > 0) gesture.current.moved = true;
         setView(v => ({ ...v, x: v.x + dx, y: v.y + dy }));
+      } else if (view.scale === 1 && (e.buttons || e.pointerType !== 'mouse')) {
+        const totalDx = e.clientX - gesture.current.startX;
+        const totalDy = e.clientY - gesture.current.startY;
+        if (totalDy > 14 && totalDy > Math.abs(totalDx) * 1.15) {
+          gesture.current.pulling = true;
+          gesture.current.moved = true;
+          setPullY(totalDy * 0.85);
+        } else if (gesture.current.pulling) {
+          setPullY(Math.max(0, totalDy * 0.85));
+        }
       }
     },
     onPointerUp: (e: React.PointerEvent) => {
       const wasSingle = pointers.current.size === 1;
       pointers.current.delete(e.pointerId);
-      if (wasSingle && view.scale === 1 && !gesture.current.moved) {
+      if (wasSingle && view.scale === 1) {
         const totalDx = e.clientX - gesture.current.startX;
         const totalDy = e.clientY - gesture.current.startY;
         if (Math.abs(totalDx) > 55 && Math.abs(totalDx) > Math.abs(totalDy) * 1.2) {
           gesture.current.moved = true;
+          setPullY(0);
           if (totalDx < 0) swipe?.onSwipeLeft?.();
           else swipe?.onSwipeRight?.();
-        } else if (totalDy > 90 && totalDy > Math.abs(totalDx) * 1.2) {
+          return;
+        }
+        if (totalDy > 90 && totalDy > Math.abs(totalDx) * 1.15) {
           gesture.current.moved = true;
-          swipe?.onSwipeDown?.();
+          setClosing(true);
+          setPullY(window.innerHeight * 0.45);
+          window.setTimeout(() => swipe?.onSwipeDown?.(), 150);
+          return;
         }
       }
+      setPullY(0);
     },
-    onPointerCancel: (e: React.PointerEvent) => { pointers.current.delete(e.pointerId); },
+    onPointerCancel: (e: React.PointerEvent) => { pointers.current.delete(e.pointerId); setPullY(0); },
   };
+  const pullScale = pullY > 0 ? Math.max(0.82, 1 - pullY / 950) : view.scale;
+  const ty = view.y + pullY;
   return {
     handlers,
+    pullY,
     zoomed: view.scale > 1,
     reset: () => setView({ scale: 1, x: 0, y: 0 }),
     step: (factor: number) => zoomAt(s => s * factor, 0, 0),
-    // 放大状态或刚拖动/滑动过时，点击不翻页。
     consumeClick: () => { const used = view.scale > 1 || gesture.current.moved; gesture.current.moved = false; return used; },
-    style: { transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, transformOrigin: 'center', transition: pointers.current.size ? 'none' : 'transform 80ms ease-out' } as React.CSSProperties,
+    style: {
+      transform: `translate(${view.x}px, ${ty}px) scale(${pullScale})`,
+      opacity: closing ? 0 : 1,
+      transformOrigin: 'center',
+      transition: pointers.current.size ? 'none' : 'transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 150ms ease-out',
+    } as React.CSSProperties,
   };
 }

@@ -175,6 +175,7 @@ func run(options launchOptions) (result error) {
 	defer signal.Stop(stopChan)
 
 	gate := network.NewGate(app.GateConfig(), port, newServer)
+	gate.TLS = app.TLS
 	gate.OnExternal = func(on bool) {
 		serving.Store(on)
 		setMDNS(on && app.LANEnabled())

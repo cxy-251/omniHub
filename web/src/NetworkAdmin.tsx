@@ -13,11 +13,20 @@ const input = 'rounded-md border border-line bg-background px-3 py-2 text-sm';
 
 type Wan = { enabled: boolean; running: boolean; connections: number; domain: string; binary: string; config: string; error?: string };
 type Check = { domain: string; ok: boolean; other: boolean; error?: string };
+type TlsInfo = {
+  enabled: boolean;
+  ca_exists: boolean;
+  ca_fingerprint?: string;
+  cert_expires_at?: string;
+  sans: string[];
+  extra_hosts: string[];
+  https_urls: string[];
+};
 const post = (path: string, body: unknown) => api<unknown>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-// NetworkAdmin：局域网、广域网（cloudflared 隧道与域名）、只在可信网络上对外服务。
+// NetworkAdmin：局域网、HTTPS 安全证书、广域网（cloudflared 隧道与域名）、只在可信网络上对外服务。
 export default function NetworkAdmin() {
-  return <div className="space-y-5"><LanSection /><WanSection /><HomeSection /></div>;
+  return <div className="space-y-5"><LanSection /><HttpsSection /><WanSection /><HomeSection /></div>;
 }
 
 // LanSection：局域网开关与网址。关闭只能在这台设备自己的浏览器里做（服务端会拒绝局域网来的关闭请求）。
@@ -43,6 +52,75 @@ function LanSection() {
       {lan.enabled ? <ul className="space-y-1">{lan.urls.map(u => <li key={u} className="flex items-center gap-2"><span className="break-all font-mono text-sm">{u}</span>
         <button className={button} onClick={() => void navigator.clipboard?.writeText(u)}>复制</button></li>)}</ul> : null}
     </> : null}
+  </section>;
+}
+
+// HttpsSection：内置本地 Root CA 与多 IP/域名自动签发 HTTPS 证书（同端口自适应 HTTP/HTTPS）。
+function HttpsSection() {
+  const [tls, setTls] = useState<TlsInfo>();
+  const [hostsInput, setHostsInput] = useState('');
+  const [error, setError] = useState(''), [notice, setNotice] = useState(''), [pending, setPending] = useState(false);
+  useEffect(() => {
+    const c = new AbortController();
+    api<TlsInfo>('/api/network/tls', { signal: c.signal }).then(info => {
+      setTls(info);
+      setHostsInput((info.extra_hosts ?? []).join(', '));
+    }).catch((e: Error) => { if (!c.signal.aborted) setError(e.message); });
+    return () => c.abort();
+  }, []);
+  async function update(body: Record<string, unknown>, msg?: string) {
+    setPending(true); setError(''); setNotice('');
+    try {
+      const next = await post('/api/network/tls', body) as TlsInfo;
+      setTls(next);
+      setHostsInput((next.extra_hosts ?? []).join(', '));
+      if (msg) setNotice(msg);
+    } catch (e) { setError((e as Error).message); }
+    finally { setPending(false); }
+  }
+  return <section className="space-y-3 rounded-lg border border-line bg-panel p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h2 className="text-lg">HTTPS 与安全证书（消除 Not Secure）</h2>
+      {tls?.ca_fingerprint ? <span className="font-mono text-xs text-muted">CA 指纹: {tls.ca_fingerprint} · 有效期至 {tls.cert_expires_at}</span> : null}
+    </div>
+    <details className="settings-help"><summary>为什么显示 Not Secure 以及如何解决</summary><p>直接通过公网 IP、局域网 IP 或自建端口访问 HTTP 时，浏览器会标记「不安全（Not Secure）」。开启下方开关后，omniHub 会在原端口同时支持 HTTP 与 HTTPS，并由本机内置根证书（Root CA）自动签发包含本机所有 IP 与自定义域名/公网 IP 的服务器证书。只需在手机或电脑上下载并信任一次根证书，之后访问 https:// 链接即显示安全锁。</p></details>
+    {error ? <p role="alert" className="whitespace-pre-wrap text-danger">{error}</p> : null}
+    {notice ? <p role="status" className="text-sm text-[#3fb950]">{notice}</p> : null}
+    {tls ? <>
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={tls.enabled} disabled={pending} onChange={e => void update({ enabled: e.target.checked }, e.target.checked ? '已开启同端口 HTTPS 支持' : '已关闭 HTTPS')} />
+        启用内置 HTTPS 安全连接（与 HTTP 共用同一端口，不影响本机客户端）
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        <a className={primaryButton} href="/api/network/tls/ca.crt" download="omnihub-root-ca.crt">下载根证书 (.crt · 安卓/Windows/电脑)</a>
+        <a className={button} href="/api/network/tls/ca.mobileconfig" download="omnihub-root-ca.mobileconfig">下载苹果描述文件 (.mobileconfig · iPhone/iPad/Mac)</a>
+        <button type="button" className={button} disabled={pending} onClick={() => void update({ regenerate: true }, '已重新签发服务器证书')}>重新签发服务器证书</button>
+      </div>
+      <form className="flex flex-wrap items-end gap-2" onSubmit={e => {
+        e.preventDefault();
+        const list = hostsInput.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+        void update({ extra_hosts: list, regenerate: true }, '已更新证书附加 IP/域名并重签证书');
+      }}>
+        <label className="flex min-w-0 flex-1 basis-full flex-col gap-1 text-sm sm:basis-auto">
+          附加公网 IP / DDNS 域名 / Tailscale 地址（多个用逗号分隔）
+          <input className={input} value={hostsInput} onChange={e => setHostsInput(e.target.value)} placeholder="例如 114.xx.xx.xx, home.example.com, 100.64.0.2" />
+        </label>
+        <button className={button} disabled={pending}>保存并重签证书</button>
+      </form>
+      {tls.enabled && tls.https_urls?.length ? <div className="space-y-1">
+        <p className="text-xs text-muted">HTTPS 访问地址：</p>
+        <ul className="space-y-1">{tls.https_urls.map(u => <li key={u} className="flex items-center gap-2"><span className="break-all font-mono text-sm text-[#3fb950]">{u}</span>
+          <button className={button} onClick={() => void navigator.clipboard?.writeText(u)}>复制</button></li>)}</ul>
+      </div> : null}
+      <details className="settings-help"><summary>各设备信任根证书步骤（只需操作一次）</summary>
+        <ul className="list-disc space-y-1 pl-5 text-xs text-muted">
+          <li><strong>iPhone / iPad</strong>：点击「下载苹果描述文件」→ 打开系统「设置」顶部点击「已下载描述文件」安装 → 再进入「设置 → 通用 → 关于本机 → 证书信任设置」，打开「omniHub Local Root CA」开关。</li>
+          <li><strong>Android</strong>：点击「下载根证书 (.crt)」→ 系统「设置 → 安全与隐私 → 更多安全设置 → 加密与凭据 → 安装证书 → CA 证书」选择下载的 .crt 文件。</li>
+          <li><strong>Windows</strong>：双击下载的 .crt →「安装证书」→ 选择「本地计算机」→ 放入「受信任的根证书颁发机构」。</li>
+          <li><strong>macOS / Linux</strong>：macOS 双击放入「系统」钥匙串并设为「始终信任」；Linux 将 .crt 复制到 /usr/local/share/ca-certificates/ 并执行 update-ca-certificates。</li>
+        </ul>
+      </details>
+    </> : <p className="text-sm text-muted">正在读取证书状态…</p>}
   </section>;
 }
 

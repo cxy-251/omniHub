@@ -1,8 +1,8 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 
 export const tabs = [
-  ['shortvideo', '短视频'], ['gallery', '相册'], ['audio', '音声'], ['text', '文本'],
-  ['manga', '漫画'], ['games', '游戏'], ['weblab', '实验室'], ['tools', '工具'], ['admin', '设置'],
+  ['shortvideo', '视频'], ['gallery', '相册'], ['audio', '音声'], ['text', '文本'],
+  ['manga', '漫画'], ['games', '游戏'], ['weblab', '展厅'], ['tools', '工具'], ['admin', '设置'],
 ] as const;
 export type Tab = typeof tabs[number][0];
 type NavProps = { visible: readonly (typeof tabs[number])[]; current?: Tab; account?: ReactNode; onChoose(id: Tab): void };
