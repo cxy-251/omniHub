@@ -35,8 +35,9 @@ var toolDefaults = []struct {
 }{
 	{"clipboard", auth.LevelVIP0},
 	{"shared", auth.LevelVIP0},
-	{"dev", auth.LevelVIP0},
-	{"color", auth.LevelVIP0},
+	{"pdf", auth.LevelGuest},
+	{"dev", auth.LevelGuest},
+	{"color", auth.LevelGuest},
 	{"status", auth.LevelAdmin},
 	{"network", auth.LevelAdmin},
 }

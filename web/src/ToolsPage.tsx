@@ -5,6 +5,7 @@ import { button, chip, primaryButton, select, store, stored } from './ui';
 
 const DevTools = lazyPage(() => import('./DevTools'));
 const ColorTools = lazyPage(() => import('./ColorTools'));
+const PdfTools = lazyPage(() => import('./PdfTools'));
 
 // 局域网小工具：剪贴板、共享文件（media_library/shared）、开发工具、颜色与渐变、硬件看板、测速、唤醒与局域网扫描。
 // 所有内容都以文本节点渲染（旧版用 innerHTML 拼接剪贴板和文件名，别的设备能注入脚本）。
@@ -32,6 +33,7 @@ function usePoll(fn: () => void, ms: number) {
 const tools = [
   ['clipboard', '📋 剪贴板'],
   ['shared', '📁 共享文件'],
+  ['pdf', '📄 PDF 工作台'],
   ['dev', '🛠️ 开发工具'],
   ['color', '🎨 颜色与渐变'],
   ['status', '📊 主机状态'],
@@ -47,9 +49,10 @@ export default function ToolsPage({ sections, isAdmin = false }: { sections: str
     <div className="flex flex-wrap gap-1.5">
       {available.map(([id, label]) => <button key={id} className={chip(current === id)} onClick={() => setTab(id)}>{label}</button>)}
     </div>
-    <div className="max-w-4xl">
+    <div className={current === 'pdf' ? 'max-w-6xl' : 'max-w-4xl'}>
       {current === 'clipboard' ? <Clipboard /> : null}
       {current === 'shared' ? <SharedFiles isAdmin={isAdmin} /> : null}
+      {current === 'pdf' ? <PageBoundary name="PDF 工作台"><Suspense fallback={<PageLoading />}><PdfTools /></Suspense></PageBoundary> : null}
       {current === 'dev' ? <PageBoundary name="开发工具"><Suspense fallback={<PageLoading />}><DevTools /></Suspense></PageBoundary> : null}
       {current === 'color' ? <PageBoundary name="颜色与渐变"><Suspense fallback={<PageLoading />}><ColorTools /></Suspense></PageBoundary> : null}
       {current === 'status' ? <MetricsCard /> : null}
@@ -99,7 +102,7 @@ function Clipboard() {
 
 const chunkSize = 4 << 20;
 
-function previewKind(name: string): 'text' | 'image' | 'audio' | 'video' | null {
+function previewKind(name: string): 'text' | 'image' | 'audio' | 'video' | 'pdf' | null {
   const idx = name.lastIndexOf('.');
   if (idx < 0) return null;
   const ext = name.slice(idx).toLowerCase();
@@ -107,6 +110,7 @@ function previewKind(name: string): 'text' | 'image' | 'audio' | 'video' | null 
   if (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif'].includes(ext)) return 'image';
   if (['.mp3', '.wav', '.ogg', '.flac', '.m4a'].includes(ext)) return 'audio';
   if (['.mp4', '.webm'].includes(ext)) return 'video';
+  if (ext === '.pdf') return 'pdf';
   return null;
 }
 
@@ -224,6 +228,7 @@ function SharedFiles({ isAdmin = false }: { isAdmin?: boolean }) {
             {kind === 'image' ? <img src={previewUrl} alt={f.name} className="max-h-72 max-w-full rounded object-contain" /> : null}
             {kind === 'audio' ? <audio src={previewUrl} controls className="w-full" /> : null}
             {kind === 'video' ? <video src={previewUrl} controls className="max-h-72 max-w-full rounded" /> : null}
+            {kind === 'pdf' ? <iframe src={previewUrl} title={f.name} className="h-96 w-full rounded border border-line" /> : null}
             {kind === 'text' ? <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{previewText || '加载中…'}</pre> : null}
           </div> : null}
         </li>;

@@ -44,6 +44,7 @@ type Router struct {
 	davAuth        davAuthCache
 	davLocks       webdav.LockSystem
 	clipboard      *tools.ClipboardManager
+	pdfWork        *tools.PDFWorkspace
 	taskMgr        *tasks.Manager
 	taskRegistry   *tasks.Registry
 	gameRuns       *games.Manager
@@ -125,6 +126,7 @@ func NewRouter(libMgr *library.Manager, authDB *auth.DB, stateDir, localToken st
 		authMid:        auth.NewMiddleware(authDB, localToken),
 		davLocks:       webdav.NewMemLS(),
 		clipboard:      tools.NewClipboardManager(50),
+		pdfWork:        tools.NewPDFWorkspace(filepath.Join(userCacheDir(), "pdf-workspace")),
 		taskMgr:        tasks.NewManager(),
 		taskRegistry:   registry,
 		gameRuns:       games.NewManagerWithRecorder(gamePlayRecorder(readingDB)),
@@ -384,6 +386,22 @@ func (r *Router) registerRoutes() {
 	r.mux.HandleFunc("/api/tools/shared/file", r.handleToolsSharedFile)
 	r.mux.HandleFunc("/api/tools/shared/preview", r.handleToolsSharedPreview)
 	r.mux.HandleFunc("/api/tools/shared/delete", r.handleToolsSharedDelete)
+	r.mux.HandleFunc("/api/tools/pdf/docs", r.handleToolsPDFDocs)
+	r.mux.HandleFunc("/api/tools/pdf/upload", r.handleToolsPDFUpload)
+	r.mux.HandleFunc("/api/tools/pdf/import-shared", r.handleToolsPDFImportShared)
+	r.mux.HandleFunc("/api/tools/pdf/sample", r.handleToolsPDFSample)
+	r.mux.HandleFunc("/api/tools/pdf/delete", r.handleToolsPDFDelete)
+	r.mux.HandleFunc("/api/tools/pdf/render", r.handleToolsPDFRender)
+	r.mux.HandleFunc("/api/tools/pdf/download", r.handleToolsPDFDownload)
+	r.mux.HandleFunc("/api/tools/pdf/save-shared", r.handleToolsPDFSaveShared)
+	r.mux.HandleFunc("/api/tools/pdf/arrange", r.handleToolsPDFArrange)
+	r.mux.HandleFunc("/api/tools/pdf/split", r.handleToolsPDFSplit)
+	r.mux.HandleFunc("/api/tools/pdf/watermark", r.handleToolsPDFWatermark)
+	r.mux.HandleFunc("/api/tools/pdf/optimize", r.handleToolsPDFOptimize)
+	r.mux.HandleFunc("/api/tools/pdf/security", r.handleToolsPDFSecurity)
+	r.mux.HandleFunc("/api/tools/pdf/text", r.handleToolsPDFText)
+	r.mux.HandleFunc("/api/tools/pdf/export-images", r.handleToolsPDFExportImages)
+	r.mux.HandleFunc("/api/tools/pdf/images-to-pdf", r.handleToolsPDFImagesToPDF)
 	r.mux.HandleFunc("/api/tools/speed", r.handleToolsSpeed)
 	r.mux.HandleFunc("/api/tools/webshell", r.handleToolsWebShell)
 	r.mux.HandleFunc(davPrefix, r.handleWebDAV)

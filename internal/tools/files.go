@@ -194,6 +194,8 @@ func PreviewContentType(name string) (string, bool) {
 		return "video/mp4", true
 	case ".webm":
 		return "video/webm", true
+	case ".pdf":
+		return "application/pdf", true
 	default:
 		return "", false
 	}
