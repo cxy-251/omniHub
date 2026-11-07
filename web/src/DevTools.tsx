@@ -8,6 +8,7 @@ const subTabs = [
   ['codec', '编解码与哈希'],
   ['timestamp', '时间戳'],
   ['regex', '正则表达式'],
+  ['jsrunner', 'JS 沙箱运行器'],
 ] as const;
 type SubTab = typeof subTabs[number][0];
 
@@ -41,6 +42,7 @@ export default function DevTools() {
     {sub === 'codec' ? <CodecHashTool /> : null}
     {sub === 'timestamp' ? <TimestampTool /> : null}
     {sub === 'regex' ? <RegexTool /> : null}
+    {sub === 'jsrunner' ? <JsRunnerTool /> : null}
   </div>;
 }
 
@@ -538,6 +540,213 @@ function RegexTool() {
           {m.length > 1 ? <span className="ml-2 text-muted">分组：[{m.slice(1).map(g => g ?? 'null').join(', ')}]</span> : null}
         </li>)}
       </ul>
+    </div>
+  </div>;
+}
+
+// ---------------- Isolated JS Sandbox Runner ----------------
+interface JsLogEntry {
+  level: 'log' | 'info' | 'warn' | 'error' | 'return';
+  text: string;
+}
+
+const JS_PRESETS: [string, string][] = [
+  [
+    '数组分组与统计',
+    `const items = [
+  { cat: 'audio', size: 42 },
+  { cat: 'video', size: 180 },
+  { cat: 'audio', size: 68 },
+  { cat: 'manga', size: 95 },
+];
+const grouped = items.reduce((acc, cur) => {
+  acc[cur.cat] = (acc[cur.cat] || 0) + cur.size;
+  return acc;
+}, {});
+console.log('分类汇总 (MB):', grouped);
+return Object.entries(grouped);`,
+  ],
+  [
+    '斐波那契与耗时基准',
+    `const n = 35;
+const dp = [0, 1];
+for (let i = 2; i <= n; i++) dp[i] = dp[i - 1] + dp[i - 2];
+console.log(\`Fib(\${n}) =\`, dp[n]);
+return dp.slice(-6);`,
+  ],
+  [
+    'URL 参数解析',
+    `const url = new URL('https://omnihub.local/app?tab=weblab&dim=6&mode=reduction#rubiks');
+console.log('Host:', url.host, 'Hash:', url.hash);
+return Object.fromEntries(url.searchParams.entries());`,
+  ],
+];
+
+function formatJsVal(v: unknown): string {
+  if (typeof v === 'string') return v;
+  if (v === undefined) return 'undefined';
+  if (v === null) return 'null';
+  if (v instanceof Error) return `${v.name}: ${v.message}`;
+  try {
+    return JSON.stringify(v, null, 2);
+  } catch {
+    return String(v);
+  }
+}
+
+function JsRunnerTool() {
+  const [code, setCode] = useState(JS_PRESETS[0][1]);
+  const [logs, setLogs] = useState<JsLogEntry[]>([]);
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  const [running, setRunning] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (iframeRef.current) {
+        iframeRef.current.remove();
+        iframeRef.current = null;
+      }
+    };
+  }, []);
+
+  const runCode = async () => {
+    setRunning(true);
+    setLogs([]);
+    const collected: JsLogEntry[] = [];
+    const t0 = performance.now();
+
+    // Create a fresh sandboxed iframe (allow-scripts only, no same-origin access)
+    if (iframeRef.current) {
+      iframeRef.current.remove();
+      iframeRef.current = null;
+    }
+
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('sandbox', 'allow-scripts');
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+    iframeRef.current = iframe;
+
+    const runId = Math.random().toString(36).slice(2);
+
+    const done = await new Promise<{ logs: JsLogEntry[]; ms: number }>(resolve => {
+      const timer = window.setTimeout(() => {
+        window.removeEventListener('message', onMsg);
+        iframe.remove();
+        iframeRef.current = null;
+        collected.push({ level: 'error', text: '执行超时（超过 3000 ms 已强制中止）' });
+        resolve({ logs: collected, ms: Math.round(performance.now() - t0) });
+      }, 3000);
+
+      function onMsg(e: MessageEvent) {
+        if (!e.data || e.data.runId !== runId) return;
+        if (e.data.type === 'log') {
+          collected.push({ level: e.data.level, text: e.data.text });
+        } else if (e.data.type === 'done') {
+          window.clearTimeout(timer);
+          window.removeEventListener('message', onMsg);
+          iframe.remove();
+          iframeRef.current = null;
+          resolve({ logs: collected, ms: e.data.ms });
+        }
+      }
+
+      window.addEventListener('message', onMsg);
+
+      const html = `<!doctype html><html><body><script>
+        const runId = ${JSON.stringify(runId)};
+        const fmt = (v) => {
+          if (typeof v === 'string') return v;
+          if (v === undefined) return 'undefined';
+          if (v === null) return 'null';
+          if (v instanceof Error) return v.name + ': ' + v.message;
+          try { return JSON.stringify(v); } catch { return String(v); }
+        };
+        const send = (level, args) => {
+          parent.postMessage({ runId, type: 'log', level, text: args.map(fmt).join(' ') }, '*');
+        };
+        console.log = (...a) => send('log', a);
+        console.info = (...a) => send('info', a);
+        console.warn = (...a) => send('warn', a);
+        console.error = (...a) => send('error', a);
+        (async () => {
+          const t0 = performance.now();
+          try {
+            const fn = new AsyncFunction(${JSON.stringify(code)});
+            const ret = await fn();
+            if (ret !== undefined) {
+              parent.postMessage({ runId, type: 'log', level: 'return', text: fmt(ret) }, '*');
+            }
+          } catch (err) {
+            send('error', [err]);
+          }
+          parent.postMessage({ runId, type: 'done', ms: +(performance.now() - t0).toFixed(2) }, '*');
+        })();
+        function AsyncFunction(...args) { return Object.getPrototypeOf(async function(){}).constructor(...args); }
+      </script></body></html>`;
+      iframe.srcdoc = html;
+    });
+
+    setLogs(done.logs);
+    setElapsedMs(done.ms);
+    setRunning(false);
+  };
+
+  return <div className={card}>
+    <p className="text-xs text-muted">
+      在无同源权限的隔离沙箱（<code className="font-mono">sandbox=&quot;allow-scripts&quot;</code>）中本地执行 JavaScript（支持 <code className="font-mono">async/await</code> 与 <code className="font-mono">return</code>），3 秒超时自动销毁。
+    </p>
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-muted">示例：</span>
+      {JS_PRESETS.map(([label, snippet]) => (
+        <button key={label} className={button} onClick={() => setCode(snippet)}>{label}</button>
+      ))}
+    </div>
+    <textarea
+      className={`${select} w-full font-mono text-xs`}
+      rows={10}
+      value={code}
+      onChange={e => setCode(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          void runCode();
+        }
+      }}
+      placeholder="输入 JavaScript 代码（Ctrl+Enter 运行）…"
+    />
+    <div className="flex flex-wrap items-center gap-2">
+      <button className={primaryButton} disabled={running || !code.trim()} onClick={() => void runCode()}>
+        {running ? '执行中…' : '▶ 运行代码 (Ctrl+Enter)'}
+      </button>
+      <button className={button} onClick={() => { setLogs([]); setElapsedMs(null); }}>清空输出</button>
+      {elapsedMs !== null ? <span className="text-xs text-muted">耗时：{elapsedMs} ms</span> : null}
+    </div>
+    <div className="rounded border border-line bg-background p-2.5 font-mono text-xs space-y-1 max-h-64 overflow-y-auto">
+      {logs.length === 0 ? (
+        <p className="text-muted">{elapsedMs !== null ? '（执行完毕，无控制台输出）' : '点击「运行代码」查看控制台输出与返回值'}</p>
+      ) : (
+        logs.map((entry, idx) => (
+          <div
+            key={idx}
+            className={`whitespace-pre-wrap break-all rounded px-2 py-1 ${
+              entry.level === 'error'
+                ? 'bg-danger/10 text-danger'
+                : entry.level === 'warn'
+                ? 'bg-amber-500/10 text-amber-400'
+                : entry.level === 'return'
+                ? 'bg-primary/10 text-primary'
+                : 'text-foreground'
+            }`}
+          >
+            <span className="mr-2 select-none text-[10px] uppercase opacity-60">
+              {entry.level === 'return' ? '⇐ return' : `[${entry.level}]`}
+            </span>
+            {formatJsVal(entry.text)}
+          </div>
+        ))
+      )}
     </div>
   </div>;
 }

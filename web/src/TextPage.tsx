@@ -349,12 +349,41 @@ function Docs({ switcher }: { switcher: React.ReactNode }) {
   </div>;
 }
 
+type TocItem = { id: string; text: string; level: number };
+
+function copyCodeText(text: string): boolean {
+  if (navigator.clipboard && window.isSecureContext) {
+    void navigator.clipboard.writeText(text);
+    return true;
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  document.body.appendChild(area);
+  area.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  area.remove();
+  return ok;
+}
+
 function DocReader({ path, onOpen, onClose, prev, next }: { path: string; onOpen(path: string): void; onClose(): void; prev?: string; next?: string }) {
   const [html, setHtml] = useState<string>();
   const [error, setError] = useState('');
+  const [toc, setToc] = useState<TocItem[]>([]);
+  const [activeTocId, setActiveTocId] = useState<string>('');
+  const [showToc, setShowToc] = useState(() => stored<string>('omnihub.docs.toc', '1') === '1');
+  const [wideMode, setWideMode] = useState(() => stored<string>('omnihub.docs.wide', '0') === '1');
+  const [fontSize, setFontSize] = useState(() => Number(stored('omnihub.docs.size', '15')) || 15);
   const article = useRef<HTMLElement>(null);
+
+  useEffect(() => store('omnihub.docs.toc', showToc ? '1' : '0'), [showToc]);
+  useEffect(() => store('omnihub.docs.wide', wideMode ? '1' : '0'), [wideMode]);
+  useEffect(() => store('omnihub.docs.size', String(fontSize)), [fontSize]);
+
   useEffect(() => {
     const controller = new AbortController();
+    setHtml(undefined);
+    setToc([]);
     request(`/api/media/text/raw?path=${encodeURIComponent(path)}`, { signal: controller.signal })
       .then(r => r.text())
       .then(async text => {
@@ -365,14 +394,93 @@ function DocReader({ path, onOpen, onClose, prev, next }: { path: string; onOpen
       }).catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
   }, [path]);
+
   useEffect(() => {
     if (html === undefined || !article.current) return;
     window.scrollTo(0, 0);
+    const root = article.current;
     void import('./docs/render').then(r => article.current && r.drawDiagrams(article.current));
+
+    // 1. Extract headings (h1, h2, h3) and assign stable anchor IDs for TOC
+    const headings = [...root.querySelectorAll<HTMLElement>('h1, h2, h3')];
+    const items: TocItem[] = [];
+    headings.forEach((h, idx) => {
+      const txt = (h.textContent || '').trim();
+      if (!txt) return;
+      if (!h.id) {
+        h.id = `doc-sec-${idx + 1}`;
+      }
+      const level = Number(h.tagName.slice(1)) || 2;
+      items.push({ id: h.id, text: txt, level });
+    });
+    setToc(items);
+    setActiveTocId(items[0]?.id || '');
+
+    // 2. Inject language badge + copy button header bar into all <pre> blocks
+    const pres = [...root.querySelectorAll<HTMLElement>('pre')];
+    pres.forEach(pre => {
+      if (pre.dataset.enhanced === '1') return;
+      pre.dataset.enhanced = '1';
+      const codeEl = pre.querySelector('code');
+      const cls = codeEl?.className || '';
+      const langMatch = cls.match(/(?:language-|lang-)([\w-]+)/i);
+      const lang = (langMatch?.[1] || 'code').toUpperCase();
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'my-3 overflow-hidden rounded-lg border border-line bg-[#0d1117]';
+
+      const bar = document.createElement('div');
+      bar.className = 'flex items-center justify-between border-b border-line/70 bg-panel px-3 py-1 text-xs text-muted';
+
+      const langSpan = document.createElement('span');
+      langSpan.className = 'font-mono text-[11px] uppercase tracking-wider';
+      langSpan.textContent = lang;
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'rounded border border-line px-2 py-0.5 text-xs text-foreground hover:border-primary hover:text-primary';
+      copyBtn.textContent = '复制代码';
+      copyBtn.onclick = ev => {
+        ev.stopPropagation();
+        const raw = codeEl ? codeEl.textContent || '' : pre.textContent || '';
+        copyCodeText(raw);
+        copyBtn.textContent = '已复制';
+        window.setTimeout(() => { copyBtn.textContent = '复制代码'; }, 1500);
+      };
+
+      bar.appendChild(langSpan);
+      bar.appendChild(copyBtn);
+      pre.parentNode?.insertBefore(wrapper, pre);
+      wrapper.appendChild(bar);
+      pre.style.margin = '0';
+      pre.style.border = 'none';
+      pre.style.borderRadius = '0';
+      wrapper.appendChild(pre);
+    });
   }, [html]);
+
+  // Update active TOC heading on window scroll
+  useEffect(() => {
+    if (!toc.length) return;
+    const onScroll = () => {
+      const root = article.current;
+      if (!root) return;
+      let current = toc[0].id;
+      for (const item of toc) {
+        const el = document.getElementById(item.id);
+        if (el && el.getBoundingClientRect().top <= 110) {
+          current = item.id;
+        }
+      }
+      setActiveTocId(current);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [toc]);
+
   const onClick = (e: React.MouseEvent) => {
     const anchor = (e.target as HTMLElement).closest('a[href^="#"]:not([data-doc])');
-    if (anchor) {   // 文内锚点：不改地址栏的 hash（那是页面路由），直接滚过去
+    if (anchor) {
       e.preventDefault();
       const id = decodeURIComponent(anchor.getAttribute('href')!.slice(1));
       [...article.current!.querySelectorAll('[id]')].find(el => el.id === id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -384,16 +492,70 @@ function DocReader({ path, onOpen, onClose, prev, next }: { path: string; onOpen
     const target = resolveDocLink(path, a.getAttribute('data-doc') ?? '');
     if (target) onOpen(target); else setError('链接指向文档目录以外，无法打开');
   };
-  const nav = <div className="flex flex-wrap items-center gap-2">
+
+  const jumpToHeading = (id: string) => {
+    setActiveTocId(id);
+    const el = document.getElementById(id);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const nav = <div className="flex flex-wrap items-center gap-1.5">
     <button className={button} onClick={onClose}>← 目录</button>
     <button className={button} disabled={!prev} onClick={() => prev && onOpen(prev)} title={prev ? docName(prev) : ''}>上一篇</button>
     <button className={button} disabled={!next} onClick={() => next && onOpen(next)} title={next ? docName(next) : ''}>下一篇</button>
   </div>;
+
   return <div className="min-w-0 space-y-3">
-    <div className="flex flex-wrap items-center gap-2">{nav}<h2 className="min-w-0 flex-1 truncate font-semibold">{docName(path)}</h2></div>
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2">
+      {nav}
+      <h2 className="min-w-0 flex-1 truncate font-semibold text-sm">{docName(path)}</h2>
+      <div className="flex items-center gap-1.5 text-xs">
+        <button className={button} onClick={() => setFontSize(s => Math.max(12, s - 1))}>A-</button>
+        <span className="w-9 text-center font-mono text-muted">{fontSize}px</span>
+        <button className={button} onClick={() => setFontSize(s => Math.min(22, s + 1))}>A+</button>
+        <button className={chip(wideMode)} onClick={() => setWideMode(w => !w)}>{wideMode ? '宽屏' : '适中'}</button>
+        {toc.length > 0 ? (
+          <button className={chip(showToc)} onClick={() => setShowToc(v => !v)}>
+            大纲 ({toc.length})
+          </button>
+        ) : null}
+      </div>
+    </div>
     {error ? <p className="text-danger">{error}</p> : null}
     {html === undefined && !error ? <p role="status">正在渲染…</p> : null}
-    {html !== undefined ? <article ref={article} className="doc-body" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} /> : null}
+    {html !== undefined ? (
+      <div className={`grid gap-4 ${showToc && toc.length > 0 ? 'xl:grid-cols-[minmax(0,1fr)_15rem]' : ''}`}>
+        <article
+          ref={article}
+          className={`doc-body min-w-0 rounded-lg border border-line bg-panel p-5 ${wideMode ? 'max-w-none' : 'max-w-4xl'}`}
+          style={{ fontSize }}
+          onClick={onClick}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+        {showToc && toc.length > 0 ? (
+          <aside className="hidden xl:block xl:sticky xl:top-14 xl:max-h-[calc(100vh-5rem)] xl:overflow-y-auto rounded-lg border border-line bg-panel p-3 space-y-1.5 self-start">
+            <div className="text-xs font-semibold text-muted pb-1 border-b border-line">文章大纲</div>
+            <nav className="space-y-0.5">
+              {toc.map(item => (
+                <button
+                  key={item.id}
+                  onClick={() => jumpToHeading(item.id)}
+                  className={`block w-full truncate rounded px-2 py-1 text-left text-xs transition ${
+                    activeTocId === item.id
+                      ? 'bg-primary/15 text-primary font-medium'
+                      : 'text-muted hover:bg-background hover:text-foreground'
+                  }`}
+                  style={{ paddingLeft: `${(item.level - 1) * 10 + 8}px` }}
+                  title={item.text}
+                >
+                  {item.text}
+                </button>
+              ))}
+            </nav>
+          </aside>
+        ) : null}
+      </div>
+    ) : null}
     {html !== undefined ? nav : null}
   </div>;
 }
