@@ -23,6 +23,7 @@ import {
   IconFit,
   IconFullscreen,
   IconHeart,
+  IconMotion,
   IconNext,
   IconPause,
   IconPlay,
@@ -133,14 +134,15 @@ function Viewer({ post, prevPost, nextPost, liked, isAdmin, loggedIn, onLike, on
   const [controlsVisible, setControlsVisible] = useState(() => stored('omnihub.viewer.controls', true));
   const [fsPref, setFsPref] = useState(getViewerFullscreenPref);
   const [fillMode, setFillMode] = useState<'contain' | 'cover'>(() => stored('omnihub.sv.fill', 'contain'));
+  const [slideMotion, setSlideMotion] = useState(() => stored('omnihub.sv.motion', false));
   const video = useRef<HTMLVideoElement>(null);
   const audioEl = useRef<HTMLAudioElement | null>(null);
   const tapTimer = useRef(0);
-  const slideTimer = useRef(0);
   const lastCenterTap = useRef(0);
-  useEffect(() => () => { window.clearTimeout(tapTimer.current); window.clearTimeout(slideTimer.current); }, []);
+  useEffect(() => () => window.clearTimeout(tapTimer.current), []);
   useEffect(() => store('omnihub.viewer.controls', controlsVisible), [controlsVisible]);
   useEffect(() => store('omnihub.sv.fill', fillMode), [fillMode]);
+  useEffect(() => store('omnihub.sv.motion', slideMotion), [slideMotion]);
   useEffect(() => {
     if (fsPref && !document.fullscreenElement) enterBrowserFullscreen();
   }, [fsPref, post?.id]);
@@ -237,30 +239,21 @@ function Viewer({ post, prevPost, nextPost, liked, isAdmin, loggedIn, onLike, on
     return () => window.removeEventListener('keydown', handler);
   }, []);
   // 点画面：左边三分之一下一个、右边三分之一上一个（图集先翻图片，翻到头再换作品），中间单击唤起/关闭控件（视频双击中间暂停/继续）。
-  // 滑动：左右滑跟手过渡切换上/下一个作品，下拉跟手阻尼与退场动画关闭。控件展开时视频底部留出原生进度条。
+  // 滑动：左右滑切换上/下一个作品（可选开启跟手过渡动效），下拉跟手阻尼与退场动画关闭。控件展开时视频底部留出原生进度条。
   const press = useRef<{ x: number; y: number; mode: '' | 'x' | 'y' } | undefined>(undefined);
+  const [prevKey, setPrevKey] = useState(`${post?.id ?? ''}:${page}`);
   const [dragX, setDragX] = useState(0);
   const [pullY, setPullY] = useState(0);
   const [closing, setClosing] = useState(false);
-  const [animating, setAnimating] = useState(false);
-  useEffect(() => {
-    window.clearTimeout(slideTimer.current);
+  const curKey = `${post?.id ?? ''}:${page}`;
+  if (prevKey !== curKey) {
+    setPrevKey(curKey);
     setDragX(0);
     setPullY(0);
     setClosing(false);
-    setAnimating(false);
-  }, [post?.id, page]);
+  }
   const prevPage = () => { if (page > 1) setPage(page - 1); else onPrev?.(); };
   const nextPage = () => { if (page < pages) setPage(page + 1); else onNext?.(); };
-  const triggerSlide = (dir: -1 | 1, action?: () => void) => {
-    if (!action) { setAnimating(true); setDragX(0); return; }
-    setAnimating(true);
-    setDragX(dir * window.innerWidth);
-    window.clearTimeout(slideTimer.current);
-    slideTimer.current = window.setTimeout(() => {
-      action();
-    }, 170);
-  };
   function move(e: ReactPointerEvent<HTMLDivElement>) {
     const start = press.current;
     if (!start || (!e.buttons && e.pointerType === 'mouse')) return;
@@ -269,7 +262,7 @@ function Viewer({ post, prevPost, nextPost, liked, isAdmin, loggedIn, onLike, on
       if (Math.abs(dx) > 10 && Math.abs(dx) >= Math.abs(dy)) start.mode = 'x';
       else if (dy > 12 && dy > Math.abs(dx)) start.mode = 'y';
     }
-    if (start.mode === 'x') {
+    if (start.mode === 'x' && slideMotion) {
       const canGo = dx < 0 ? Boolean(onNext) : Boolean(onPrev);
       setDragX(canGo ? dx : dx * 0.25);
     } else if (start.mode === 'y') {
@@ -282,12 +275,11 @@ function Viewer({ post, prevPost, nextPost, liked, isAdmin, loggedIn, onLike, on
     if (!start || !post) { setDragX(0); setPullY(0); return; }
     const dx = e.clientX - start.x, dy = e.clientY - start.y;
     if (start.mode === 'x' || (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.15)) {
+      setDragX(0);
       setPullY(0);
       if (Math.abs(dx) > 55) {
-        triggerSlide(dx < 0 ? -1 : 1, dx < 0 ? onNext : onPrev);
-      } else {
-        setAnimating(true);
-        setDragX(0);
+        if (dx < 0) onNext?.();
+        else onPrev?.();
       }
       return;
     }
@@ -297,18 +289,17 @@ function Viewer({ post, prevPost, nextPost, liked, isAdmin, loggedIn, onLike, on
       window.setTimeout(() => onClose(), 150);
       return;
     }
-    setAnimating(true);
     setDragX(0);
     setPullY(0);
-    if (dy < -80 && Math.abs(dy) > Math.abs(dx) * 1.2) { triggerSlide(-1, onNext); return; }
+    if (dy < -80 && Math.abs(dy) > Math.abs(dx) * 1.2) { onNext?.(); return; }
     if (Math.abs(dx) > 12 || Math.abs(dy) > 12) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) / Math.max(1, rect.width);
     const isVideo = post.kind === 'video';
     if (x < 1 / 3) {
-      if (isVideo) triggerSlide(-1, onNext); else nextPage();
+      if (isVideo) onNext?.(); else nextPage();
     } else if (x > 2 / 3) {
-      if (isVideo) triggerSlide(1, onPrev); else prevPage();
+      if (isVideo) onPrev?.(); else prevPage();
     } else {
       const now = Date.now();
       if (isVideo && now - lastCenterTap.current < 260) {
@@ -327,15 +318,16 @@ function Viewer({ post, prevPost, nextPost, liked, isAdmin, loggedIn, onLike, on
   const fitClass = fillMode === 'cover' ? 'h-full w-full object-cover' : 'h-full w-full object-contain';
   const pullScale = pullY > 0 ? Math.max(0.82, 1 - pullY / 950) : 1;
   const bgAlpha = Math.max(0.32, 1 - pullY / 380);
+  const tx = slideMotion ? dragX : 0;
   const mediaMotionStyle: React.CSSProperties = {
-    transform: `translate3d(${dragX}px, ${pullY}px, 0) scale(${pullScale})`,
+    transform: `translate3d(${tx}px, ${pullY}px, 0) scale(${pullScale})`,
     opacity: closing ? 0 : 1,
-    transition: press.current && !animating ? 'none' : 'transform 170ms cubic-bezier(0.22, 1, 0.36, 1), opacity 150ms ease-out',
+    transition: press.current || tx !== 0 ? 'none' : 'transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 150ms ease-out',
   };
   const gestures = <div className={`absolute inset-x-0 top-0 z-10 touch-none ${controlsVisible && post?.kind === 'video' ? 'bottom-14' : 'bottom-0'}`}
-    onPointerDown={e => { if (e.pointerType === 'mouse' && e.button !== 0) return; setAnimating(false); press.current = { x: e.clientX, y: e.clientY, mode: '' }; }}
+    onPointerDown={e => { if (e.pointerType === 'mouse' && e.button !== 0) return; press.current = { x: e.clientX, y: e.clientY, mode: '' }; }}
     onPointerMove={move} onPointerUp={release}
-    onPointerCancel={() => { press.current = undefined; setAnimating(true); setDragX(0); setPullY(0); }} />;
+    onPointerCancel={() => { press.current = undefined; setDragX(0); setPullY(0); }} />;
   const renderPostPreview = (p?: Post) => {
     if (!p) return null;
     if (p.kind === 'album') {
@@ -361,14 +353,15 @@ function Viewer({ post, prevPost, nextPost, liked, isAdmin, loggedIn, onLike, on
       {post?.kind === 'video' || post?.music ? (
         <VolumeSliderPill volume={sound.volume} muted={sound.muted} onToggleMute={toggleMute} onChangeVolume={changeVolume} />
       ) : null}
+      <ViewerIconButton label={slideMotion ? '关闭左右滑动效（视频独立设置）' : '开启左右滑动效（视频独立设置）'} active={slideMotion} onClick={() => setSlideMotion(v => !v)}><IconMotion /></ViewerIconButton>
       <ViewerIconButton label={fillMode === 'cover' ? '切换为完整适应' : '切换为裁切铺满'} active={fillMode === 'cover'} onClick={() => setFillMode(m => m === 'contain' ? 'cover' : 'contain')}>{fillMode === 'cover' ? <IconFit /> : <IconFill />}</ViewerIconButton>
       <ViewerIconButton label={fsPref ? '退出全屏 (F)' : '全屏模式 (F，跨媒体自动保持)'} active={fsPref} onClick={toggleFullscreen}>{fsPref ? <IconExitFullscreen /> : <IconFullscreen />}</ViewerIconButton>
-      <ViewerIconButton label="上一个 (← / 右侧点击)" disabled={!onPrev} onClick={() => triggerSlide(1, onPrev)}><IconPrev /></ViewerIconButton>
-      <ViewerIconButton label="下一个 (→ / 左侧点击)" disabled={!onNext} onClick={() => triggerSlide(-1, onNext)}><IconNext /></ViewerIconButton>
+      <ViewerIconButton label="上一个 (← / 右侧点击)" disabled={!onPrev} onClick={onPrev}><IconPrev /></ViewerIconButton>
+      <ViewerIconButton label="下一个 (→ / 左侧点击)" disabled={!onNext} onClick={onNext}><IconNext /></ViewerIconButton>
       <ViewerIconButton label="关闭 (Esc / 右键 / 下滑)" onClick={onClose}><IconClose /></ViewerIconButton>
     </div> : null}
     <div className="absolute inset-0 flex items-center justify-center overflow-hidden" style={mediaMotionStyle}>
-      {prevPost ? <div className="pointer-events-none absolute inset-y-0 -left-full flex h-full w-full items-center justify-center pr-3">{renderPostPreview(prevPost)}</div> : null}
+      {slideMotion && prevPost ? <div className="pointer-events-none absolute inset-y-0 -left-full flex h-full w-full items-center justify-center pr-3">{renderPostPreview(prevPost)}</div> : null}
       {!post ? <p>加载中…</p> : post.kind === 'video' && !canPlayCodec(post.codec)
         ? <p className="max-w-md text-center">这个视频是 {post.codec?.toUpperCase()} 编码，当前浏览器无法解码。请在 Deck 上的 omniHub 客户端中播放。</p>
         : post.kind === 'video'
@@ -387,7 +380,7 @@ function Viewer({ post, prevPost, nextPost, liked, isAdmin, loggedIn, onLike, on
             <ViewerIconButton label="下一张图片 (↓)" disabled={page >= pages} onClick={() => setPage(p => p + 1)}><IconNext /></ViewerIconButton>
           </div> : null}
         </>}
-      {nextPost ? <div className="pointer-events-none absolute inset-y-0 left-full flex h-full w-full items-center justify-center pl-3">{renderPostPreview(nextPost)}</div> : null}
+      {slideMotion && nextPost ? <div className="pointer-events-none absolute inset-y-0 left-full flex h-full w-full items-center justify-center pl-3">{renderPostPreview(nextPost)}</div> : null}
     </div>
   </div>;
 }

@@ -355,3 +355,12 @@ export const IconClose = () => (
     <line x1="6" y1="6" x2="18" y2="18" />
   </Svg>
 );
+
+export const IconMotion = () => (
+  <Svg>
+    <path d="M5 12h14" />
+    <path d="m15 8 4 4-4 4" />
+    <path d="m9 8-4 4 4 4" />
+  </Svg>
+);
+

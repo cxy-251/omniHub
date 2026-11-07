@@ -24,6 +24,7 @@ import {
   IconFit,
   IconFullscreen,
   IconHeart,
+  IconMotion,
   IconNext,
   IconPrev,
   IconRestore,
@@ -117,8 +118,10 @@ function Viewer({ index, total, photo, prevPhoto, nextPhoto, liked, restoring, i
   const [controlsVisible, setControlsVisible] = useState(() => stored('omnihub.viewer.controls', true));
   const [fsPref, setFsPref] = useState(getViewerFullscreenPref);
   const [fillMode, setFillMode] = useState<'contain' | 'cover'>(() => stored('omnihub.gallery.fill', 'contain'));
+  const [slideMotion, setSlideMotion] = useState(() => stored('omnihub.gallery.motion', false));
   useEffect(() => store('omnihub.viewer.controls', controlsVisible), [controlsVisible]);
   useEffect(() => store('omnihub.gallery.fill', fillMode), [fillMode]);
+  useEffect(() => store('omnihub.gallery.motion', slideMotion), [slideMotion]);
   useEffect(() => {
     if (fsPref && !document.fullscreenElement) enterBrowserFullscreen();
   }, [fsPref, index]);
@@ -161,6 +164,7 @@ function Viewer({ index, total, photo, prevPhoto, nextPhoto, liked, restoring, i
   const goPrev = () => { if (index > 0) onIndex(index - 1); };
   const goNext = () => { if (index < total - 1) onIndex(index + 1); };
   const zoom = useZoom(photo?.id, {
+    motion: slideMotion,
     canPrev: index > 0,
     canNext: index < total - 1,
     onSwipeLeft: goNext,
@@ -204,6 +208,7 @@ function Viewer({ index, total, photo, prevPhoto, nextPhoto, liked, restoring, i
       {loggedIn ? <ViewerIconButton label={liked ? '取消点赞 (Z)' : '点赞 (Z)'} active={liked} onClick={onLike}><IconHeart filled={liked} /></ViewerIconButton> : null}
       {isAdmin ? <ViewerIconButton label={restoring ? (armed ? '确认从回收站恢复' : '从回收站恢复 (Delete×2)') : (armed ? '确认移到回收站' : '移到回收站 (Delete×2)')} danger={armed} onClick={doTrash}>{restoring ? <IconRestore /> : <IconTrash />}</ViewerIconButton> : null}
       {photo ? <ViewerIconLink label="下载原图" href={`/api/media/gallery/original?${query(photo)}&download=1`} download={photo.filename}><IconDownload /></ViewerIconLink> : null}
+      <ViewerIconButton label={slideMotion ? '关闭左右滑动效（照片独立设置）' : '开启左右滑动效（照片独立设置）'} active={slideMotion} onClick={() => setSlideMotion(v => !v)}><IconMotion /></ViewerIconButton>
       <ViewerIconButton label={fillMode === 'cover' ? '切换为完整适应' : '切换为裁切铺满'} active={fillMode === 'cover'} onClick={() => setFillMode(m => m === 'contain' ? 'cover' : 'contain')}>{fillMode === 'cover' ? <IconFit /> : <IconFill />}</ViewerIconButton>
       <ViewerIconButton label={fsPref ? '退出全屏 (F)' : '全屏模式 (F，跨媒体自动保持)'} active={fsPref} onClick={toggleFullscreen}>{fsPref ? <IconExitFullscreen /> : <IconFullscreen />}</ViewerIconButton>
       <ViewerIconButton label="上一张 (← / 右侧点击)" disabled={index <= 0} onClick={goPrev}><IconPrev /></ViewerIconButton>
@@ -219,21 +224,21 @@ function Viewer({ index, total, photo, prevPhoto, nextPhoto, liked, restoring, i
         const r = e.currentTarget.getBoundingClientRect();
         const ratio = (e.clientX - r.left) / Math.max(1, r.width);
         tapTimer.current = window.setTimeout(() => {
-          if (ratio < 1 / 3) zoom.slideNext();
-          else if (ratio > 2 / 3) zoom.slidePrev();
+          if (ratio < 1 / 3) goNext();
+          else if (ratio > 2 / 3) goPrev();
           else setControlsVisible(v => !v);
         }, 220);
       }}>
       {photo ? <div className="relative flex h-full w-full items-center justify-center" style={zoom.trackStyle}>
-        {prevPhoto ? <div className="pointer-events-none absolute inset-y-0 -left-full flex h-full w-full items-center justify-center pr-3">
-          <img className={fitClass} src={`/api/media/gallery/original?${query(prevPhoto)}`} alt="" draggable={false} />
+        {slideMotion && prevPhoto ? <div className="pointer-events-none absolute inset-y-0 -left-full flex h-full w-full items-center justify-center pr-3">
+          <img className={fitClass} src={`/api/media/gallery/thumbnail?${query(prevPhoto)}`} alt="" draggable={false} />
         </div> : null}
         <div className="flex h-full w-full items-center justify-center" style={zoom.style}>
           {loaded !== photo.id ? <img className={`absolute ${fitClass}`} src={`/api/media/gallery/thumbnail?${query(photo)}`} alt="" draggable={false} /> : null}
           <img key={photo.id} className={`relative ${fitClass}`} src={`/api/media/gallery/original?${query(photo)}`} alt={photo.filename} draggable={false} onLoad={() => setLoaded(photo.id)} />
         </div>
-        {nextPhoto ? <div className="pointer-events-none absolute inset-y-0 left-full flex h-full w-full items-center justify-center pl-3">
-          <img className={fitClass} src={`/api/media/gallery/original?${query(nextPhoto)}`} alt="" draggable={false} />
+        {slideMotion && nextPhoto ? <div className="pointer-events-none absolute inset-y-0 left-full flex h-full w-full items-center justify-center pl-3">
+          <img className={fitClass} src={`/api/media/gallery/thumbnail?${query(nextPhoto)}`} alt="" draggable={false} />
         </div> : null}
       </div> : <p>加载中…</p>}
     </div>
@@ -241,28 +246,25 @@ function Viewer({ index, total, photo, prevPhoto, nextPhoto, liked, restoring, i
 }
 
 // useZoom：大图缩放与平移。滚轮或双指捏合 1～5 倍，双击在 1 倍与 2.5 倍间切换，放大后拖动平移；
-// 未放大时支持左右跟手滑动切换图片、下拉跟手阻尼与退场动画关闭；放大状态或刚拖动过时，点击不触发翻页。
+// 未放大时支持左右滑动切换图片（可选开启跟手过渡动效）、下拉跟手阻尼与退场动画关闭。
 function useZoom(
   key: string | undefined,
-  swipe?: { canPrev?: boolean; canNext?: boolean; onSwipeLeft?: () => void; onSwipeRight?: () => void; onSwipeDown?: () => void },
+  swipe?: { motion?: boolean; canPrev?: boolean; canNext?: boolean; onSwipeLeft?: () => void; onSwipeRight?: () => void; onSwipeDown?: () => void },
 ) {
+  const [prevKey, setPrevKey] = useState(key);
   const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
   const [dragX, setDragX] = useState(0);
   const [pullY, setPullY] = useState(0);
   const [closing, setClosing] = useState(false);
-  const [animatingX, setAnimatingX] = useState(false);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const gesture = useRef({ moved: false, pinch: 0, startX: 0, startY: 0, mode: '' as '' | 'x' | 'y' });
-  const slideTimer = useRef(0);
-  useEffect(() => () => window.clearTimeout(slideTimer.current), []);
-  useEffect(() => {
-    window.clearTimeout(slideTimer.current);
+  if (prevKey !== key) {
+    setPrevKey(key);
     setView({ scale: 1, x: 0, y: 0 });
     setDragX(0);
     setPullY(0);
     setClosing(false);
-    setAnimatingX(false);
-  }, [key]);
+  }
   const clamp = (scale: number) => Math.min(5, Math.max(1, scale));
   const zoomAt = (to: (scale: number) => number, cx: number, cy: number) => setView(v => {
     const next = clamp(to(v.scale));
@@ -274,23 +276,11 @@ function useZoom(
     const r = e.currentTarget.getBoundingClientRect();
     return [e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2];
   };
-  const triggerSlide = (dir: -1 | 1) => {
-    if (dir < 0 && !swipe?.canNext) { setAnimatingX(true); setDragX(0); return; }
-    if (dir > 0 && !swipe?.canPrev) { setAnimatingX(true); setDragX(0); return; }
-    setAnimatingX(true);
-    setDragX(dir * window.innerWidth);
-    window.clearTimeout(slideTimer.current);
-    slideTimer.current = window.setTimeout(() => {
-      if (dir < 0) swipe?.onSwipeLeft?.();
-      else swipe?.onSwipeRight?.();
-    }, 170);
-  };
   const handlers = {
     onWheel: (e: React.WheelEvent) => { const [cx, cy] = center(e); zoomAt(s => s * (e.deltaY < 0 ? 1.2 : 1 / 1.2), cx, cy); },
     onDoubleClick: (e: React.MouseEvent) => { const [cx, cy] = center(e); zoomAt(s => s > 1 ? 1 : 2.5, cx, cy); },
     onPointerDown: (e: React.PointerEvent) => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
-      setAnimatingX(false);
       pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.current.size === 1) gesture.current = { moved: false, pinch: 0, startX: e.clientX, startY: e.clientY, mode: '' };
       if (pointers.current.size === 2) {
@@ -324,7 +314,7 @@ function useZoom(
           if (Math.abs(totalDx) > 10 && Math.abs(totalDx) >= Math.abs(totalDy)) gesture.current.mode = 'x';
           else if (totalDy > 12 && totalDy > Math.abs(totalDx)) gesture.current.mode = 'y';
         }
-        if (gesture.current.mode === 'x') {
+        if (gesture.current.mode === 'x' && swipe?.motion) {
           gesture.current.moved = true;
           const canGo = totalDx < 0 ? swipe?.canNext : swipe?.canPrev;
           setDragX(canGo ? totalDx : totalDx * 0.25);
@@ -341,14 +331,13 @@ function useZoom(
         const totalDx = e.clientX - gesture.current.startX;
         const totalDy = e.clientY - gesture.current.startY;
         if (gesture.current.mode === 'x' || (Math.abs(totalDx) > 55 && Math.abs(totalDx) > Math.abs(totalDy) * 1.15)) {
+          setDragX(0);
           setPullY(0);
           if (Math.abs(totalDx) > 55) {
             gesture.current.moved = true;
-            triggerSlide(totalDx < 0 ? -1 : 1);
-            return;
+            if (totalDx < 0) swipe?.onSwipeLeft?.();
+            else swipe?.onSwipeRight?.();
           }
-          setAnimatingX(true);
-          setDragX(0);
           return;
         }
         if (totalDy > 90 && totalDy > Math.abs(totalDx) * 1.15) {
@@ -359,11 +348,10 @@ function useZoom(
           return;
         }
       }
-      setAnimatingX(true);
       setDragX(0);
       setPullY(0);
     },
-    onPointerCancel: (e: React.PointerEvent) => { pointers.current.delete(e.pointerId); setAnimatingX(true); setDragX(0); setPullY(0); },
+    onPointerCancel: (e: React.PointerEvent) => { pointers.current.delete(e.pointerId); setDragX(0); setPullY(0); },
   };
   const pullScale = pullY > 0 ? Math.max(0.82, 1 - pullY / 950) : view.scale;
   const ty = view.y + pullY;
@@ -373,13 +361,11 @@ function useZoom(
     zoomed: view.scale > 1,
     reset: () => setView({ scale: 1, x: 0, y: 0 }),
     step: (factor: number) => zoomAt(s => s * factor, 0, 0),
-    slideNext: () => triggerSlide(-1),
-    slidePrev: () => triggerSlide(1),
     consumeClick: () => { const used = view.scale > 1 || gesture.current.moved; gesture.current.moved = false; return used; },
-    trackStyle: {
+    trackStyle: (swipe?.motion && dragX !== 0 ? {
       transform: `translate3d(${dragX}px, 0, 0)`,
-      transition: pointers.current.size && !animatingX ? 'none' : 'transform 170ms cubic-bezier(0.22, 1, 0.36, 1)',
-    } as React.CSSProperties,
+      transition: 'none',
+    } : undefined) as React.CSSProperties | undefined,
     style: {
       transform: `translate(${view.x}px, ${ty}px) scale(${pullScale})`,
       opacity: closing ? 0 : 1,
