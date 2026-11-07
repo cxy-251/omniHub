@@ -2,6 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { formatTime, useAudio, type Track } from './AudioEngine';
 import { chip, select } from './ui';
+import {
+  IconPause,
+  IconPlay,
+  IconSkipBack,
+  IconSkipForward,
+  ViewerIconButton,
+  VolumeSliderPill,
+} from './ViewerControls';
 
 type Artist = {
   id: string;
@@ -575,7 +583,7 @@ export default function VinylGallery() {
                 <div className="flex items-center justify-between gap-2 text-xs font-medium">
                   <span className="truncate">当前：{engine.track.title}</span>
                   <span className="shrink-0 font-mono opacity-75">
-                    {formatTime(engine.position)} / {formatTime(engine.duration)}
+                    {formatTime(engine.current)} / {formatTime(engine.duration)}
                   </span>
                 </div>
                 <input
@@ -583,32 +591,17 @@ export default function VinylGallery() {
                   aria-label="播放进度"
                   min={0}
                   max={Math.max(1, engine.duration)}
-                  value={engine.position}
+                  value={engine.current}
                   onChange={e => engine.seek(Number(e.target.value))}
                   className="mt-2 h-1.5 w-full cursor-pointer accent-primary"
                 />
-                <div className="mt-2 flex items-center justify-center gap-4">
-                  <button
-                    type="button"
-                    className="rounded px-2.5 py-1 text-xs font-semibold hover:bg-black/10 dark:hover:bg-white/10"
-                    onClick={() => engine.previous()}
-                  >
-                    ⏮ 上一首
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-full bg-primary px-4 py-1.5 text-xs font-bold text-white shadow"
-                    onClick={() => engine.toggle()}
-                  >
-                    {engine.playing ? '⏸ 暂停' : '▶ 继续'}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded px-2.5 py-1 text-xs font-semibold hover:bg-black/10 dark:hover:bg-white/10"
-                    onClick={() => engine.next()}
-                  >
-                    下一首 ⏭
-                  </button>
+                <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <ViewerIconButton label="上一首" onClick={() => engine.previous()}><IconSkipBack /></ViewerIconButton>
+                    <ViewerIconButton primary label={engine.playing ? '暂停' : '播放'} onClick={() => engine.toggle()}>{engine.playing ? <IconPause /> : <IconPlay />}</ViewerIconButton>
+                    <ViewerIconButton label="下一首" onClick={() => engine.next()}><IconSkipForward /></ViewerIconButton>
+                  </div>
+                  <VolumeSliderPill volume={engine.volume} muted={engine.muted} onToggleMute={engine.toggleMute} onChangeVolume={engine.setVolume} />
                 </div>
               </div>
             )}

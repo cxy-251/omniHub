@@ -3,6 +3,22 @@ import { api } from './api';
 import { formatTime, useAudio, useTrackTags, type Engine } from './AudioEngine';
 import { MusicRatingButtons } from './MusicFeedback';
 import MusicCover from './MusicCover';
+import {
+  IconForward30,
+  IconPause,
+  IconPlay,
+  IconRepeatList,
+  IconRepeatOne,
+  IconRewind10,
+  IconShuffle,
+  IconSkipBack,
+  IconSkipForward,
+  IconSleep,
+  IconSpeed,
+  IconStop,
+  ViewerIconButton,
+  VolumeSliderPill,
+} from './ViewerControls';
 
 type Lyric = { time: number; text: string };
 type Lyrics = { synced: boolean; lines: Lyric[] | null };
@@ -58,27 +74,34 @@ function LyricsView({ engine, id }: { engine: Engine; id: string }) {
 function CurrentTrack({ engine }: { engine: Engine }) {
   const track = engine.track!;
   const tags = useTrackTags(track.id);
+  const ModeIcon = engine.mode === 'single' ? IconRepeatOne : engine.mode === 'random' ? IconShuffle : IconRepeatList;
   return <>
     <div className="listening-grid">
       <div className="listening-artwork"><MusicCover path={tags.has_cover ? track.id : undefined} />
         <h2>{track.title}</h2><p>{[tags.artist || track.artist, tags.album || track.album || engine.albumTitle].filter(Boolean).join(' · ')}</p>
-        <div className="listening-rating"><MusicRatingButtons id={track.id} engine={engine} /></div>
+        <div className="listening-rating"><MusicRatingButtons id={track.id} engine={engine} size="md" tooltip="down" /></div>
       </div>
       <LyricsView engine={engine} id={track.id} />
     </div>
     <div className="listening-controls">
       {engine.error ? <p className="text-danger" role="alert">{engine.error}</p> : null}
       <div className="listening-progress"><span>{formatTime(engine.current)}</span><input type="range" aria-label="播放进度" min={0} max={Math.max(1, engine.duration)} step={.1} value={Math.min(engine.current, Math.max(1, engine.duration))} disabled={!engine.duration} onChange={e => engine.seek(Number(e.target.value))} /><span>{formatTime(engine.duration)}</span></div>
-      <div className="listening-actions"><div className="transport-controls">
-        <button className="workbench-button" onClick={engine.previous}>上一首</button>
-        <button className="listening-toggle" aria-label={engine.playing ? '暂停' : '播放'} onClick={engine.toggle}>{engine.playing ? 'Ⅱ' : '▶'}</button>
-        <button className="workbench-button" onClick={engine.next}>下一首</button>
-      </div><div className="playback-options">
-        <button className="workbench-button" onClick={engine.cycleMode}>{modeNames[engine.mode]}</button>
-        <button className="workbench-button" title="倍速" onClick={engine.cycleRate}>{engine.rate}×</button>
-        <button className="workbench-button" onClick={engine.cycleSleep}>{engine.sleepMinutes ? `${engine.sleepMinutes} 分钟后关闭` : '定时关闭'}</button>
-        <button className="workbench-button" onClick={() => engine.stop()}>停止</button>
-      </div></div>
+      <div className="listening-actions">
+        <div className="transport-controls">
+          <ViewerIconButton tooltip="up" label="上一首" onClick={engine.previous}><IconSkipBack /></ViewerIconButton>
+          <ViewerIconButton tooltip="up" label="后退 10 秒" onClick={() => engine.seekBy(-10)}><IconRewind10 /></ViewerIconButton>
+          <ViewerIconButton tooltip="up" size="lg" primary label={engine.playing ? '暂停' : '播放'} onClick={engine.toggle}>{engine.playing ? <IconPause /> : <IconPlay />}</ViewerIconButton>
+          <ViewerIconButton tooltip="up" label="前进 30 秒" onClick={() => engine.seekBy(30)}><IconForward30 /></ViewerIconButton>
+          <ViewerIconButton tooltip="up" label="下一首" onClick={engine.next}><IconSkipForward /></ViewerIconButton>
+        </div>
+        <div className="playback-options">
+          <VolumeSliderPill tooltip="up" volume={engine.volume} muted={engine.muted} onToggleMute={engine.toggleMute} onChangeVolume={engine.setVolume} />
+          <ViewerIconButton tooltip="up" active={engine.mode !== 'list'} label={`模式：${modeNames[engine.mode]} (点击切换)`} onClick={engine.cycleMode}><ModeIcon /></ViewerIconButton>
+          <ViewerIconButton tooltip="up" active={engine.rate !== 1} badge={engine.rate !== 1 ? `${engine.rate}×` : undefined} label={`倍速：${engine.rate}× (点击切换)`} onClick={engine.cycleRate}><IconSpeed /></ViewerIconButton>
+          <ViewerIconButton tooltip="up" active={engine.sleepMinutes > 0} badge={engine.sleepMinutes ? `${engine.sleepMinutes}m` : undefined} label={engine.sleepMinutes ? `定时关闭：${engine.sleepMinutes} 分钟后` : '定时关闭'} onClick={engine.cycleSleep}><IconSleep /></ViewerIconButton>
+          <ViewerIconButton tooltip="up" label="停止播放" onClick={() => engine.stop()}><IconStop /></ViewerIconButton>
+        </div>
+      </div>
     </div>
   </>;
 }

@@ -23,14 +23,13 @@ import {
   IconFit,
   IconFullscreen,
   IconHeart,
-  IconMute,
   IconNext,
   IconPause,
   IconPlay,
   IconPrev,
   IconTrash,
-  IconVolume,
   ViewerIconButton,
+  VolumeSliderPill,
 } from './ViewerControls';
 
 const Matrix = lazy(() => import('./Matrix'));
@@ -111,7 +110,10 @@ export default function ShortVideoPage({ active, isAdmin = false, loggedIn = fal
         <div className="h-11 px-1.5 py-1"><p className="truncate text-xs">{post.title}</p><p className="truncate text-xs text-muted">{post.creator_id.split('/').slice(1).join(' / ')} · {post.published}</p></div>
       </button>;
     }} />
-    {open !== undefined ? <Viewer post={paged.item(open)} liked={liked.isLiked(paged.item(open))} isAdmin={isAdmin} loggedIn={loggedIn} onLike={() => { const p = paged.item(open); if (p) liked.toggle(p); }}
+    {open !== undefined ? <Viewer post={paged.item(open)}
+      prevPost={open > 0 ? paged.item(open - 1) : undefined}
+      nextPost={open < paged.total - 1 ? paged.item(open + 1) : undefined}
+      liked={liked.isLiked(paged.item(open))} isAdmin={isAdmin} loggedIn={loggedIn} onLike={() => { const p = paged.item(open); if (p) liked.toggle(p); }}
       onTrash={() => { const p = paged.item(open); return p ? trash('shortvideo', p.id).then(() => setReload(n => n + 1)) : Promise.resolve(); }}
       onClose={() => { exitBrowserFullscreen(); setOpen(undefined); }}
       onPrev={open > 0 ? () => setOpen(open - 1) : undefined}
@@ -119,10 +121,10 @@ export default function ShortVideoPage({ active, isAdmin = false, loggedIn = fal
   </section>;
 }
 
-// Viewer：全屏播放视频或翻看图集。←/→ 切作品，↑/↓ 翻图，Z 点赞，Delete 按两次移到回收站，Esc 关闭。
+// Viewer：全屏播放视频或翻看图集。←/→ 切作品，↑/↓ 翻图，Z 点赞，Delete 按两次移到回收站，Esc 或鼠标右键关闭。
 // 行为上报：展示即 view；离开时 2 秒内划走算 skip，看完（或 80%）算 complete，停留 8 秒以上算 dwell。
-function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPrev, onNext }: {
-  post?: Post; liked: boolean; isAdmin: boolean; loggedIn: boolean; onLike(): void; onTrash(): Promise<void>; onClose(): void; onPrev?: () => void; onNext?: () => void;
+function Viewer({ post, prevPost, nextPost, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPrev, onNext }: {
+  post?: Post; prevPost?: Post; nextPost?: Post; liked: boolean; isAdmin: boolean; loggedIn: boolean; onLike(): void; onTrash(): Promise<void>; onClose(): void; onPrev?: () => void; onNext?: () => void;
 }) {
   const [page, setPage] = useState(1);
   const [notice, setNotice] = useState('');
@@ -132,9 +134,11 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
   const [fsPref, setFsPref] = useState(getViewerFullscreenPref);
   const [fillMode, setFillMode] = useState<'contain' | 'cover'>(() => stored('omnihub.sv.fill', 'contain'));
   const video = useRef<HTMLVideoElement>(null);
+  const audioEl = useRef<HTMLAudioElement | null>(null);
   const tapTimer = useRef(0);
+  const slideTimer = useRef(0);
   const lastCenterTap = useRef(0);
-  useEffect(() => () => window.clearTimeout(tapTimer.current), []);
+  useEffect(() => () => { window.clearTimeout(tapTimer.current); window.clearTimeout(slideTimer.current); }, []);
   useEffect(() => store('omnihub.viewer.controls', controlsVisible), [controlsVisible]);
   useEffect(() => store('omnihub.sv.fill', fillMode), [fillMode]);
   useEffect(() => {
@@ -158,15 +162,24 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
     if (v.paused) void v.play();
     else v.pause();
   };
-  // 静音和音量跨视频记住（存在浏览器里）：在一个视频上点了静音，后面的视频也静音
+  // 静音和音量跨视频记住（存在浏览器里）：在一个视频上调音量或静音，后面的视频也保持
   const [sound, setSound] = useState(() => stored('omnihub.sv.sound', { muted: false, volume: 1 }));
   useEffect(() => store('omnihub.sv.sound', sound), [sound]);
   const applySound = (el: HTMLMediaElement | null) => { if (el) { el.muted = sound.muted; el.volume = sound.volume; } };
   const keepSound = (el: HTMLMediaElement) => setSound({ muted: el.muted, volume: el.volume });
   const toggleMute = () => {
     const nextMuted = !sound.muted;
-    setSound(s => ({ ...s, muted: nextMuted }));
-    if (video.current) video.current.muted = nextMuted;
+    const nextVol = !nextMuted && sound.volume === 0 ? 0.6 : sound.volume;
+    setSound({ muted: nextMuted, volume: nextVol });
+    if (video.current) { video.current.muted = nextMuted; video.current.volume = nextVol; }
+    if (audioEl.current) { audioEl.current.muted = nextMuted; audioEl.current.volume = nextVol; }
+  };
+  const changeVolume = (vol: number) => {
+    const v = Math.max(0, Math.min(1, vol));
+    const nextMuted = v === 0;
+    setSound({ muted: nextMuted, volume: v });
+    if (video.current) { video.current.muted = nextMuted; video.current.volume = v; }
+    if (audioEl.current) { audioEl.current.muted = nextMuted; audioEl.current.volume = v; }
   };
   const shown = useRef<{ post: Post; at: number; pages: number } | undefined>(undefined);
   const pages = post?.image_count ?? 0;
@@ -224,46 +237,78 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
     return () => window.removeEventListener('keydown', handler);
   }, []);
   // 点画面：左边三分之一下一个、右边三分之一上一个（图集先翻图片，翻到头再换作品），中间单击唤起/关闭控件（视频双击中间暂停/继续）。
-  // 滑动：左滑/上滑下一个、右滑上一个、下拉跟手阻尼与退场动画关闭。控件展开时视频底部留出原生进度条。
-  const press = useRef<{ x: number; y: number; pulling: boolean } | undefined>(undefined);
+  // 滑动：左右滑跟手过渡切换上/下一个作品，下拉跟手阻尼与退场动画关闭。控件展开时视频底部留出原生进度条。
+  const press = useRef<{ x: number; y: number; mode: '' | 'x' | 'y' } | undefined>(undefined);
+  const [dragX, setDragX] = useState(0);
   const [pullY, setPullY] = useState(0);
   const [closing, setClosing] = useState(false);
-  useEffect(() => { setPullY(0); setClosing(false); }, [post?.id]);
+  const [animating, setAnimating] = useState(false);
+  useEffect(() => {
+    window.clearTimeout(slideTimer.current);
+    setDragX(0);
+    setPullY(0);
+    setClosing(false);
+    setAnimating(false);
+  }, [post?.id, page]);
   const prevPage = () => { if (page > 1) setPage(page - 1); else onPrev?.(); };
   const nextPage = () => { if (page < pages) setPage(page + 1); else onNext?.(); };
+  const triggerSlide = (dir: -1 | 1, action?: () => void) => {
+    if (!action) { setAnimating(true); setDragX(0); return; }
+    setAnimating(true);
+    setDragX(dir * window.innerWidth);
+    window.clearTimeout(slideTimer.current);
+    slideTimer.current = window.setTimeout(() => {
+      action();
+    }, 170);
+  };
   function move(e: ReactPointerEvent<HTMLDivElement>) {
     const start = press.current;
     if (!start || (!e.buttons && e.pointerType === 'mouse')) return;
     const dx = e.clientX - start.x, dy = e.clientY - start.y;
-    if (dy > 14 && dy > Math.abs(dx) * 1.15) {
-      start.pulling = true;
-      setPullY(dy * 0.85);
-    } else if (start.pulling) {
+    if (!start.mode) {
+      if (Math.abs(dx) > 10 && Math.abs(dx) >= Math.abs(dy)) start.mode = 'x';
+      else if (dy > 12 && dy > Math.abs(dx)) start.mode = 'y';
+    }
+    if (start.mode === 'x') {
+      const canGo = dx < 0 ? Boolean(onNext) : Boolean(onPrev);
+      setDragX(canGo ? dx : dx * 0.25);
+    } else if (start.mode === 'y') {
       setPullY(Math.max(0, dy * 0.85));
     }
   }
   function release(e: ReactPointerEvent<HTMLDivElement>) {
     const start = press.current;
     press.current = undefined;
-    if (!start || !post) { setPullY(0); return; }
+    if (!start || !post) { setDragX(0); setPullY(0); return; }
     const dx = e.clientX - start.x, dy = e.clientY - start.y;
-    if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.2) { setPullY(0); if (dx < 0) onNext?.(); else onPrev?.(); return; }
+    if (start.mode === 'x' || (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.15)) {
+      setPullY(0);
+      if (Math.abs(dx) > 55) {
+        triggerSlide(dx < 0 ? -1 : 1, dx < 0 ? onNext : onPrev);
+      } else {
+        setAnimating(true);
+        setDragX(0);
+      }
+      return;
+    }
     if (dy > 90 && dy > Math.abs(dx) * 1.15) {
       setClosing(true);
       setPullY(window.innerHeight * 0.45);
       window.setTimeout(() => onClose(), 150);
       return;
     }
+    setAnimating(true);
+    setDragX(0);
     setPullY(0);
-    if (dy < -80 && Math.abs(dy) > Math.abs(dx) * 1.2) { onNext?.(); return; }
+    if (dy < -80 && Math.abs(dy) > Math.abs(dx) * 1.2) { triggerSlide(-1, onNext); return; }
     if (Math.abs(dx) > 12 || Math.abs(dy) > 12) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) / Math.max(1, rect.width);
     const isVideo = post.kind === 'video';
     if (x < 1 / 3) {
-      if (isVideo) onNext?.(); else nextPage();
+      if (isVideo) triggerSlide(-1, onNext); else nextPage();
     } else if (x > 2 / 3) {
-      if (isVideo) onPrev?.(); else prevPage();
+      if (isVideo) triggerSlide(1, onPrev); else prevPage();
     } else {
       const now = Date.now();
       if (isVideo && now - lastCenterTap.current < 260) {
@@ -283,29 +328,47 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
   const pullScale = pullY > 0 ? Math.max(0.82, 1 - pullY / 950) : 1;
   const bgAlpha = Math.max(0.32, 1 - pullY / 380);
   const mediaMotionStyle: React.CSSProperties = {
-    transform: `translateY(${pullY}px) scale(${pullScale})`,
+    transform: `translate3d(${dragX}px, ${pullY}px, 0) scale(${pullScale})`,
     opacity: closing ? 0 : 1,
-    transition: press.current ? 'none' : 'transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 150ms ease-out',
+    transition: press.current && !animating ? 'none' : 'transform 170ms cubic-bezier(0.22, 1, 0.36, 1), opacity 150ms ease-out',
   };
   const gestures = <div className={`absolute inset-x-0 top-0 z-10 touch-none ${controlsVisible && post?.kind === 'video' ? 'bottom-14' : 'bottom-0'}`}
-    onPointerDown={e => { press.current = { x: e.clientX, y: e.clientY, pulling: false }; }} onPointerMove={move} onPointerUp={release} onPointerCancel={() => { press.current = undefined; setPullY(0); }} />;
-  return <div role="dialog" aria-label="短视频查看器" className="fixed inset-y-0 left-0 z-50 overflow-hidden text-white select-none transition-colors duration-75" style={{ right: 'var(--manga-dock, 0px)', backgroundColor: `rgba(0, 0, 0, ${bgAlpha})` }}>
+    onPointerDown={e => { if (e.pointerType === 'mouse' && e.button !== 0) return; setAnimating(false); press.current = { x: e.clientX, y: e.clientY, mode: '' }; }}
+    onPointerMove={move} onPointerUp={release}
+    onPointerCancel={() => { press.current = undefined; setAnimating(true); setDragX(0); setPullY(0); }} />;
+  const renderPostPreview = (p?: Post) => {
+    if (!p) return null;
+    if (p.kind === 'album') {
+      return <img className={fitClass} src={`/api/media/shortvideo/album/image?${query(p, { index: '1' })}`} alt="" draggable={false} />;
+    }
+    if (p.has_thumbnail) {
+      return <img className={fitClass} src={`/api/media/shortvideo/thumbnail?${query(p)}`} alt="" draggable={false} />;
+    }
+    return <div className="flex h-full w-full items-center justify-center bg-black/80 text-4xl text-white/30">▶</div>;
+  };
+  return <div role="dialog" aria-label="短视频查看器"
+    onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onClose(); }}
+    className="fixed inset-y-0 left-0 z-50 overflow-hidden text-white select-none transition-colors duration-75"
+    style={{ right: 'var(--manga-dock, 0px)', backgroundColor: `rgba(0, 0, 0, ${bgAlpha})` }}>
     {controlsVisible ? <div className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-3 py-2.5 pb-6">
       <p className="min-w-0 flex-1 truncate text-sm font-medium drop-shadow">{post ? `${post.creator_id.split('/').slice(1).join(' / ')} · ${post.published} · ${post.title}` : '加载中…'}</p>
       {notice ? <span className={`text-sm ${armed ? 'font-bold text-[#ff7b72]' : 'text-[#3fb950]'}`}>{notice}</span> : null}
       {loggedIn ? <ViewerIconButton label={liked ? '取消点赞 (Z)' : '点赞 (Z)'} active={liked} onClick={onLike}><IconHeart filled={liked} /></ViewerIconButton> : null}
       {isAdmin ? <ViewerIconButton label={armed ? '确认移到系统回收站' : '移到系统回收站 (Delete×2)'} danger={armed} onClick={doTrash}><IconTrash /></ViewerIconButton> : null}
-      {post?.kind === 'video' ? <>
+      {post?.kind === 'video' ? (
         <ViewerIconButton label={paused ? '继续播放 (空格 / 双击中间)' : '暂停播放 (空格 / 双击中间)'} onClick={togglePlayPause}>{paused ? <IconPlay /> : <IconPause />}</ViewerIconButton>
-        <ViewerIconButton label={sound.muted ? '取消静音 (M)' : '静音 (M)'} active={sound.muted} onClick={toggleMute}>{sound.muted ? <IconMute /> : <IconVolume />}</ViewerIconButton>
-      </> : null}
+      ) : null}
+      {post?.kind === 'video' || post?.music ? (
+        <VolumeSliderPill volume={sound.volume} muted={sound.muted} onToggleMute={toggleMute} onChangeVolume={changeVolume} />
+      ) : null}
       <ViewerIconButton label={fillMode === 'cover' ? '切换为完整适应' : '切换为裁切铺满'} active={fillMode === 'cover'} onClick={() => setFillMode(m => m === 'contain' ? 'cover' : 'contain')}>{fillMode === 'cover' ? <IconFit /> : <IconFill />}</ViewerIconButton>
       <ViewerIconButton label={fsPref ? '退出全屏 (F)' : '全屏模式 (F，跨媒体自动保持)'} active={fsPref} onClick={toggleFullscreen}>{fsPref ? <IconExitFullscreen /> : <IconFullscreen />}</ViewerIconButton>
-      <ViewerIconButton label="上一个 (← / 右侧点击)" disabled={!onPrev} onClick={onPrev}><IconPrev /></ViewerIconButton>
-      <ViewerIconButton label="下一个 (→ / 左侧点击)" disabled={!onNext} onClick={onNext}><IconNext /></ViewerIconButton>
-      <ViewerIconButton label="关闭 (Esc / 下滑)" onClick={onClose}><IconClose /></ViewerIconButton>
+      <ViewerIconButton label="上一个 (← / 右侧点击)" disabled={!onPrev} onClick={() => triggerSlide(1, onPrev)}><IconPrev /></ViewerIconButton>
+      <ViewerIconButton label="下一个 (→ / 左侧点击)" disabled={!onNext} onClick={() => triggerSlide(-1, onNext)}><IconNext /></ViewerIconButton>
+      <ViewerIconButton label="关闭 (Esc / 右键 / 下滑)" onClick={onClose}><IconClose /></ViewerIconButton>
     </div> : null}
     <div className="absolute inset-0 flex items-center justify-center overflow-hidden" style={mediaMotionStyle}>
+      {prevPost ? <div className="pointer-events-none absolute inset-y-0 -left-full flex h-full w-full items-center justify-center pr-3">{renderPostPreview(prevPost)}</div> : null}
       {!post ? <p>加载中…</p> : post.kind === 'video' && !canPlayCodec(post.codec)
         ? <p className="max-w-md text-center">这个视频是 {post.codec?.toUpperCase()} 编码，当前浏览器无法解码。请在 Deck 上的 omniHub 客户端中播放。</p>
         : post.kind === 'video'
@@ -317,13 +380,14 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
         : <>
           {gestures}
           <img key={post.id + page} className={fitClass} src={`/api/media/shortvideo/album/image?${query(post, { index: String(page) })}`} alt={`${page}/${pages}`} />
-          {post.music ? <audio key={post.id} ref={applySound} onVolumeChange={e => keepSound(e.currentTarget)} src={`/api/media/shortvideo/stream?${query(post, { music: '1' })}`} autoPlay loop controls className={`absolute bottom-3 left-3 z-20 h-8 ${controlsVisible ? '' : 'hidden'}`} /> : null}
+          {post.music ? <audio key={post.id} ref={el => { audioEl.current = el; applySound(el); }} onVolumeChange={e => keepSound(e.currentTarget)} src={`/api/media/shortvideo/stream?${query(post, { music: '1' })}`} autoPlay loop controls className={`absolute bottom-3 left-3 z-20 h-8 ${controlsVisible ? '' : 'hidden'}`} /> : null}
           {controlsVisible ? <div className="absolute bottom-3 right-3 z-20 flex items-center gap-2 rounded-full border border-white/15 bg-black/65 px-2.5 py-1 backdrop-blur-md">
             <ViewerIconButton label="上一张图片 (↑)" disabled={page <= 1} onClick={() => setPage(p => p - 1)}><IconPrev /></ViewerIconButton>
             <span className="px-1 text-xs font-medium">{page} / {pages}</span>
             <ViewerIconButton label="下一张图片 (↓)" disabled={page >= pages} onClick={() => setPage(p => p + 1)}><IconNext /></ViewerIconButton>
           </div> : null}
         </>}
+      {nextPost ? <div className="pointer-events-none absolute inset-y-0 left-full flex h-full w-full items-center justify-center pl-3">{renderPostPreview(nextPost)}</div> : null}
     </div>
   </div>;
 }

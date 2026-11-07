@@ -94,7 +94,10 @@ export default function GalleryPage({ active, isAdmin, loggedIn = false }: { act
         {liked.isLiked(photo) ? <span className="absolute left-1 top-1 text-[#f778ba]">♥</span> : null}
       </button>;
     }} />
-    {open !== undefined ? <Viewer index={open} total={paged.total} photo={paged.item(open)} liked={liked.isLiked(paged.item(open))} restoring={channel === 'hidden'}
+    {open !== undefined ? <Viewer index={open} total={paged.total} photo={paged.item(open)}
+      prevPhoto={open > 0 ? paged.item(open - 1) : undefined}
+      nextPhoto={open < paged.total - 1 ? paged.item(open + 1) : undefined}
+      liked={liked.isLiked(paged.item(open))} restoring={channel === 'hidden'}
       isAdmin={isAdmin} loggedIn={loggedIn}
       onLike={() => { const p = paged.item(open); if (p) liked.toggle(p); }}
       onTrash={() => { const p = paged.item(open); if (!p) return Promise.resolve(); return (channel === 'hidden' ? restore('gallery', p.id) : trash('gallery', p.id)).then(() => setReload(n => n + 1)); }}
@@ -102,11 +105,11 @@ export default function GalleryPage({ active, isAdmin, loggedIn = false }: { act
   </section>;
 }
 
-// Viewer：原图查看。先显示缩略图，原图到达后替换；←/→ 翻页，Z 点赞，Delete 按两次移到回收站，Esc 关闭（放大时先复位）。
+// Viewer：原图查看。先显示缩略图，原图到达后替换；←/→ 翻页，Z 点赞，Delete 按两次移到回收站，Esc 或鼠标右键关闭（放大时 Esc 先复位）。
 // 滚轮/双指缩放、双击放大、拖动平移，+/-/0 键缩放与复位；⤓ 下载原图（原文件名）。
 // 行为上报：停留 0.6 秒以上记为看过；离开时 1 秒内划走算 skip，停留 4 秒以上算 dwell。
-function Viewer({ index, total, photo, liked, restoring, isAdmin, loggedIn, onLike, onTrash, onIndex, onClose }: {
-  index: number; total: number; photo?: Photo; liked: boolean; restoring: boolean; isAdmin: boolean; loggedIn: boolean; onLike(): void; onTrash(): Promise<void>; onIndex(i: number): void; onClose(): void;
+function Viewer({ index, total, photo, prevPhoto, nextPhoto, liked, restoring, isAdmin, loggedIn, onLike, onTrash, onIndex, onClose }: {
+  index: number; total: number; photo?: Photo; prevPhoto?: Photo; nextPhoto?: Photo; liked: boolean; restoring: boolean; isAdmin: boolean; loggedIn: boolean; onLike(): void; onTrash(): Promise<void>; onIndex(i: number): void; onClose(): void;
 }) {
   const [loaded, setLoaded] = useState('');
   const [notice, setNotice] = useState('');
@@ -157,7 +160,13 @@ function Viewer({ index, total, photo, liked, restoring, isAdmin, loggedIn, onLi
   };
   const goPrev = () => { if (index > 0) onIndex(index - 1); };
   const goNext = () => { if (index < total - 1) onIndex(index + 1); };
-  const zoom = useZoom(photo?.id, { onSwipeLeft: goNext, onSwipeRight: goPrev, onSwipeDown: onClose });
+  const zoom = useZoom(photo?.id, {
+    canPrev: index > 0,
+    canNext: index < total - 1,
+    onSwipeLeft: goNext,
+    onSwipeRight: goPrev,
+    onSwipeDown: onClose,
+  });
   const tapTimer = useRef(0);
   useEffect(() => () => window.clearTimeout(tapTimer.current), []);
   const keys = useRef({ index, total, isAdmin, loggedIn, onIndex, onClose, onLike, doTrash, zoom, toggleFullscreen });
@@ -185,7 +194,10 @@ function Viewer({ index, total, photo, liked, restoring, isAdmin, loggedIn, onLi
   }, []);
   const fitClass = fillMode === 'cover' ? 'h-full w-full object-cover' : 'h-full w-full object-contain';
   const bgAlpha = Math.max(0.32, 1 - zoom.pullY / 380);
-  return <div role="dialog" aria-label="图片查看器" className="fixed inset-y-0 left-0 z-50 overflow-hidden text-white select-none transition-colors duration-75" style={{ right: 'var(--manga-dock, 0px)', backgroundColor: `rgba(0, 0, 0, ${bgAlpha})` }}>
+  return <div role="dialog" aria-label="图片查看器"
+    onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onClose(); }}
+    className="fixed inset-y-0 left-0 z-50 overflow-hidden text-white select-none transition-colors duration-75"
+    style={{ right: 'var(--manga-dock, 0px)', backgroundColor: `rgba(0, 0, 0, ${bgAlpha})` }}>
     {controlsVisible ? <div className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/85 via-black/45 to-transparent px-3 py-2.5 pb-6">
       <p className="min-w-0 flex-1 truncate text-sm font-medium drop-shadow">{index + 1} / {total}{photo ? ` · ${photo.width}×${photo.height}` : ''}</p>
       {notice ? <span className={`text-sm ${armed ? 'font-bold text-[#ff7b72]' : 'text-[#3fb950]'}`}>{notice}</span> : null}
@@ -196,7 +208,7 @@ function Viewer({ index, total, photo, liked, restoring, isAdmin, loggedIn, onLi
       <ViewerIconButton label={fsPref ? '退出全屏 (F)' : '全屏模式 (F，跨媒体自动保持)'} active={fsPref} onClick={toggleFullscreen}>{fsPref ? <IconExitFullscreen /> : <IconFullscreen />}</ViewerIconButton>
       <ViewerIconButton label="上一张 (← / 右侧点击)" disabled={index <= 0} onClick={goPrev}><IconPrev /></ViewerIconButton>
       <ViewerIconButton label="下一张 (→ / 左侧点击)" disabled={index >= total - 1} onClick={goNext}><IconNext /></ViewerIconButton>
-      <ViewerIconButton label="关闭 (Esc / 下滑)" onClick={onClose}><IconClose /></ViewerIconButton>
+      <ViewerIconButton label="关闭 (Esc / 右键 / 下滑)" onClick={onClose}><IconClose /></ViewerIconButton>
     </div> : null}
     <div className="absolute inset-0 flex touch-none items-center justify-center overflow-hidden" {...zoom.handlers}
       onClick={e => {
@@ -207,31 +219,50 @@ function Viewer({ index, total, photo, liked, restoring, isAdmin, loggedIn, onLi
         const r = e.currentTarget.getBoundingClientRect();
         const ratio = (e.clientX - r.left) / Math.max(1, r.width);
         tapTimer.current = window.setTimeout(() => {
-          if (ratio < 1 / 3) goNext();
-          else if (ratio > 2 / 3) goPrev();
+          if (ratio < 1 / 3) zoom.slideNext();
+          else if (ratio > 2 / 3) zoom.slidePrev();
           else setControlsVisible(v => !v);
         }, 220);
       }}>
-      {photo ? <div className="flex h-full w-full items-center justify-center" style={zoom.style}>
-        {loaded !== photo.id ? <img className={`absolute ${fitClass}`} src={`/api/media/gallery/thumbnail?${query(photo)}`} alt="" draggable={false} /> : null}
-        <img key={photo.id} className={`relative ${fitClass}`} src={`/api/media/gallery/original?${query(photo)}`} alt={photo.filename} draggable={false} onLoad={() => setLoaded(photo.id)} />
+      {photo ? <div className="relative flex h-full w-full items-center justify-center" style={zoom.trackStyle}>
+        {prevPhoto ? <div className="pointer-events-none absolute inset-y-0 -left-full flex h-full w-full items-center justify-center pr-3">
+          <img className={fitClass} src={`/api/media/gallery/original?${query(prevPhoto)}`} alt="" draggable={false} />
+        </div> : null}
+        <div className="flex h-full w-full items-center justify-center" style={zoom.style}>
+          {loaded !== photo.id ? <img className={`absolute ${fitClass}`} src={`/api/media/gallery/thumbnail?${query(photo)}`} alt="" draggable={false} /> : null}
+          <img key={photo.id} className={`relative ${fitClass}`} src={`/api/media/gallery/original?${query(photo)}`} alt={photo.filename} draggable={false} onLoad={() => setLoaded(photo.id)} />
+        </div>
+        {nextPhoto ? <div className="pointer-events-none absolute inset-y-0 left-full flex h-full w-full items-center justify-center pl-3">
+          <img className={fitClass} src={`/api/media/gallery/original?${query(nextPhoto)}`} alt="" draggable={false} />
+        </div> : null}
       </div> : <p>加载中…</p>}
     </div>
   </div>;
 }
 
 // useZoom：大图缩放与平移。滚轮或双指捏合 1～5 倍，双击在 1 倍与 2.5 倍间切换，放大后拖动平移；
-// 未放大时支持左右滑动切换图片、下拉跟手阻尼与退场动画关闭；放大状态或刚拖动过时，点击不触发翻页。
+// 未放大时支持左右跟手滑动切换图片、下拉跟手阻尼与退场动画关闭；放大状态或刚拖动过时，点击不触发翻页。
 function useZoom(
   key: string | undefined,
-  swipe?: { onSwipeLeft?: () => void; onSwipeRight?: () => void; onSwipeDown?: () => void },
+  swipe?: { canPrev?: boolean; canNext?: boolean; onSwipeLeft?: () => void; onSwipeRight?: () => void; onSwipeDown?: () => void },
 ) {
   const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
+  const [dragX, setDragX] = useState(0);
   const [pullY, setPullY] = useState(0);
   const [closing, setClosing] = useState(false);
+  const [animatingX, setAnimatingX] = useState(false);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
-  const gesture = useRef({ moved: false, pinch: 0, startX: 0, startY: 0, pulling: false });
-  useEffect(() => { setView({ scale: 1, x: 0, y: 0 }); setPullY(0); setClosing(false); }, [key]);
+  const gesture = useRef({ moved: false, pinch: 0, startX: 0, startY: 0, mode: '' as '' | 'x' | 'y' });
+  const slideTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(slideTimer.current), []);
+  useEffect(() => {
+    window.clearTimeout(slideTimer.current);
+    setView({ scale: 1, x: 0, y: 0 });
+    setDragX(0);
+    setPullY(0);
+    setClosing(false);
+    setAnimatingX(false);
+  }, [key]);
   const clamp = (scale: number) => Math.min(5, Math.max(1, scale));
   const zoomAt = (to: (scale: number) => number, cx: number, cy: number) => setView(v => {
     const next = clamp(to(v.scale));
@@ -243,13 +274,27 @@ function useZoom(
     const r = e.currentTarget.getBoundingClientRect();
     return [e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2];
   };
+  const triggerSlide = (dir: -1 | 1) => {
+    if (dir < 0 && !swipe?.canNext) { setAnimatingX(true); setDragX(0); return; }
+    if (dir > 0 && !swipe?.canPrev) { setAnimatingX(true); setDragX(0); return; }
+    setAnimatingX(true);
+    setDragX(dir * window.innerWidth);
+    window.clearTimeout(slideTimer.current);
+    slideTimer.current = window.setTimeout(() => {
+      if (dir < 0) swipe?.onSwipeLeft?.();
+      else swipe?.onSwipeRight?.();
+    }, 170);
+  };
   const handlers = {
     onWheel: (e: React.WheelEvent) => { const [cx, cy] = center(e); zoomAt(s => s * (e.deltaY < 0 ? 1.2 : 1 / 1.2), cx, cy); },
     onDoubleClick: (e: React.MouseEvent) => { const [cx, cy] = center(e); zoomAt(s => s > 1 ? 1 : 2.5, cx, cy); },
     onPointerDown: (e: React.PointerEvent) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      setAnimatingX(false);
       pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pointers.current.size === 1) gesture.current = { moved: false, pinch: 0, startX: e.clientX, startY: e.clientY, pulling: false };
+      if (pointers.current.size === 1) gesture.current = { moved: false, pinch: 0, startX: e.clientX, startY: e.clientY, mode: '' };
       if (pointers.current.size === 2) {
+        setDragX(0);
         setPullY(0);
         const [a, b] = [...pointers.current.values()];
         gesture.current.pinch = Math.hypot(a.x - b.x, a.y - b.y);
@@ -275,11 +320,16 @@ function useZoom(
       } else if (view.scale === 1 && (e.buttons || e.pointerType !== 'mouse')) {
         const totalDx = e.clientX - gesture.current.startX;
         const totalDy = e.clientY - gesture.current.startY;
-        if (totalDy > 14 && totalDy > Math.abs(totalDx) * 1.15) {
-          gesture.current.pulling = true;
+        if (!gesture.current.mode) {
+          if (Math.abs(totalDx) > 10 && Math.abs(totalDx) >= Math.abs(totalDy)) gesture.current.mode = 'x';
+          else if (totalDy > 12 && totalDy > Math.abs(totalDx)) gesture.current.mode = 'y';
+        }
+        if (gesture.current.mode === 'x') {
           gesture.current.moved = true;
-          setPullY(totalDy * 0.85);
-        } else if (gesture.current.pulling) {
+          const canGo = totalDx < 0 ? swipe?.canNext : swipe?.canPrev;
+          setDragX(canGo ? totalDx : totalDx * 0.25);
+        } else if (gesture.current.mode === 'y') {
+          gesture.current.moved = true;
           setPullY(Math.max(0, totalDy * 0.85));
         }
       }
@@ -290,11 +340,15 @@ function useZoom(
       if (wasSingle && view.scale === 1) {
         const totalDx = e.clientX - gesture.current.startX;
         const totalDy = e.clientY - gesture.current.startY;
-        if (Math.abs(totalDx) > 55 && Math.abs(totalDx) > Math.abs(totalDy) * 1.2) {
-          gesture.current.moved = true;
+        if (gesture.current.mode === 'x' || (Math.abs(totalDx) > 55 && Math.abs(totalDx) > Math.abs(totalDy) * 1.15)) {
           setPullY(0);
-          if (totalDx < 0) swipe?.onSwipeLeft?.();
-          else swipe?.onSwipeRight?.();
+          if (Math.abs(totalDx) > 55) {
+            gesture.current.moved = true;
+            triggerSlide(totalDx < 0 ? -1 : 1);
+            return;
+          }
+          setAnimatingX(true);
+          setDragX(0);
           return;
         }
         if (totalDy > 90 && totalDy > Math.abs(totalDx) * 1.15) {
@@ -305,9 +359,11 @@ function useZoom(
           return;
         }
       }
+      setAnimatingX(true);
+      setDragX(0);
       setPullY(0);
     },
-    onPointerCancel: (e: React.PointerEvent) => { pointers.current.delete(e.pointerId); setPullY(0); },
+    onPointerCancel: (e: React.PointerEvent) => { pointers.current.delete(e.pointerId); setAnimatingX(true); setDragX(0); setPullY(0); },
   };
   const pullScale = pullY > 0 ? Math.max(0.82, 1 - pullY / 950) : view.scale;
   const ty = view.y + pullY;
@@ -317,7 +373,13 @@ function useZoom(
     zoomed: view.scale > 1,
     reset: () => setView({ scale: 1, x: 0, y: 0 }),
     step: (factor: number) => zoomAt(s => s * factor, 0, 0),
+    slideNext: () => triggerSlide(-1),
+    slidePrev: () => triggerSlide(1),
     consumeClick: () => { const used = view.scale > 1 || gesture.current.moved; gesture.current.moved = false; return used; },
+    trackStyle: {
+      transform: `translate3d(${dragX}px, 0, 0)`,
+      transition: pointers.current.size && !animatingX ? 'none' : 'transform 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+    } as React.CSSProperties,
     style: {
       transform: `translate(${view.x}px, ${ty}px) scale(${pullScale})`,
       opacity: closing ? 0 : 1,

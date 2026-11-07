@@ -1,8 +1,24 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, post, request } from './api';
-import { chip, iconButton, store, stored } from './ui';
+import { store, stored } from './ui';
 import { MusicRatingButtons } from './MusicFeedback';
 import { useHash } from './useHash';
+import {
+  IconForward30,
+  IconPause,
+  IconPlay,
+  IconRepeatList,
+  IconRepeatOne,
+  IconRewind10,
+  IconShuffle,
+  IconSkipBack,
+  IconSkipForward,
+  IconSleep,
+  IconSpeed,
+  IconStop,
+  ViewerIconButton,
+  VolumeSliderPill,
+} from './ViewerControls';
 
 // 音声播放引擎（全局一份，切换页面不中断；与桌面端同一套断点接口）。
 // 断点按账号存服务端：听了不到 3 秒不记，离结尾不到 5 秒算听完。分集按专辑内序号向服务端逐条取。
@@ -16,6 +32,8 @@ const sleepChoices = [0, 15, 30, 45, 60];
 export type Engine = {
   albumId: string; albumTitle: string; track?: Track; position: number; total: number;
   playing: boolean; current: number; duration: number; rate: number; mode: Mode; sleepMinutes: number; error: string;
+  volume: number; muted: boolean;
+  setVolume(v: number): void; toggleMute(): void;
   open(album: string, title: string, pos: number, autoplay: boolean): void;
   continueAlbum(album: string, title: string): void;
   toggle(): void; seek(seconds: number): void; seekBy(delta: number): void;
@@ -47,6 +65,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   const [duration, setDuration] = useState(0);
   const [rate, setRate] = useState(() => stored('omnihub.audio.rate', 1));
   const [mode, setMode] = useState<Mode>(() => stored('omnihub.audio.mode', 'list'));
+  const [sound, setSound] = useState(() => stored('omnihub.audio.sound', { muted: false, volume: 1 }));
   const [sleepMinutes, setSleepMinutes] = useState(0);
   const [sleepAt, setSleepAt] = useState(0);
   const [error, setError] = useState('');
@@ -59,7 +78,14 @@ export function AudioProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => store('omnihub.audio.rate', rate), [rate]);
   useEffect(() => store('omnihub.audio.mode', mode), [mode]);
+  useEffect(() => store('omnihub.audio.sound', sound), [sound]);
   useEffect(() => { if (audio.current) audio.current.playbackRate = rate; }, [rate, track]);
+  useEffect(() => {
+    if (audio.current) {
+      audio.current.muted = sound.muted;
+      audio.current.volume = Math.max(0, Math.min(1, sound.volume));
+    }
+  }, [sound, track]);
 
   const save = useCallback(() => {
     const a = audio.current, t = state.current.track;
@@ -189,6 +215,19 @@ export function AudioProvider({ children }: { children: ReactNode }) {
 
   const engine = useMemo<Engine>(() => ({
     albumId, albumTitle, track, position, total, playing, current, duration, rate, mode, sleepMinutes, error,
+    volume: sound.volume, muted: sound.muted,
+    setVolume: (v: number) => {
+      const clamped = Math.max(0, Math.min(1, v));
+      const nextMuted = clamped === 0;
+      setSound({ muted: nextMuted, volume: clamped });
+      if (audio.current) { audio.current.muted = nextMuted; audio.current.volume = clamped; }
+    },
+    toggleMute: () => {
+      const nextMuted = !sound.muted;
+      const nextVol = !nextMuted && sound.volume === 0 ? 0.6 : sound.volume;
+      setSound({ muted: nextMuted, volume: nextVol });
+      if (audio.current) { audio.current.muted = nextMuted; audio.current.volume = nextVol; }
+    },
     open, continueAlbum, next, previous, stop,
     music, musicVersion, musicCatalogVersion, refreshMusic, rateMusic,
     toggle: () => { const a = audio.current; if (!a) return; if (a.paused) void a.play(); else a.pause(); },
@@ -201,7 +240,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
       const n = sleepChoices[(sleepChoices.indexOf(sleepMinutes) + 1) % sleepChoices.length];
       setSleepMinutes(n); setSleepAt(n ? Date.now() + n * 60000 : 0);
     },
-  }), [albumId, albumTitle, track, position, total, playing, current, duration, rate, mode, sleepMinutes, error, open, continueAlbum, next, previous, stop, music, musicVersion, musicCatalogVersion, refreshMusic, rateMusic]);
+  }), [albumId, albumTitle, track, position, total, playing, current, duration, rate, mode, sound, sleepMinutes, error, open, continueAlbum, next, previous, stop, music, musicVersion, musicCatalogVersion, refreshMusic, rateMusic]);
 
   return <Context.Provider value={engine}>
     <audio ref={audio} preload="metadata"
@@ -212,7 +251,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   </Context.Provider>;
 }
 
-const modeLabel: Record<Mode, string> = { list: '🔁 列表', single: '🔂 单集', random: '🔀 随机' };
+const modeLabel: Record<Mode, string> = { list: '列表循环', single: '单曲循环', random: '随机播放' };
 
 // 曲目标签：艺人、专辑、风格，以及下载音乐时写进文件的 Last.fm 听众、播放、重播率。
 type Tags = { has_cover?: boolean; artist?: string; album?: string; genre?: string; lastfm_listeners?: number; lastfm_playcount?: number; lastfm_replay?: number;
@@ -253,24 +292,26 @@ function CompactAudioBar({ onOpen }: { onOpen(): void }) {
     tags.source_views ? `来源：播放 ${tags.source_views}${tags.source_likes ? `，点赞 ${tags.source_likes}` : ''}` : '',
     tags.release_date ? `发布 ${tags.release_date}${tags.download_date ? `  ·  下载 ${tags.download_date}` : ''}` : '',
     `${e.albumTitle}（${e.position + 1}/${e.total}）`].filter(Boolean).join('\n');
+  const ModeIcon = e.mode === 'single' ? IconRepeatOne : e.mode === 'random' ? IconShuffle : IconRepeatList;
   return <div ref={bar} className="audio-bar" aria-label="全局播放器">
     <button className="audio-bar-title" onClick={onOpen} title={tip} aria-label="打开正在收听">
       <span>{e.track.title}</span><small className={e.error ? 'text-danger' : ''}>{e.error || tagLine || `${e.albumTitle}（${e.position + 1}/${e.total}）`}</small>
     </button>
-    <div className="audio-bar-transport">
-      <button className={iconButton} onClick={e.previous} title="上一首" aria-label="上一首">⏮</button>
-      <button className={`${iconButton} text-2xl`} onClick={e.toggle} aria-label={e.playing ? '暂停' : '播放'}>{e.playing ? 'Ⅱ' : '▶'}</button>
-      <button className={iconButton} onClick={e.next} title="下一首" aria-label="下一首">⏭</button>
+    <div className="audio-bar-transport gap-1.5">
+      <ViewerIconButton tooltip="up" label="上一首" onClick={e.previous}><IconSkipBack /></ViewerIconButton>
+      <ViewerIconButton tooltip="up" primary label={e.playing ? '暂停' : '播放'} onClick={e.toggle}>{e.playing ? <IconPause /> : <IconPlay />}</ViewerIconButton>
+      <ViewerIconButton tooltip="up" label="下一首" onClick={e.next}><IconSkipForward /></ViewerIconButton>
     </div>
     <div className="audio-bar-progress"><span>{formatTime(e.current)}</span><input type="range" aria-label="播放进度" min={0} max={Math.max(1, e.duration)} step={1} value={e.current} onChange={ev => e.seek(Number(ev.target.value))} /><span>{formatTime(e.duration)}</span></div>
-    <details className="audio-bar-more"><summary>更多</summary><div className="audio-bar-menu">
-      <MusicRatingButtons id={e.track.id} engine={e} />
-      <button className={chip(false)} onClick={() => e.seekBy(-10)}>后退 10 秒</button>
-      <button className={chip(false)} onClick={() => e.seekBy(30)}>前进 30 秒</button>
-      <button className={chip(false)} onClick={e.cycleRate} title="倍速">{e.rate}×</button>
-      <button className={chip(false)} onClick={e.cycleMode}>{modeLabel[e.mode]}</button>
-      <button className={chip(e.sleepMinutes > 0)} onClick={e.cycleSleep} title="定时关闭">{e.sleepMinutes ? `${e.sleepMinutes} 分钟后关闭` : '定时关闭'}</button>
-      <button className={chip(false)} onClick={() => e.stop()} title="停止并收起">停止并收起</button>
-    </div></details>
+    <div className="flex flex-wrap items-center gap-1.5">
+      <MusicRatingButtons id={e.track.id} engine={e} size="md" tooltip="up" />
+      <VolumeSliderPill tooltip="up" volume={e.volume} muted={e.muted} onToggleMute={e.toggleMute} onChangeVolume={e.setVolume} />
+      <ViewerIconButton tooltip="up" label="后退 10 秒" onClick={() => e.seekBy(-10)}><IconRewind10 /></ViewerIconButton>
+      <ViewerIconButton tooltip="up" label="前进 30 秒" onClick={() => e.seekBy(30)}><IconForward30 /></ViewerIconButton>
+      <ViewerIconButton tooltip="up" active={e.rate !== 1} badge={e.rate !== 1 ? `${e.rate}×` : undefined} label={`倍速：${e.rate}× (点击切换)`} onClick={e.cycleRate}><IconSpeed /></ViewerIconButton>
+      <ViewerIconButton tooltip="up" active={e.mode !== 'list'} label={`模式：${modeLabel[e.mode]} (点击切换)`} onClick={e.cycleMode}><ModeIcon /></ViewerIconButton>
+      <ViewerIconButton tooltip="up" active={e.sleepMinutes > 0} badge={e.sleepMinutes ? `${e.sleepMinutes}m` : undefined} label={e.sleepMinutes ? `定时关闭：${e.sleepMinutes} 分钟后` : '定时关闭'} onClick={e.cycleSleep}><IconSleep /></ViewerIconButton>
+      <ViewerIconButton tooltip="up" label="停止并收起" onClick={() => e.stop()}><IconStop /></ViewerIconButton>
+    </div>
   </div>;
 }

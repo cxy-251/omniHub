@@ -14,8 +14,7 @@
 .listening-artwork h2 { font-size: 28px; font-weight: 650; margin-top: 20px; overflow-wrap: anywhere; }
 .listening-artwork > p { margin-top: 4px; color: var(--text-muted); overflow-wrap: anywhere; }
 .listening-rating { margin-top: 20px; }
-.listening-rating button { min-height: 40px; padding: 8px 18px; border-radius: 7px; }
-.listening-rating > span { gap: 12px; }
+.listening-rating > span { gap: 10px; }
 .listening-lyrics { min-width: 0; }
 .lyrics-heading { display: flex; align-items: center; justify-content: space-between; min-height: 40px; margin-bottom: 12px; }
 .lyrics-heading h2 { font-size: 16px; color: var(--text-muted); }

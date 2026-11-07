@@ -6,6 +6,7 @@ import { chip, stored, store } from './ui';
 import VirtualList from './VirtualList';
 import MusicCollections from './MusicCollections';
 import { MusicRatingButtons } from './MusicFeedback';
+import { IconPause, IconPlay, IconPrev, IconRepeatList, ViewerIconButton } from './ViewerControls';
 
 type Album = { id: string; title: string; track_count: number; cover_path?: string; library_name?: string };
 const lyricStatusText: Record<string, string> = { plain: '只有纯文本歌词', search: '歌词是搜索来的，待核对', none: '查不到歌词', error: '歌词查询失败', unknown: '没查过歌词' };
@@ -43,11 +44,12 @@ function MusicPane({ artist }: { artist?: Artist }) {
   };
   return <div className="min-w-0 space-y-2">
     <div className="flex flex-wrap items-center gap-2">
-      {album ? <button className={chip(false)} onClick={() => setAlbum(undefined)}>← {artist.title}</button> : null}
+      {album ? <ViewerIconButton label={`返回 ${artist.title}`} onClick={() => setAlbum(undefined)}><IconPrev /></ViewerIconButton> : null}
       <h2 className="truncate text-lg font-semibold">{album ? album.album : artist.title}</h2>
       <span className="text-sm text-muted">{album ? `${album.count} 首` : `${singles} 首单曲 · ${albums.length} 张专辑`}</span>
-      <button className={chip(engine?.albumId === scope && engine?.mode === 'list')} onClick={() => album ? loop(album.id, album.album) : loop(artist.id, artist.title)}>
-        {album ? '🔁 循环这张专辑' : '🔁 循环这个歌手'}</button>
+      <ViewerIconButton active={engine?.albumId === scope && engine?.mode === 'list'} label={album ? '循环播放这张专辑' : '循环播放这个歌手'} onClick={() => album ? loop(album.id, album.album) : loop(artist.id, artist.title)}>
+        <IconRepeatList />
+      </ViewerIconButton>
       <button className={`ml-auto ${chip(review)}`} onClick={() => setReview(v => !v)}>歌词待处理</button>
       {engine?.music.can_rate ? <button className={chip(artist.main_artist)} onClick={() => {
         void post('/api/media/audio/music/artist', { id: artist.id, main: !artist.main_artist }).then(() => engine?.refreshMusic(true)).catch((e: Error) => setError(e.message));
@@ -176,9 +178,9 @@ export default function AudioPage({ active }: { active: boolean }) {
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="truncate text-lg font-semibold">{album?.title ?? '没有音声专辑'}</h2>
         {album ? <span className="text-sm text-muted">{paged.total} 集</span> : null}
-        {album ? <button className={chip(engine?.albumId === album.id && !!engine?.playing)} onClick={() => {
+        {album ? <ViewerIconButton active={engine?.albumId === album.id && !!engine?.playing} label={engine?.albumId === album.id && engine?.playing ? '暂停' : '继续收听'} onClick={() => {
           if (engine?.albumId === album.id && engine.track) engine.toggle(); else engine?.continueAlbum(album.id, album.title);
-        }}>{engine?.albumId === album.id && engine?.playing ? '⏸ 暂停' : '▶ 继续收听'}</button> : null}
+        }}>{engine?.albumId === album.id && engine?.playing ? <IconPause /> : <IconPlay />}</ViewerIconButton> : null}
         {album ? <button className={`ml-auto ${chip(unsyncedOnly)}`} onClick={() => setUnsyncedOnly(v => !v)}>歌词待处理</button> : null}
         <input className="w-48 rounded border border-line bg-background px-2 py-1 text-sm" placeholder="搜索分集" value={query} onChange={e => setQuery(e.target.value)} />
       </div>
