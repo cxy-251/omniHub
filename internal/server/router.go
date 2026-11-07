@@ -401,6 +401,9 @@ func (r *Router) registerRoutes() {
 		http.Error(w, "open games through the indexed web entry", http.StatusGone)
 	})
 
+	// 实验室接口
+	r.mux.HandleFunc("/api/weblab/rubiks/solve", r.handleWebLabRubiksSolve)
+
 	// 嵌入式 Web 根路由静态文件
 	r.mux.Handle("/", web.Handler())
 }

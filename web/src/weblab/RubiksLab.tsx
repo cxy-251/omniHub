@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '../api';
 import { isSolvedState, type SolveResult } from './rubiksSolver';
 
 type Axis = 'x' | 'y' | 'z';
@@ -181,7 +182,87 @@ function formatMoveLabel(axis: Axis, layer: number, size: number, dir: 1 | -1): 
     if (axis === 'y') return dir === 1 ? 'D' : "D'";
     return dir === 1 ? 'B' : "B'";
   }
+  if (size >= 4 && layer === size - 2) {
+    if (axis === 'x') return dir === -1 ? '2R' : "2R'";
+    if (axis === 'y') return dir === -1 ? '2U' : "2U'";
+    return dir === -1 ? '2F' : "2F'";
+  }
+  if (size >= 4 && layer === 1) {
+    if (axis === 'x') return dir === 1 ? '2L' : "2L'";
+    if (axis === 'y') return dir === 1 ? '2D' : "2D'";
+    return dir === 1 ? '2B' : "2B'";
+  }
+  if (size >= 5 && layer === size - 3) {
+    if (axis === 'x') return dir === -1 ? '3R' : "3R'";
+    if (axis === 'y') return dir === -1 ? '3U' : "3U'";
+    return dir === -1 ? '3F' : "3F'";
+  }
+  if (size >= 6 && layer === 2) {
+    if (axis === 'x') return dir === 1 ? '3L' : "3L'";
+    if (axis === 'y') return dir === 1 ? '3D' : "3D'";
+    return dir === 1 ? '3B' : "3B'";
+  }
   return `${axis.toUpperCase()}${layer + 1}${dir === 1 ? '+' : '-'}`;
+}
+
+const FACE_DIR_MAP: Record<'U' | 'R' | 'F' | 'D' | 'L' | 'B', Vec3> = {
+  U: { x: 0, y: 1, z: 0 }, D: { x: 0, y: -1, z: 0 }, R: { x: 1, y: 0, z: 0 },
+  L: { x: -1, y: 0, z: 0 }, F: { x: 0, y: 0, z: 1 }, B: { x: 0, y: 0, z: -1 },
+};
+
+function getStickerFaceColor(at: Map<string, Cubelet>, pos: [number, number, number], face: 'U' | 'R' | 'F' | 'D' | 'L' | 'B'): 'U' | 'R' | 'F' | 'D' | 'L' | 'B' {
+  const cb = at.get(pos.join(','));
+  if (!cb) return 'U';
+  const inv = { x: -cb.rot.x, y: -cb.rot.y, z: -cb.rot.z, w: cb.rot.w };
+  const l = qRotVec(inv, FACE_DIR_MAP[face]);
+  if (l.x > 0.5) return 'R';
+  if (l.x < -0.5) return 'L';
+  if (l.y > 0.5) return 'U';
+  if (l.y < -0.5) return 'D';
+  return l.z > 0.5 ? 'F' : 'B';
+}
+
+function extractStickers(cubelets: Cubelet[], size: number): string {
+  const at = new Map(cubelets.map(c => [c.coords.join(','), c]));
+  const h = size - 1;
+  let s = '';
+  // Face U: y=h, row: z from 0 to h, col: x from 0 to h
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      s += getStickerFaceColor(at, [c, h, r], 'U');
+    }
+  }
+  // Face R: x=h, row: y from h to 0, col: z from h to 0
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      s += getStickerFaceColor(at, [h, h - r, h - c], 'R');
+    }
+  }
+  // Face F: z=h, row: y from h to 0, col: x from 0 to h
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      s += getStickerFaceColor(at, [c, h - r, h], 'F');
+    }
+  }
+  // Face D: y=0, row: z from h to 0, col: x from 0 to h
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      s += getStickerFaceColor(at, [c, 0, h - r], 'D');
+    }
+  }
+  // Face L: x=0, row: y from h to 0, col: z from 0 to h
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      s += getStickerFaceColor(at, [0, h - r, c], 'L');
+    }
+  }
+  // Face B: z=0, row: y from h to 0, col: x from h to 0
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      s += getStickerFaceColor(at, [h - c, h - r, 0], 'B');
+    }
+  }
+  return s;
 }
 
 function parseFormulaString(formula: string, size: number): RubiksMove[] {
@@ -193,9 +274,34 @@ function parseFormulaString(formula: string, size: number): RubiksMove[] {
   for (const raw of tokens) {
     const isDouble = raw.endsWith('2') || raw.endsWith("2'");
     const prime = raw.includes("'");
-    const base = raw.replace(/[2']/g, '');
+    const base = raw.replace(/[2']+$/g, '');
     let move: Omit<RubiksMove, 'label'> | null = null;
-    if (base === 'R') move = { axis: 'x', layers: [size - 1], dir: prime ? 1 : -1 };
+
+    if (base.endsWith('w')) {
+      const face = base.slice(-2, -1);
+      if (face === 'R') move = { axis: 'x', layers: [size - 2, size - 1], dir: prime ? 1 : -1 };
+      else if (face === 'L') move = { axis: 'x', layers: [0, 1], dir: prime ? -1 : 1 };
+      else if (face === 'U') move = { axis: 'y', layers: [size - 2, size - 1], dir: prime ? 1 : -1 };
+      else if (face === 'D') move = { axis: 'y', layers: [0, 1], dir: prime ? -1 : 1 };
+      else if (face === 'F') move = { axis: 'z', layers: [size - 2, size - 1], dir: prime ? 1 : -1 };
+      else if (face === 'B') move = { axis: 'z', layers: [0, 1], dir: prime ? -1 : 1 };
+    } else if (base.startsWith('2') && base.length === 2) {
+      const face = base[1];
+      if (face === 'R') move = { axis: 'x', layers: [size - 2], dir: prime ? 1 : -1 };
+      else if (face === 'L') move = { axis: 'x', layers: [1], dir: prime ? -1 : 1 };
+      else if (face === 'U') move = { axis: 'y', layers: [size - 2], dir: prime ? 1 : -1 };
+      else if (face === 'D') move = { axis: 'y', layers: [1], dir: prime ? -1 : 1 };
+      else if (face === 'F') move = { axis: 'z', layers: [size - 2], dir: prime ? 1 : -1 };
+      else if (face === 'B') move = { axis: 'z', layers: [1], dir: prime ? -1 : 1 };
+    } else if (base.startsWith('3') && base.length === 2) {
+      const face = base[1];
+      if (face === 'R') move = { axis: 'x', layers: [size - 3], dir: prime ? 1 : -1 };
+      else if (face === 'L') move = { axis: 'x', layers: [2], dir: prime ? -1 : 1 };
+      else if (face === 'U') move = { axis: 'y', layers: [size - 3], dir: prime ? 1 : -1 };
+      else if (face === 'D') move = { axis: 'y', layers: [2], dir: prime ? -1 : 1 };
+      else if (face === 'F') move = { axis: 'z', layers: [size - 3], dir: prime ? 1 : -1 };
+      else if (face === 'B') move = { axis: 'z', layers: [2], dir: prime ? -1 : 1 };
+    } else if (base === 'R') move = { axis: 'x', layers: [size - 1], dir: prime ? 1 : -1 };
     else if (base === 'L') move = { axis: 'x', layers: [0], dir: prime ? -1 : 1 };
     else if (base === 'U') move = { axis: 'y', layers: [size - 1], dir: prime ? 1 : -1 };
     else if (base === 'D') move = { axis: 'y', layers: [0], dir: prime ? -1 : 1 };
@@ -207,6 +313,7 @@ function parseFormulaString(formula: string, size: number): RubiksMove[] {
     else if (base === 'x') move = { axis: 'x', layers: allLayers, dir: prime ? 1 : -1 };
     else if (base === 'y') move = { axis: 'y', layers: allLayers, dir: prime ? 1 : -1 };
     else if (base === 'z') move = { axis: 'z', layers: allLayers, dir: prime ? 1 : -1 };
+
     if (!move) continue;
     const label = `${base}${prime ? "'" : ''}`;
     out.push({ ...move, label });
@@ -377,17 +484,47 @@ export default function RubiksLab() {
   const [solveNote, setSolveNote] = useState('');
   useEffect(() => () => solverWorkerRef.current?.terminate(), []);
 
-  // 按当前贴纸状态求解（与打乱/操作历史无关）：3×3 用 Kociemba 两阶段，2×2 用 BFS 最优解。
-  const startSmartSolve = useCallback(() => {
+  // 按当前贴纸状态求解（与打乱/操作历史无关）：3×3 用 Kociemba 两阶段，2×2 用 BFS 最优解，4×4/5×5/6×6 接入 Go 后端求解器。
+  const startSmartSolve = useCallback(async () => {
     if (activeAnimRef.current || queueRef.current.length > 0 || solved || solving) return;
-    if (size > 3) { setSolveNote('4 阶及以上暂未实现状态解算'); return; }
+    if (size > 6) { setSolveNote('当前仅支持 2~6 阶状态解算'); return; }
+
+    const t0 = performance.now();
+    setSolving(true);
+
+    if (size >= 4 && size <= 6) {
+      setSolveNote(`正在请求后端 ${size} 阶自研降阶求解器…`);
+      try {
+        const stateStr = extractStickers(cubeletsRef.current, size);
+        const res = await api<{ ok: boolean; moves?: string[]; method?: string; error?: string }>('/api/weblab/rubiks/solve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dimension: size, state: stateStr }),
+        });
+        setSolving(false);
+        if (!res.ok || !res.moves) {
+          setSolveNote(`求解失败：${res.error || '未知错误'}`);
+          return;
+        }
+        const ms = Math.round(performance.now() - t0);
+        const formula = res.moves.join(' ');
+        setSolveNote(`${res.method || `${size}阶自研降阶法`}：${res.moves.length} 步，用时 ${ms} ms · ${formula}`);
+        const moves = parseFormulaString(formula, size);
+        if (!moves.length) return;
+        setSolverPaused(false);
+        enqueueMoves(moves, { isSolver: true, modeLabel: `${res.method || `${size}阶解法`}（${res.moves.length} 步）` });
+      } catch (err: unknown) {
+        setSolving(false);
+        setSolveNote(`求解请求异常：${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
     if (!solverWorkerRef.current) {
       solverWorkerRef.current = new Worker(new URL('./rubiksWorker.ts', import.meta.url), { type: 'module' });
     }
     const worker = solverWorkerRef.current;
     const id = Date.now();
-    const t0 = performance.now();
-    setSolving(true);
     setSolveNote('正在根据当前状态求解…（首次需构建查找表）');
     worker.onmessage = (e: MessageEvent<{ id: number; result: SolveResult | null; error?: string }>) => {
       if (e.data.id !== id) return;
@@ -853,7 +990,7 @@ export default function RubiksLab() {
             <input
               type="range"
               min="0.4"
-              max="2.5"
+              max="6.0"
               step="0.1"
               value={solveSpeed}
               onChange={e => setSolveSpeed(Number(e.target.value))}
