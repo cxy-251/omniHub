@@ -26,3 +26,21 @@ export function notify(message: string) {
 export function explain(error: Error, action: string) {
   return /login required|logged in|403/i.test(error.message) ? `登录后才能${action}` : `${action}失败：${error.message}`;
 }
+
+const VIEWER_FS_KEY = 'omnihub.viewer.fullscreen';
+export function getViewerFullscreenPref(): boolean {
+  return stored(VIEWER_FS_KEY, false);
+}
+export function setViewerFullscreenPref(on: boolean) {
+  store(VIEWER_FS_KEY, on);
+}
+export function enterBrowserFullscreen(el: HTMLElement | null = document.documentElement) {
+  if (!el || document.fullscreenElement) return;
+  const anyEl = el as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> };
+  if (anyEl.requestFullscreen) void anyEl.requestFullscreen().catch(() => undefined);
+  else if (anyEl.webkitRequestFullscreen) void anyEl.webkitRequestFullscreen();
+}
+export function exitBrowserFullscreen() {
+  if (!document.fullscreenElement) return;
+  void document.exitFullscreen().catch(() => undefined);
+}

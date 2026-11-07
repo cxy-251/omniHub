@@ -5,7 +5,19 @@ import ChannelBar from './ChannelBar';
 import { mangaHandlesKeyboard } from './mangaState';
 import { canPlayCodec, webCodecs } from './codecs';
 import { feedPath, feedQuery, newSeed, sendEvent, trash, useGroups, useLiked } from './feed';
-import { button, chip, divider, iconButton, select, store, stored } from './ui';
+import {
+  button,
+  chip,
+  divider,
+  enterBrowserFullscreen,
+  exitBrowserFullscreen,
+  getViewerFullscreenPref,
+  iconButton,
+  select,
+  setViewerFullscreenPref,
+  store,
+  stored,
+} from './ui';
 
 const Matrix = lazy(() => import('./Matrix'));
 
@@ -71,7 +83,10 @@ export default function ShortVideoPage({ active, isAdmin = false, loggedIn = fal
       if (!post) return <div className="h-full rounded-lg border border-line bg-panel" />;
       const postLandscape = !!(post.width && post.height && post.width > post.height);
       const fitClass = !isLandscapeGrid && postLandscape ? 'object-contain' : 'object-cover';
-      return <button className="flex h-full w-full flex-col overflow-hidden rounded-lg border border-line bg-panel text-left hover:border-primary" onClick={() => setOpen(index)}>
+      return <button className="flex h-full w-full flex-col overflow-hidden rounded-lg border border-line bg-panel text-left hover:border-primary" onClick={() => {
+        if (getViewerFullscreenPref()) enterBrowserFullscreen();
+        setOpen(index);
+      }}>
         <div className="relative min-h-0 flex-1 bg-background">
           {post.has_thumbnail
             ? <img className={`h-full w-full ${fitClass}`} src={`/api/media/shortvideo/thumbnail?${query(post)}`} alt="" decoding="async" />
@@ -84,7 +99,7 @@ export default function ShortVideoPage({ active, isAdmin = false, loggedIn = fal
     }} />
     {open !== undefined ? <Viewer post={paged.item(open)} liked={liked.isLiked(paged.item(open))} isAdmin={isAdmin} loggedIn={loggedIn} onLike={() => { const p = paged.item(open); if (p) liked.toggle(p); }}
       onTrash={() => { const p = paged.item(open); return p ? trash('shortvideo', p.id).then(() => setReload(n => n + 1)) : Promise.resolve(); }}
-      onClose={() => setOpen(undefined)}
+      onClose={() => { exitBrowserFullscreen(); setOpen(undefined); }}
       onPrev={open > 0 ? () => setOpen(open - 1) : undefined}
       onNext={open < paged.total - 1 ? () => setOpen(open + 1) : undefined} /> : null}
   </section>;
@@ -98,12 +113,47 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
   const [page, setPage] = useState(1);
   const [notice, setNotice] = useState('');
   const [armed, setArmed] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(() => stored('omnihub.viewer.controls', true));
+  const [fsPref, setFsPref] = useState(getViewerFullscreenPref);
+  const [fillMode, setFillMode] = useState<'contain' | 'cover'>(() => stored('omnihub.sv.fill', 'contain'));
   const video = useRef<HTMLVideoElement>(null);
+  const tapTimer = useRef(0);
+  const lastCenterTap = useRef(0);
+  useEffect(() => () => window.clearTimeout(tapTimer.current), []);
+  useEffect(() => store('omnihub.viewer.controls', controlsVisible), [controlsVisible]);
+  useEffect(() => store('omnihub.sv.fill', fillMode), [fillMode]);
+  useEffect(() => {
+    if (fsPref && !document.fullscreenElement) enterBrowserFullscreen();
+  }, [fsPref, post?.id]);
+  useEffect(() => {
+    const onFs = () => setFsPref(Boolean(document.fullscreenElement) || getViewerFullscreenPref());
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+  const toggleFullscreen = () => {
+    const next = !(Boolean(document.fullscreenElement) || fsPref);
+    setViewerFullscreenPref(next);
+    setFsPref(next);
+    if (next) enterBrowserFullscreen();
+    else exitBrowserFullscreen();
+  };
+  const togglePlayPause = () => {
+    const v = video.current;
+    if (!v) return;
+    if (v.paused) void v.play();
+    else v.pause();
+  };
   // 静音和音量跨视频记住（存在浏览器里）：在一个视频上点了静音，后面的视频也静音
   const [sound, setSound] = useState(() => stored('omnihub.sv.sound', { muted: false, volume: 1 }));
   useEffect(() => store('omnihub.sv.sound', sound), [sound]);
   const applySound = (el: HTMLMediaElement | null) => { if (el) { el.muted = sound.muted; el.volume = sound.volume; } };
   const keepSound = (el: HTMLMediaElement) => setSound({ muted: el.muted, volume: el.volume });
+  const toggleMute = () => {
+    const nextMuted = !sound.muted;
+    setSound(s => ({ ...s, muted: nextMuted }));
+    if (video.current) video.current.muted = nextMuted;
+  };
   const shown = useRef<{ post: Post; at: number; pages: number } | undefined>(undefined);
   const pages = post?.image_count ?? 0;
   const finish = () => {
@@ -118,6 +168,7 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
   useEffect(() => {
     setPage(1);
     setArmed(false);
+    setPaused(false);
     finish();
     if (post) {
       shown.current = { post, at: Date.now(), pages: 1 };
@@ -136,13 +187,16 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
     video.current?.removeAttribute('src');
     onTrash().then(() => setNotice('已移到系统回收站')).catch((e: Error) => setNotice(e.message));
   };
-  const keys = useRef({ onClose, onPrev, onNext, pages, isAdmin, loggedIn, onLike, doTrash });
-  keys.current = { onClose, onPrev, onNext, pages, isAdmin, loggedIn, onLike, doTrash };
+  const keys = useRef({ onClose, onPrev, onNext, pages, isAdmin, loggedIn, onLike, doTrash, toggleFullscreen, togglePlayPause, toggleMute });
+  keys.current = { onClose, onPrev, onNext, pages, isAdmin, loggedIn, onLike, doTrash, toggleFullscreen, togglePlayPause, toggleMute };
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (mangaHandlesKeyboard()) return;
       const k = keys.current;
       if (e.key === 'Escape') k.onClose();
+      else if (e.key === 'f' || e.key === 'F') k.toggleFullscreen();
+      else if (e.key === 'm' || e.key === 'M') k.toggleMute();
+      else if (e.key === ' ') k.togglePlayPause();
       else if (e.key === 'ArrowLeft') k.onPrev?.();
       else if (e.key === 'ArrowRight') k.onNext?.();
       else if (e.key === 'ArrowDown') setPage(p => Math.min(k.pages, p + 1));
@@ -155,8 +209,8 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
-  // 点画面：左边三分之一上一个、右边三分之一下一个（图集先翻图片，翻到头再换作品），中间暂停/继续（图集翻下一张）。
-  // 滑动：左滑下一个、右滑上一个、下滑返回。视频底部留出原生进度条，不盖住。
+  // 点画面：左边三分之一下一个、右边三分之一上一个（图集先翻图片，翻到头再换作品），中间单击唤起/关闭控件（视频双击中间暂停/继续）。
+  // 滑动：左滑/上滑下一个、右滑上一个、下滑返回。控件展开时视频底部留出原生进度条。
   const press = useRef<{ x: number; y: number } | undefined>(undefined);
   const prevPage = () => { if (page > 1) setPage(page - 1); else onPrev?.(); };
   const nextPage = () => { if (page < pages) setPage(page + 1); else onNext?.(); };
@@ -165,45 +219,69 @@ function Viewer({ post, liked, isAdmin, loggedIn, onLike, onTrash, onClose, onPr
     press.current = undefined;
     if (!start || !post) return;
     const dx = e.clientX - start.x, dy = e.clientY - start.y;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.2) { if (dx < 0) onNext?.(); else onPrev?.(); return; }
+    if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.2) { if (dx < 0) onNext?.(); else onPrev?.(); return; }
     if (dy > 90 && dy > Math.abs(dx) * 1.2) { onClose(); return; }
+    if (dy < -80 && Math.abs(dy) > Math.abs(dx) * 1.2) { onNext?.(); return; }
     if (Math.abs(dx) > 12 || Math.abs(dy) > 12) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
+    const x = (e.clientX - rect.left) / Math.max(1, rect.width);
     const isVideo = post.kind === 'video';
-    if (x < 1 / 3) { if (isVideo) onPrev?.(); else prevPage(); }
-    else if (x > 2 / 3) { if (isVideo) onNext?.(); else nextPage(); }
-    else if (isVideo) { const v = video.current; if (v) { if (v.paused) void v.play(); else v.pause(); } }
-    else nextPage();
+    if (x < 1 / 3) {
+      if (isVideo) onNext?.(); else nextPage();
+    } else if (x > 2 / 3) {
+      if (isVideo) onPrev?.(); else prevPage();
+    } else {
+      const now = Date.now();
+      if (isVideo && now - lastCenterTap.current < 260) {
+        window.clearTimeout(tapTimer.current);
+        lastCenterTap.current = 0;
+        togglePlayPause();
+      } else {
+        lastCenterTap.current = now;
+        window.clearTimeout(tapTimer.current);
+        tapTimer.current = window.setTimeout(() => {
+          setControlsVisible(v => !v);
+        }, 220);
+      }
+    }
   }
-  const gestures = <div className={`absolute inset-x-0 top-0 z-10 touch-none ${post?.kind === 'video' ? 'bottom-16' : 'bottom-14'}`}
+  const fitClass = fillMode === 'cover' ? 'h-full w-full object-cover' : 'h-full w-full object-contain';
+  const gestures = <div className={`absolute inset-x-0 top-0 z-10 touch-none ${controlsVisible && post?.kind === 'video' ? 'bottom-14' : 'bottom-0'}`}
     onPointerDown={e => { press.current = { x: e.clientX, y: e.clientY }; }} onPointerUp={release} onPointerCancel={() => { press.current = undefined; }} />;
-  return <div role="dialog" aria-label="短视频查看器" className="fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden bg-black/95 text-white" style={{ right: 'var(--manga-dock, 0px)' }}>
-    <div className="flex flex-wrap items-center gap-2 p-2">
+  return <div role="dialog" aria-label="短视频查看器" className="fixed inset-y-0 left-0 z-50 overflow-hidden bg-black text-white select-none" style={{ right: 'var(--manga-dock, 0px)' }}>
+    {controlsVisible ? <div className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/85 via-black/50 to-transparent p-2.5 pb-6">
       <p className="min-w-0 flex-1 truncate text-sm">{post ? `${post.creator_id.split('/').slice(1).join(' / ')} · ${post.published} · ${post.title}` : '加载中…'}</p>
       {notice ? <span className={`text-sm ${armed ? 'font-bold text-[#ff7b72]' : 'text-[#3fb950]'}`}>{notice}</span> : null}
       {loggedIn ? <button className={iconButton} onClick={onLike} title="点赞（Z）">{liked ? <span className="text-[#f778ba]">♥</span> : '♡'}</button> : null}
       {isAdmin ? <button className={`${iconButton} ${armed ? 'bg-white/20' : ''}`} onClick={doTrash} title="移到系统回收站（Delete 按两次）">🗑</button> : null}
+      {post?.kind === 'video' ? <>
+        <button className={iconButton} onClick={togglePlayPause} title="暂停 / 播放（空格或双击画面中间）">{paused ? '▶' : '⏸'}</button>
+        <button className={iconButton} onClick={toggleMute} title="静音切换（M）">{sound.muted ? '🔇' : '🔊'}</button>
+      </> : null}
+      <button className={button} onClick={() => setFillMode(m => m === 'contain' ? 'cover' : 'contain')} title="切换完整显示或裁切铺满屏幕">{fillMode === 'cover' ? '适应' : '铺满'}</button>
+      <button className={`${button} ${fsPref ? 'border-primary text-primary' : ''}`} onClick={toggleFullscreen} title="全屏模式（F，跨媒体自动保持）">{fsPref ? '退出全屏' : '全屏'}</button>
       <button className={button} disabled={!onPrev} onClick={onPrev}>上一个</button>
       <button className={button} disabled={!onNext} onClick={onNext}>下一个</button>
       <button className={button} onClick={onClose}>关闭</button>
-    </div>
-    <div className="relative flex min-h-0 flex-1 items-center justify-center">
+    </div> : null}
+    <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
       {!post ? <p>加载中…</p> : post.kind === 'video' && !canPlayCodec(post.codec)
         ? <p className="max-w-md text-center">这个视频是 {post.codec?.toUpperCase()} 编码，当前浏览器无法解码。请在 Deck 上的 omniHub 客户端中播放。</p>
         : post.kind === 'video'
-        ? <>{gestures}<video ref={el => { video.current = el; applySound(el); }} key={post.id} className="max-h-full max-w-full" src={`/api/media/shortvideo/stream?${query(post)}`} controls autoPlay playsInline
+        ? <>{gestures}<video ref={el => { video.current = el; applySound(el); }} key={post.id} className={fitClass} src={`/api/media/shortvideo/stream?${query(post)}`} controls={controlsVisible} autoPlay playsInline
+            onPlay={() => setPaused(false)}
+            onPause={() => setPaused(true)}
             onVolumeChange={e => keepSound(e.currentTarget)}
             onEnded={() => { sendEvent('shortvideo', post.id, 'complete'); shown.current = undefined; onNext?.(); }} /></>
         : <>
           {gestures}
-          <img key={post.id + page} className="max-h-full max-w-full object-contain" src={`/api/media/shortvideo/album/image?${query(post, { index: String(page) })}`} alt={`${page}/${pages}`} />
-          {post.music ? <audio key={post.id} ref={applySound} onVolumeChange={e => keepSound(e.currentTarget)} src={`/api/media/shortvideo/stream?${query(post, { music: '1' })}`} autoPlay loop controls className="absolute bottom-3 left-3 z-20 h-8" /> : null}
-          <div className="absolute bottom-3 right-3 z-20 flex items-center gap-2">
+          <img key={post.id + page} className={fitClass} src={`/api/media/shortvideo/album/image?${query(post, { index: String(page) })}`} alt={`${page}/${pages}`} />
+          {post.music ? <audio key={post.id} ref={applySound} onVolumeChange={e => keepSound(e.currentTarget)} src={`/api/media/shortvideo/stream?${query(post, { music: '1' })}`} autoPlay loop controls className={`absolute bottom-3 left-3 z-20 h-8 ${controlsVisible ? '' : 'hidden'}`} /> : null}
+          {controlsVisible ? <div className="absolute bottom-3 right-3 z-20 flex items-center gap-2 rounded-md bg-black/65 px-2 py-1">
             <button className={button} disabled={page <= 1} onClick={() => setPage(p => p - 1)}>上一张</button>
             <span className="text-sm">{page} / {pages}</span>
             <button className={button} disabled={page >= pages} onClick={() => setPage(p => p + 1)}>下一张</button>
-          </div>
+          </div> : null}
         </>}
     </div>
   </div>;

@@ -5,7 +5,19 @@ import MasonryGrid from './MasonryGrid';
 import ChannelBar from './ChannelBar';
 import { mangaHandlesKeyboard } from './mangaState';
 import { feedPath, feedQuery, newSeed, restore, sendEvent, trash, useGroups, useLiked } from './feed';
-import { button, chip, divider, iconButton, select, store, stored } from './ui';
+import {
+  button,
+  chip,
+  divider,
+  enterBrowserFullscreen,
+  exitBrowserFullscreen,
+  getViewerFullscreenPref,
+  iconButton,
+  select,
+  setViewerFullscreenPref,
+  store,
+  stored,
+} from './ui';
 
 const Matrix = lazy(() => import('./Matrix'));
 
@@ -60,7 +72,11 @@ export default function GalleryPage({ active, isAdmin, loggedIn = false }: { act
     <ChannelBar groups={shownGroups} pins={pins} channel={channel} onPick={setChannel} showHidden={isAdmin} loggedIn={loggedIn} />
     <MasonryGrid ratios={ratios} minColumnWidth={180} render={i => {
       const photo = paged.item(i);
-      return <button className="relative block h-full w-full overflow-hidden rounded" style={{ background: photo?.color_hex || 'var(--surface)' }} onClick={() => photo && setOpen(i)}>
+      return <button className="relative block h-full w-full overflow-hidden rounded" style={{ background: photo?.color_hex || 'var(--surface)' }} onClick={() => {
+        if (!photo) return;
+        if (getViewerFullscreenPref()) enterBrowserFullscreen();
+        setOpen(i);
+      }}>
         {photo ? <img className="h-full w-full object-cover" src={`/api/media/gallery/thumbnail?${query(photo)}`} alt="" decoding="async" /> : null}
         {liked.isLiked(photo) ? <span className="absolute left-1 top-1 text-[#f778ba]">♥</span> : null}
       </button>;
@@ -69,7 +85,7 @@ export default function GalleryPage({ active, isAdmin, loggedIn = false }: { act
       isAdmin={isAdmin} loggedIn={loggedIn}
       onLike={() => { const p = paged.item(open); if (p) liked.toggle(p); }}
       onTrash={() => { const p = paged.item(open); if (!p) return Promise.resolve(); return (channel === 'hidden' ? restore('gallery', p.id) : trash('gallery', p.id)).then(() => setReload(n => n + 1)); }}
-      onIndex={setOpen} onClose={() => setOpen(undefined)} /> : null}
+      onIndex={setOpen} onClose={() => { exitBrowserFullscreen(); setOpen(undefined); }} /> : null}
   </section>;
 }
 
@@ -82,6 +98,26 @@ function Viewer({ index, total, photo, liked, restoring, isAdmin, loggedIn, onLi
   const [loaded, setLoaded] = useState('');
   const [notice, setNotice] = useState('');
   const [armed, setArmed] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(() => stored('omnihub.viewer.controls', true));
+  const [fsPref, setFsPref] = useState(getViewerFullscreenPref);
+  const [fillMode, setFillMode] = useState<'contain' | 'cover'>(() => stored('omnihub.gallery.fill', 'contain'));
+  useEffect(() => store('omnihub.viewer.controls', controlsVisible), [controlsVisible]);
+  useEffect(() => store('omnihub.gallery.fill', fillMode), [fillMode]);
+  useEffect(() => {
+    if (fsPref && !document.fullscreenElement) enterBrowserFullscreen();
+  }, [fsPref, index]);
+  useEffect(() => {
+    const onFs = () => setFsPref(Boolean(document.fullscreenElement) || getViewerFullscreenPref());
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+  const toggleFullscreen = () => {
+    const next = !(Boolean(document.fullscreenElement) || fsPref);
+    setViewerFullscreenPref(next);
+    setFsPref(next);
+    if (next) enterBrowserFullscreen();
+    else exitBrowserFullscreen();
+  };
   const shown = useRef<{ id: string; at: number } | undefined>(undefined);
   const finish = () => {
     const s = shown.current;
@@ -106,17 +142,21 @@ function Viewer({ index, total, photo, liked, restoring, isAdmin, loggedIn, onLi
     setArmed(false); shown.current = undefined;
     onTrash().then(() => setNotice(restoring ? '已恢复' : '已移到回收站，可在「🗑 回收站」里恢复')).catch((e: Error) => setNotice(e.message));
   };
-  const zoom = useZoom(photo?.id);
+  const goPrev = () => { if (index > 0) onIndex(index - 1); };
+  const goNext = () => { if (index < total - 1) onIndex(index + 1); };
+  const zoom = useZoom(photo?.id, { onSwipeLeft: goNext, onSwipeRight: goPrev, onSwipeDown: onClose });
   const tapTimer = useRef(0);
   useEffect(() => () => window.clearTimeout(tapTimer.current), []);
-  const keys = useRef({ index, total, isAdmin, loggedIn, onIndex, onClose, onLike, doTrash, zoom });
-  keys.current = { index, total, isAdmin, loggedIn, onIndex, onClose, onLike, doTrash, zoom };
+  const keys = useRef({ index, total, isAdmin, loggedIn, onIndex, onClose, onLike, doTrash, zoom, toggleFullscreen });
+  keys.current = { index, total, isAdmin, loggedIn, onIndex, onClose, onLike, doTrash, zoom, toggleFullscreen };
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (mangaHandlesKeyboard()) return;
       const k = keys.current;
       if (e.key === 'Escape' && k.zoom.zoomed) k.zoom.reset();
       else if (e.key === 'Escape') k.onClose();
+      else if (e.key === 'f' || e.key === 'F') k.toggleFullscreen();
+      else if (e.key === ' ') setControlsVisible(v => !v);
       else if (e.key === '+' || e.key === '=') k.zoom.step(1.5);
       else if (e.key === '-') k.zoom.step(1 / 1.5);
       else if (e.key === '0') k.zoom.reset();
@@ -130,40 +170,51 @@ function Viewer({ index, total, photo, liked, restoring, isAdmin, loggedIn, onLi
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
-  return <div role="dialog" aria-label="图片查看器" className="fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden bg-black/95 text-white" style={{ right: 'var(--manga-dock, 0px)' }}>
-    <div className="flex flex-wrap items-center gap-2 p-2">
+  const fitClass = fillMode === 'cover' ? 'h-full w-full object-cover' : 'h-full w-full object-contain';
+  return <div role="dialog" aria-label="图片查看器" className="fixed inset-y-0 left-0 z-50 overflow-hidden bg-black text-white select-none" style={{ right: 'var(--manga-dock, 0px)' }}>
+    {controlsVisible ? <div className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-2 bg-gradient-to-b from-black/85 via-black/50 to-transparent p-2.5 pb-6">
       <p className="min-w-0 flex-1 truncate text-sm">{index + 1} / {total}{photo ? ` · ${photo.width}×${photo.height}` : ''}</p>
       {notice ? <span className={`text-sm ${armed ? 'font-bold text-[#ff7b72]' : 'text-[#3fb950]'}`}>{notice}</span> : null}
       {loggedIn ? <button className={iconButton} onClick={onLike} title="点赞（Z）">{liked ? <span className="text-[#f778ba]">♥</span> : '♡'}</button> : null}
       {isAdmin ? <button className={`${iconButton} ${armed ? 'bg-white/20' : ''}`} onClick={doTrash} title={restoring ? '从回收站恢复（Delete 按两次）' : '移到回收站（Delete 按两次；只在 omniHub 里隐藏）'}>{restoring ? '↩' : '🗑'}</button> : null}
       {photo ? <a className={iconButton} href={`/api/media/gallery/original?${query(photo)}&download=1`} download={photo.filename} title="下载原图">⤓</a> : null}
-      <button className={button} disabled={index <= 0} onClick={() => onIndex(index - 1)}>上一张</button>
-      <button className={button} disabled={index >= total - 1} onClick={() => onIndex(index + 1)}>下一张</button>
+      <button className={button} onClick={() => setFillMode(m => m === 'contain' ? 'cover' : 'contain')} title="切换完整显示或裁切铺满屏幕">{fillMode === 'cover' ? '适应' : '铺满'}</button>
+      <button className={`${button} ${fsPref ? 'border-primary text-primary' : ''}`} onClick={toggleFullscreen} title="全屏模式（F，跨媒体自动保持）">{fsPref ? '退出全屏' : '全屏'}</button>
+      <button className={button} disabled={index <= 0} onClick={goPrev}>上一张</button>
+      <button className={button} disabled={index >= total - 1} onClick={goNext}>下一张</button>
       <button className={button} onClick={onClose}>关闭</button>
-    </div>
-    <div className="relative flex min-h-0 flex-1 touch-none items-center justify-center overflow-hidden" {...zoom.handlers}
+    </div> : null}
+    <div className="absolute inset-0 flex touch-none items-center justify-center overflow-hidden" {...zoom.handlers}
       onClick={e => {
-        // 单击翻页等 250ms，期间第二次点击（双击放大）会取消它。
+        // 单击等 220ms，期间第二次点击（双击缩放）会取消它。
+        // 左 1/3：下一张；右 1/3：上一张；中间 1/3：唤起或隐藏控件。
         window.clearTimeout(tapTimer.current);
         if (zoom.consumeClick() || e.detail > 1) return;
         const r = e.currentTarget.getBoundingClientRect();
-        const target = Math.max(0, Math.min(total - 1, index + (e.clientX - r.left < r.width / 3 ? -1 : 1)));
-        tapTimer.current = window.setTimeout(() => onIndex(target), 250);
+        const ratio = (e.clientX - r.left) / Math.max(1, r.width);
+        tapTimer.current = window.setTimeout(() => {
+          if (ratio < 1 / 3) goNext();
+          else if (ratio > 2 / 3) goPrev();
+          else setControlsVisible(v => !v);
+        }, 220);
       }}>
       {photo ? <div className="flex h-full w-full items-center justify-center" style={zoom.style}>
-        {loaded !== photo.id ? <img className="absolute max-h-full max-w-full object-contain" src={`/api/media/gallery/thumbnail?${query(photo)}`} alt="" draggable={false} /> : null}
-        <img key={photo.id} className="relative max-h-full max-w-full object-contain" src={`/api/media/gallery/original?${query(photo)}`} alt={photo.filename} draggable={false} onLoad={() => setLoaded(photo.id)} />
+        {loaded !== photo.id ? <img className={`absolute ${fitClass}`} src={`/api/media/gallery/thumbnail?${query(photo)}`} alt="" draggable={false} /> : null}
+        <img key={photo.id} className={`relative ${fitClass}`} src={`/api/media/gallery/original?${query(photo)}`} alt={photo.filename} draggable={false} onLoad={() => setLoaded(photo.id)} />
       </div> : <p>加载中…</p>}
     </div>
   </div>;
 }
 
 // useZoom：大图缩放与平移。滚轮或双指捏合 1～5 倍，双击在 1 倍与 2.5 倍间切换，放大后拖动平移；
-// 放大时单击不翻页，拖动过的那次点击也不算。key 变化（换图）时复位。
-function useZoom(key: string | undefined) {
+// 未放大时支持左右滑动切换图片、下滑关闭；放大状态或刚拖动过时，点击不触发翻页。key 变化（换图）时复位。
+function useZoom(
+  key: string | undefined,
+  swipe?: { onSwipeLeft?: () => void; onSwipeRight?: () => void; onSwipeDown?: () => void },
+) {
   const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
   const pointers = useRef(new Map<number, { x: number; y: number }>());
-  const gesture = useRef({ moved: false, pinch: 0 });
+  const gesture = useRef({ moved: false, pinch: 0, startX: 0, startY: 0 });
   useEffect(() => setView({ scale: 1, x: 0, y: 0 }), [key]);
   const clamp = (scale: number) => Math.min(5, Math.max(1, scale));
   // 以 (cx, cy)（相对容器中心）为不动点缩放；to 由当前倍数算出新倍数（连续事件不会读到旧状态）。
@@ -182,7 +233,7 @@ function useZoom(key: string | undefined) {
     onDoubleClick: (e: React.MouseEvent) => { const [cx, cy] = center(e); zoomAt(s => s > 1 ? 1 : 2.5, cx, cy); },
     onPointerDown: (e: React.PointerEvent) => {
       pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pointers.current.size === 1) gesture.current = { moved: false, pinch: 0 };
+      if (pointers.current.size === 1) gesture.current = { moved: false, pinch: 0, startX: e.clientX, startY: e.clientY };
       if (pointers.current.size === 2) { const [a, b] = [...pointers.current.values()]; gesture.current.pinch = Math.hypot(a.x - b.x, a.y - b.y); }
     },
     onPointerMove: (e: React.PointerEvent) => {
@@ -198,13 +249,28 @@ function useZoom(key: string | undefined) {
           const r = e.currentTarget.getBoundingClientRect();
           zoomAt(s => s * ratio, (a.x + b.x) / 2 - r.left - r.width / 2, (a.y + b.y) / 2 - r.top - r.height / 2);
         }
-        gesture.current = { moved: true, pinch: dist };
+        gesture.current = { ...gesture.current, moved: true, pinch: dist };
       } else if (view.scale > 1 && (e.buttons || e.pointerType !== 'mouse')) {
         if (Math.abs(dx) + Math.abs(dy) > 0) gesture.current.moved = true;
         setView(v => ({ ...v, x: v.x + dx, y: v.y + dy }));
       }
     },
-    onPointerUp: (e: React.PointerEvent) => { pointers.current.delete(e.pointerId); },
+    onPointerUp: (e: React.PointerEvent) => {
+      const wasSingle = pointers.current.size === 1;
+      pointers.current.delete(e.pointerId);
+      if (wasSingle && view.scale === 1 && !gesture.current.moved) {
+        const totalDx = e.clientX - gesture.current.startX;
+        const totalDy = e.clientY - gesture.current.startY;
+        if (Math.abs(totalDx) > 55 && Math.abs(totalDx) > Math.abs(totalDy) * 1.2) {
+          gesture.current.moved = true;
+          if (totalDx < 0) swipe?.onSwipeLeft?.();
+          else swipe?.onSwipeRight?.();
+        } else if (totalDy > 90 && totalDy > Math.abs(totalDx) * 1.2) {
+          gesture.current.moved = true;
+          swipe?.onSwipeDown?.();
+        }
+      }
+    },
     onPointerCancel: (e: React.PointerEvent) => { pointers.current.delete(e.pointerId); },
   };
   return {
@@ -212,7 +278,7 @@ function useZoom(key: string | undefined) {
     zoomed: view.scale > 1,
     reset: () => setView({ scale: 1, x: 0, y: 0 }),
     step: (factor: number) => zoomAt(s => s * factor, 0, 0),
-    // 放大状态或刚拖动过时，点击不翻页。
+    // 放大状态或刚拖动/滑动过时，点击不翻页。
     consumeClick: () => { const used = view.scale > 1 || gesture.current.moved; gesture.current.moved = false; return used; },
     style: { transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, transformOrigin: 'center', transition: pointers.current.size ? 'none' : 'transform 80ms ease-out' } as React.CSSProperties,
   };
