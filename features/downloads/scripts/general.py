@@ -167,6 +167,102 @@ def pick_items(entries, a):
     return out
 
 
+def video_views(video_id, opts):
+    """读取单个 YouTube 视频的播放量（不下载），失败返回 None。"""
+    import yt_dlp
+    single = {**opts, "extract_flat": False}
+    with yt_dlp.YoutubeDL(single) as ydl:
+        info = ydl.extract_info("https://www.youtube.com/watch?v=" + video_id, download=False, process=False) or {}
+    v = info.get("view_count")
+    return v if isinstance(v, int) else None
+
+
+def _lastfm_query_pair(info):
+    """为 Last.fm 构造主艺人 + 去掉括号后缀/再版尾注后的曲名，减少匹配到冷门词条。"""
+    import ytmusic
+    artist = (info.get("artists") or [""])[0] or ""
+    artist = re.split(r",\s*|\s+&\s+|\s+(?:feat\.?|ft\.?|with)\s+", artist, flags=re.I)[0].strip()
+    title = re.sub(r"\s*[(\[（【][^)\]）】]*[)\]）】]", "", info.get("title") or "")
+    title = ytmusic._REMASTER_TAIL.sub("", title).strip() or (info.get("title") or "")
+    return artist, title
+
+
+def filter_music_metrics(candidates, a, opts):
+    """按最低播放量（min_views）与最低 Last.fm 重播率（min_replay）过滤候选曲目。
+    启用的指标必须同时满足才保留；专辑链接导入的曲目在开启专辑免过滤时直接保留。"""
+    min_views = max(0, int(getattr(a, "min_views", 0) or 0))
+    min_replay = max(0.0, float(getattr(a, "min_replay", 0.0) or 0.0))
+    exempt_albums = not getattr(a, "no_exempt_albums", False)
+    filtered_out = getattr(a, "music_filtered", None)
+    if filtered_out is None:
+        filtered_out = a.music_skipped
+
+    def drop(target, info, reason):
+        if filtered_out is a.music_skipped:
+            filtered_out.append({"id": target, "title": info.get("title"), "artists": info.get("artists"), "reason": reason})
+        else:
+            filtered_out.append({"id": target, "info": info, "reason": reason})
+
+    exempt, check_pool = [], []
+    for target, info in candidates:
+        if exempt_albums and info.get("album_exempt"):
+            info.setdefault("source_note", "整张专辑保留")
+            exempt.append((target, info))
+        else:
+            check_pool.append((target, info))
+
+    kept = check_pool
+    if min_views > 0 and kept:
+        next_kept = []
+        for n, (target, info) in enumerate(kept):
+            progress(n, len(kept), f"查播放量 {n + 1}/{len(kept)}：{info.get('title', target)}")
+            try:
+                v = video_views(target, opts)
+            except Exception as e:
+                log(f"ERROR: 读取播放量失败 {target}：{e}")
+                v = None
+            if v is None or v < min_views:
+                reason = f"播放量 {v:,} 低于 {min_views:,}" if isinstance(v, int) else "播放量不明，未达最低播放量要求"
+                drop(target, info, reason)
+                continue
+            info["views"] = v
+            next_kept.append((target, info))
+        kept = next_kept
+    if min_replay > 0 and kept:
+        key = os.environ.get("OMNIHUB_LASTFM_KEY", "")
+        if not key:
+            log("设置了最低重播率但未填写 Last.fm API key，跳过重播率筛选")
+            return exempt + kept
+        import rank
+        progress(0, len(kept), f"查 Last.fm 重播率（{len(kept)} 首）")
+        pairs = [_lastfm_query_pair(info) for _, info in kept]
+        results = rank.lastfm_many(pairs, key)
+        next_kept = []
+        for (target, info), lf in zip(kept, results):
+            if lf:
+                a.lastfm_known[target] = lf
+            if not lf:
+                drop(target, info, "Last.fm 无记录，未达最低重播率要求")
+                continue
+            listeners = lf.get("listeners") or 0
+            playcount = lf.get("playcount") or 0
+            if listeners < 50:
+                drop(target, info, f"Last.fm 听众不足 50（{listeners}），未达最低重播率要求")
+                continue
+            replay = playcount / listeners
+            info["lastfm_replay"] = round(replay, 2)
+            info["lastfm_listeners"] = listeners
+            if replay < min_replay:
+                drop(target, info, f"重播率 {replay:.2f} 低于 {min_replay:g}（听众 {listeners}）")
+                continue
+            next_kept.append((target, info))
+        kept = next_kept
+    if not exempt:
+        return kept
+    kept_ids = {t for t, _ in kept} | {t for t, _ in exempt}
+    return [(t, info) for t, info in candidates if t in kept_ids]
+
+
 def music_targets(urls, a, cookies):
     """YouTube 音乐：展开链接（列表、频道、专辑）→ 每首换成纯音轨版、查出所属专辑与曲序（见 ytmusic.py），
     信息记进 a.music_info[视频 ID]。MV 找不到纯音轨版的不下。
@@ -184,6 +280,7 @@ def music_targets(urls, a, cookies):
     for i, url in enumerate(urls):
         progress(i, len(urls), f"读第 {i + 1}/{len(urls)} 个链接：{url}")
         m = re.search(r"[?&]list=(OLAK5uy_[\w-]+)", url)
+        mb = re.search(r"/browse/(MPREb_[\w-]+)", url)
         try:
             cid = channel_id(url, opts)
             page = ytmusic.artist(cid, log, progress) if cid else None
@@ -197,9 +294,16 @@ def music_targets(urls, a, cookies):
                 if mvs:
                     a.mv_jobs.append((page["name"], mvs))
                 continue
-            if m:   # 整张专辑：直接取 YouTube Music 上的曲目（YouTube 网页版的专辑列表里常混着 MV）
-                album, songs = ytmusic.album_tracks(m.group(1), log)
+            if m or mb:   # 整张专辑：直接取 YouTube Music 上的曲目（YouTube 网页版的专辑列表里常混着 MV）
+                if m:
+                    album, songs = ytmusic.album_tracks(m.group(1), log)
+                else:
+                    album = ytmusic.album(mb.group(1))
+                    songs = ytmusic.album_songs(album, mb.group(1), log)
                 songs = pick_items(songs, a)
+                if not getattr(a, "no_exempt_albums", False):
+                    for _, sinfo in songs:
+                        sinfo["album_exempt"] = True
                 log(f"专辑《{album.get('title')}》{len(album.get('tracks') or [])} 首，要下的纯音轨版 {len(songs)} 首")
                 ids += [vid for vid, _ in songs]
                 preset.update(songs)
@@ -207,11 +311,23 @@ def music_targets(urls, a, cookies):
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url if "music.youtube.com" in url else normalize(url), download=False)
             entries = info.get("entries")
-            ids += pick_items([e["id"] for e in entries if e and e.get("id")], a) if entries is not None else [info["id"]]
+            if entries is not None:
+                valid = [e for e in entries if e and e.get("id")]
+                picked = pick_items(valid, a)
+                for e in picked:
+                    etitle = e.get("title") or ""
+                    if "/shorts/" in (e.get("url") or ""):
+                        a.music_skipped.append({"id": e["id"], "title": etitle, "artists": [], "reason": "Shorts 短视频，不下"})
+                    elif etitle and ytmusic.is_non_original(etitle):
+                        a.music_skipped.append({"id": e["id"], "title": etitle, "artists": [], "reason": "非原版录音室版本（混音/现场/翻唱等），不下"})
+                    else:
+                        ids.append(e["id"])
+            else:
+                ids.append(info["id"])
         except Exception as e:
             log(f"ERROR: 展开失败 {url}：{e}")
             errors += 1
-    targets, skipped = [], 0
+    candidates, seen_targets, skipped = [], set(), 0
     ids = list(dict.fromkeys(ids))
     for n, vid in enumerate(ids):
         if vid in done:
@@ -230,15 +346,20 @@ def music_targets(urls, a, cookies):
         if not target:
             a.music_skipped.append({"id": vid, "title": info.get("title"), "artists": info.get("artists"), "reason": note})
             continue
-        if target in done or target in a.music_info:
+        if target in done or target in seen_targets:
             skipped += 1
             if target in done:
                 a.music_done.append({"id": target, "title": info.get("title"), "artists": info.get("artists")})
             continue
+        seen_targets.add(target)
         # 来源：纯音轨原样 / 原视频换成了纯音轨 / 没有纯音轨用的官方音频
         info["source"] = ("官方音频" if info.get("kind") == "OMV" else "纯音轨") if target == vid else \
             ("MV 或官方上传换成纯音轨" if info.get("kind") == "OMV" else "用户上传换成纯音轨")
         info["from"] = vid
+        candidates.append((target, info))
+    kept = filter_music_metrics(candidates, a, opts)
+    targets = []
+    for target, info in kept:
         a.music_info[target] = info
         targets.append("https://www.youtube.com/watch?v=" + target)
     log(f"要下 {len(targets)} 首（{len(ids)} 个视频里，已下载过 {skipped} 个，出错 {errors} 个）")
@@ -378,9 +499,17 @@ def save_plan(a, plan):
     os.replace(a.plan_out + ".tmp", a.plan_out)
 
 
+def _plan_song(vid, info, picked=True, filter_reason=""):
+    row = {"id": vid, "path": planned_path(info), "picked": picked, **{k: info.get(k) for k in
+           ("title", "artists", "album", "album_type", "number", "year", "source", "source_note", "from", "views", "lastfm_replay")}}
+    if filter_reason:
+        row["filter_reason"] = filter_reason
+    return row
+
+
 def write_plan(a):
     """只读取、不下载：把会下什么写进 a.plan_out（JSON），给界面列出来勾选。
-    songs 要下的歌（含归档位置、来源）；mvs 歌手的 MV；skipped 不下的及原因；done 已下载过的；other 现在总是空的（音乐只收 YouTube）。"""
+    songs 要下的歌（含归档位置、来源；未达阈值的是 picked=False，可手动补勾）；mvs 歌手的 MV；skipped 不可下的非原版及原因；done 已下载过的；other 现在总是空的（音乐只收 YouTube）。"""
     youtube = [u for u in a.urls if platform_of(u)["id"] == "youtube"]
     other = [u for u in a.urls if platform_of(u)["id"] != "youtube"]
     targets, _, errors = music_targets(youtube, a, cookie_file("youtube")) if youtube else ([], 0, 0)
@@ -388,15 +517,14 @@ def write_plan(a):
     if a.archive and os.path.isfile(os.path.splitext(a.archive)[0] + "-mv.txt"):
         with open(os.path.splitext(a.archive)[0] + "-mv.txt", encoding="utf-8", errors="replace") as f:
             mv_done = {line.split(" ", 1)[1].strip() for line in f if " " in line}
-    songs = [{"id": vid, "path": planned_path(info), **{k: info.get(k) for k in
-              ("title", "artists", "album", "album_type", "number", "year", "source", "from")}}
-             for vid, info in a.music_info.items()]
+    songs = [_plan_song(vid, info, True) for vid, info in a.music_info.items()]
+    filtered = [_plan_song(item["id"], item["info"], False, item["reason"]) for item in a.music_filtered]
     mvs = [{"id": vid, "title": title, "artist": name, "path": "MV/" + safe(name) + "/", "done": vid in mv_done}
            for name, items in a.mv_jobs for vid, title in items]
-    plan = {"urls": a.urls, "songs": songs, "mvs": mvs, "skipped": a.music_skipped, "done": a.music_done,
+    plan = {"urls": a.urls, "songs": songs + filtered, "mvs": mvs, "skipped": a.music_skipped, "done": a.music_done,
             "other": other, "errors": errors}
     save_plan(a, plan)
-    log(f"列表：要下 {len(songs)} 首、MV {sum(1 for m in mvs if not m['done'])} 个；不下 {len(a.music_skipped)} 首；"
+    log(f"列表：要下 {len(songs)} 首（未达阈值 {len(filtered)} 首）、MV {sum(1 for m in mvs if not m['done'])} 个；不可下 {len(a.music_skipped)} 首；"
         f"已下载过 {len(a.music_done)} 首；其他网站链接 {len(other)} 个；出错 {errors} 个")
 
 
@@ -407,7 +535,7 @@ def load_plan(a):
     skip = set(filter(None, a.exclude.split(",")))
     for s in plan["songs"]:
         if s["id"] not in skip:
-            a.music_info[s["id"]] = {k: v for k, v in s.items() if k not in ("id", "path")}
+            a.music_info[s["id"]] = {k: v for k, v in s.items() if k not in ("id", "path", "picked", "filter_reason", "source_note")}
     mvs = {}
     for m in plan["mvs"]:
         if m["id"] not in skip and not m["done"]:
@@ -1076,6 +1204,9 @@ def main():
     p.add_argument("--rank", choices=["none", "replay", "views"], default="none",
                    help="按质量挑：replay 重播率（Last.fm）、views 播放量；none 不挑，全下")
     p.add_argument("--top", type=int, default=30, help="按质量挑时每个链接取前多少个")
+    p.add_argument("--min-views", type=int, default=0, help="音乐：最低 YouTube 播放量，0 表示不限")
+    p.add_argument("--min-replay", type=float, default=0.0, help="音乐：最低 Last.fm 重播率，0 表示不限")
+    p.add_argument("--no-exempt-albums", action="store_true", help="音乐：对专辑链接也应用播放量与重播率过滤")
     p.add_argument("--archive", default="", help="已下载名单文件（下过的不再下）")
     p.add_argument("--x-limit", type=int, default=0, help="X：每个用户最多下最近这么多个文件，0 表示不限")
     p.add_argument("--plan-out", default="", help="音乐：只读取列表，把会下什么写进这个 JSON 文件，不下载")
@@ -1100,7 +1231,8 @@ def main():
     if a.mode in ("girls", "girlvideo") and a.max_height == 1080:   # 女团的要高画质：有 4K 就要
         a.max_height = 2160
     a.meta_records = []   # 批次的下载元数据：音乐每首、排名表；最后连同其他文件旁边的 .json 合成一个文件
-    a.music_skipped = []  # 不下的歌及原因、已下载过的：读取列表时列出来
+    a.music_skipped = []  # 不下的非原版及原因、已下载过的：读取列表时列出来
+    a.music_filtered = [] # 未达播放量或重播率阈值的歌：读取列表时默认不勾，可按需手动补勾
     a.music_done = []
 
     if a.scheme == "music":   # 音乐只从 YouTube / YouTube Music 来（其他网站的多是搬运）

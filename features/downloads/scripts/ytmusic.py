@@ -41,14 +41,112 @@ def _norm(s):
     return "".join(ch for ch in (s or "").casefold() if ch.isalnum())
 
 
+# 官方再版/音质标注：去重时视为同一首歌，且不被当作非原版过滤掉
+_REMASTER_TAIL = re.compile(
+    r"\s+[-–—]\s+(?:\d{4}\s+)?(?:remaster(?:ed)?|album\s+version|single\s+version|original\s+mix|mono|stereo|explicit|clean)(?:\s+\d{4})?\s*$",
+    re.I,
+)
+
+
 def _core(title):
-    """去掉括号里的说明（Official Video、Remastered、feat. …）后的曲名。"""
-    return _norm(re.sub(r"[(\[（【][^)\]）】]*[)\]）】]", "", title or "")) or _norm(title)
+    """去掉括号里的说明（Official Video、Remastered、feat. …）及尾部的再版标注后的曲名。"""
+    s = re.sub(r"[(\[（【][^)\]）】]*[)\]）】]", "", title or "")
+    s = _REMASTER_TAIL.sub("", s)
+    return _norm(s) or _norm(title)
+
+
+def _split_artists(names):
+    out = set()
+    for name in names or ():
+        for part in re.split(r"\s*,\s*|\s+&\s+|\s+[xX×]\s+|\s+(?:feat\.?|ft\.?|with)\s+", name or "", flags=re.I):
+            part = re.sub(r"\s*-\s*Topic$|VEVO$", "", part).strip()
+            if _norm(part):
+                out.add(_norm(part))
+    return out
 
 
 def _same_artist(a, b):
-    a, b = {_norm(x) for x in a if _norm(x)}, {_norm(x) for x in b if _norm(x)}
-    return any(x in y or y in x for x in a for y in b)
+    sa, sb = _split_artists(a), _split_artists(b)
+    if sa & sb:
+        return True
+    # 仅对较长名字允许完整词边界匹配，避免 "IU"/"AI"/"V" 等短名误匹配翻唱艺人
+    return any(len(x) >= 4 and len(y) >= 4 and (x in y or y in x) for x in sa for y in sb)
+
+
+# 标题里出现即判定为非原版录音室发行（混音、现场、翻唱、变速、伴奏、串烧、白噪音等）
+NON_ORIGINAL_ANYWHERE = re.compile(
+    r"\bremix(?:es|ed)?\b|\bmegamix\b|\bmemegamix\b|\bmashup\b|\bbootleg\b|\brework\b|"
+    r"\b(?:club|dj|extended|festival|dub|vip|dance|house|trap|drill|phonk|techno|trance|lofi|lo-fi|8d|mega|workout|party|gym|sleep|study)\s*mix\b|"
+    r"\b(?:extended|club|dj|remix)\s*edit\b|"
+    r"\bsped\s*up\b|\bspeed\s*up\b|\bslowed\b|\bnightcore\b|\bdaycore\b|\b8d\s*audio\b|\b8-?bit\b|\btype\s*beat\b|"
+    r"\bsoundscape\b|\binstrumental\b|\bcommentary\b|\btrack\s*by\s*track\b|\bloop\s*station\s*ver\.?\b|"
+    r"\bkaraoke\b|\bktv\b|\ba\s*capp?ella\b|\bacappella\b|\bmusic\s*box\b|\blullaby\s*(?:version|rendition|cover)\b|"
+    r"\b(?:piano|guitar|violin|cello|orchestral|acoustic|vocal|drum|bass|sax|flute|harp|ukulele|lo-?fi|synth|chiptune|anime|metal|rock|jazz|chill|bossa)\s+(?:cover|version|rendition|tribute)\b|"
+    r"\btribute\s+to\b|\bcover\s+by\b|\bcovered\s+by\b|\boriginally\s+performed\s+by\b|\bmade\s+famous\s+by\b|\bin\s+the\s+style\s+of\b|"
+    r"\bunplugged\b|\bin\s+concert\b|\blive\s+(?:at|from|in|on)\b|\btour\s+live\b|\blive\s+tour\b|\bsoundcheck\b|\brehearsal\b|\blive\s*$|\bver\.\s*$|"
+    r"现场|現場|演唱会|演唱會|音乐会|音樂會|不插电|不插電|翻唱|伴奏|纯音乐版|純音樂版|卡拉OK|消音|清唱|八音盒|钢琴版|鋼琴版|吉他版|"
+    r"加速版|变速版|變速版|升调|降调|混音|电音版|慢摇|串烧|DJ版|라이브|콘서트|리믹스|커버|반주|가라오케|ライブ",
+    re.I,
+)
+
+# 仅在括号内或分隔符（- / | :）后才算版本限定，避免误伤 "Live Forever"、"Cover Me" 等正常歌名
+_QUALIFIER_WORDS = (
+    r"live|concert|sessions?|performance|encore|stage|festival|"
+    r"cover|tribute|instrumental|inst\.?|mr|acoustic|demo|commentary|voice\s*memo|skit|outtake|"
+    r"reverb|lofi|lo-fi|piano|orchestral|symphonic|stripped|vip|dub|flip|mix|extended|"
+    r"alt\.?\s*version|alternate\s*(?:version|take|mix)|early\s*(?:version|mix)|rough\s*mix|work\s*tape|"
+    r"backing\s*track|minus\s*one|off\s*vocal|vocal\s*only"
+)
+_BRACKET_QUALIFIER = re.compile(r"[(\[（【][^)\]）】]*\b(?:" + _QUALIFIER_WORDS + r")\b[^)\]）】]*[)\]）】]", re.I)
+_SEP_QUALIFIER = re.compile(r"(?:\s[-–—/|:]\s*|\s+[-–—/|:]\s*)[^-–—|]*\b(?:" + _QUALIFIER_WORDS + r")\b", re.I)
+
+# 整张专辑即判定为非原版发行的关键词（允许 "Song (Remixes)" 中的第 1 首原版曲目通过，仅屏蔽明确非录音室专辑）
+_NON_ORIGINAL_ALBUM = re.compile(
+    r"\bsoundscape\b|\bcommentary\b|\btrack\s*by\s*track\b|\bunplugged\b|\bin\s+concert\b|\blive\s+(?:at|from|in|on)\b|"
+    r"\bliving\s+room\s+sessions?\b|\bkaraoke\b|\btribute\b|\bsped\s*up\b|\bnightcore\b|\blofi\b|\blo-fi\b|"
+    r"[(\[（【][^)\]）】]*\b(?:live|sessions?|unplugged|instrumental|karaoke|commentary|acoustic|demo)\b[^)\]）】]*[)\]）】]|"
+    r"现场|現場|演唱会|演唱會|不插电|不插電|翻唱|伴奏|卡拉OK|라이브|콘서트",
+    re.I,
+)
+
+# 常见非原版翻唱/伴奏/致敬发行方或虚拟艺人名称
+_UNOFFICIAL_ARTIST = re.compile(
+    r"\b(?:karaoke|tribute|cover\s*band|covers|lullaby|ringtone|music\s*box|sped\s*up|nightcore|8-?bit|soundalike|party\s*tyme|kidz\s*bop|ameritz)\b|"
+    r"\bpiano\s*(?:tribute|crew|project|dream)\b",
+    re.I,
+)
+_SPAM_COMPILATION = re.compile(
+    r"\b(?:hits|top\s*\d+|workout|running|gym|party|sleep|study|relax|chill|gaming|tiktok|viral|chart|100\s*best|best\s*of)\b",
+    re.I,
+)
+
+
+def is_non_original(title):
+    """是否为混音、现场、翻唱、伴奏、变速、试听等非原版录音室曲目/专辑名。"""
+    t = title or ""
+    if not t.strip():
+        return False
+    return bool(NON_ORIGINAL_ANYWHERE.search(t) or _BRACKET_QUALIFIER.search(t) or _SEP_QUALIFIER.search(t))
+
+
+def is_unofficial_artist(artists):
+    """艺人名本身为翻唱/伴奏/致敬/加速频道等非正版发行主体。"""
+    return any(is_non_original(a) or _UNOFFICIAL_ARTIST.search(a or "") for a in (artists or ()) if a)
+
+
+def is_unofficial_album(a):
+    """专辑本身为混音/现场/翻唱/伴奏/致敬/白噪音/解说或群星杂烩合辑。"""
+    if not a:
+        return False
+    title = a.get("title") or ""
+    if _NON_ORIGINAL_ALBUM.search(title):
+        return True
+    album_artists = [x.get("name") or "" for x in a.get("artists") or []]
+    if is_unofficial_artist(album_artists):
+        return True
+    if any((x or "").casefold() == "various artists" for x in album_artists) and _SPAM_COMPILATION.search(title):
+        return True
+    return False
 
 
 def album(browse_id):
@@ -70,13 +168,20 @@ def album_songs(a, browse_id, log, seen=None, keep=None):
     """一张发行里的歌：[(纯音轨版视频 ID, 信息)]，信息里是这张发行的名字、类型、曲序。
     曲目表里有 MV 的歌给的常是 MV，换成纯音轨版（优先同一张专辑里的）；找不到时只收官方音频，其余不收。
     seen 是已收过的曲名（去掉括号说明），给了就跳过已收过的、并把这次收的加进去；keep(曲目, 发行) 为假的不收。"""
+    if is_unofficial_album(a):
+        log(f"  {a.get('title') or browse_id}：非原版录音室发行（混音/现场/翻唱/杂烩合辑），跳过")
+        return []
     songs = []
     for t in a.get("tracks") or []:
-        key = _core(t.get("title"))
+        title = t.get("title") or ""
+        key = _core(title)
         if not t.get("videoId") or not key or (seen is not None and key in seen) or (keep and not keep(t, a)):
             continue
-        info = {"title": t.get("title") or "", "kind": "ATV",
-                "artists": [x["name"] for x in t.get("artists") or a.get("artists") or []]}
+        artists = [x["name"] for x in t.get("artists") or a.get("artists") or []]
+        if is_non_original(title) or is_unofficial_artist(artists):
+            log(f"  {title}：非原版录音室曲目（混音/现场/翻唱等），跳过")
+            continue
+        info = {"title": title, "kind": "ATV", "artists": artists}
         vid = t["videoId"]
         if (t.get("videoType") or "").removeprefix("MUSIC_VIDEO_TYPE_") not in ("ATV", ""):
             found = audio_version(info["title"], info["artists"], browse_id)
@@ -104,13 +209,38 @@ def place_of(a, video_id, title):
             "year": a.get("year") or "", "album_artists": [x["name"] for x in a.get("artists") or []]}
 
 
+def _valid_search_song(s, title, artists):
+    if not s.get("videoId") or not s.get("isAvailable", True):
+        return False
+    if s.get("resultType") not in (None, "song"):
+        return False
+    vtype = (s.get("videoType") or "").removeprefix("MUSIC_VIDEO_TYPE_")
+    if vtype not in ("ATV", ""):
+        return False
+    stitle = s.get("title") or ""
+    if is_non_original(stitle) or _core(stitle) != _core(title):
+        return False
+    alb = s.get("album") or {}
+    if is_non_original(alb.get("name") or ""):
+        return False
+    sartists = [x.get("name") or "" for x in s.get("artists") or []]
+    if is_unofficial_artist(sartists) or not _same_artist(sartists, artists):
+        return False
+    return True
+
+
 def audio_version(title, artists, album_id=""):
-    """按曲名、歌手在 YouTube Music 搜纯音轨版：曲名（去掉括号说明）相同、歌手对得上；有几个时优先同一张专辑里的。
-    返回搜索结果里的那一项，找不到返回 None。"""
-    found = [s for s in call("search", " ".join(artists[:1] + [title]), filter="songs", limit=5)[:5]
-             if s.get("videoId") and _core(s.get("title")) == _core(title)
-             and _same_artist([x["name"] for x in s.get("artists") or []], artists)]
-    return next((s for s in found if (s.get("album") or {}).get("id") == album_id), found[0] if found else None)
+    """按曲名、歌手在 YouTube Music 搜纯音轨版：过滤混音/现场/翻唱，曲名与歌手严格对得上；优先完全同名与同一专辑。
+    找不到返回 None。"""
+    if is_non_original(title) or is_unofficial_artist(artists):
+        return None
+    found = [s for s in call("search", " ".join(artists[:1] + [title]), filter="songs", limit=8)[:8]
+             if _valid_search_song(s, title, artists)]
+    if not found:
+        return None
+    exact = [s for s in found if _norm(s.get("title")) == _norm(title)]
+    pool = exact or found
+    return next((s for s in pool if (s.get("album") or {}).get("id") == album_id), pool[0])
 
 
 # 按 YouTube 上的原标题分（YouTube Music 给的标题去掉了「(Official Video)」这类说明，看不出来）：
@@ -119,13 +249,12 @@ MV_TITLE = re.compile(r"music\s*video|official\s*(?:hd\s*|4k\s*)?video|(?<![a-z]
 # 官方音频：录音室音轨配静态图，找不到纯音轨版时可以用它
 AUDIO_TITLE = re.compile(r"official\s*audio|[(\[]audio[)\]]|音频|音訊|音源", re.I)
 # 不要的：歌词视频、现场、翻唱、彩排、黑胶转盘视频、预告、花絮等
-NOT_WANTED = re.compile(r"lyric|\blive\b|concert|performance|rehearsal|cover|vinyl|visuali[sz]er|teaser|trailer|"
-                        r"behind|making|karaoke|ktv|interview|reaction|demo|practice|choreograph|highlight|medley|"
-                        r"special video|track video|#shorts|\bshorts\b|relay|challenge|fancam|extra cut|sketch|"
+NOT_WANTED = re.compile(r"lyric|vinyl|visuali[sz]er|teaser|trailer|"
+                        r"behind|making|interview|reaction|practice|choreograph|highlight|"
+                        r"#shorts|\bshorts\b|relay|challenge|fancam|extra cut|sketch|"
                         r"m/?v\s+bts\b|\bep\.?\s*\d|self-?cam|\bvlog\b|현장|"
-                        r"歌词|歌詞|现场|現場|演唱会|演唱會|花絮|预告|預告|伴奏|翻唱|티저|비하인드|메이킹|직캠|안무|연습", re.I)
+                        r"歌词|歌詞|花絮|预告|預告|티저|비하인드|메이킹|직캠|안무|연습", re.I)
 _titles = {}
-LIVE = re.compile(r"\blive\b|现场|現場|演唱会|演唱會", re.I)
 
 
 def ydl_opts(**extra):
@@ -139,11 +268,11 @@ def ydl_opts(**extra):
 
 
 def is_mv(title):
-    return bool(MV_TITLE.search(title)) and not NOT_WANTED.search(title)
+    return bool(MV_TITLE.search(title)) and not NOT_WANTED.search(title) and not is_non_original(title)
 
 
 def is_official_audio(title):
-    return bool(AUDIO_TITLE.search(title)) and not NOT_WANTED.search(title)
+    return bool(AUDIO_TITLE.search(title)) and not NOT_WANTED.search(title) and not is_non_original(title)
 
 
 def youtube_title(video_id):
@@ -155,6 +284,14 @@ def youtube_title(video_id):
     return _titles[video_id]
 
 
+def _album_ok(track):
+    browse_id = (track.get("album") or {}).get("id")
+    if not browse_id:
+        return None, True
+    alb = album(browse_id)
+    return alb, not is_unofficial_album(alb)
+
+
 def resolve(video_id):
     """一个视频 → 要下的纯音轨版。返回 (视频 ID 或 None, 信息, 说明)。
     信息：{title, artists, album, album_type, number, year, album_artists, kind}，kind 是原视频的类型（ATV/OMV/UGC）。"""
@@ -162,24 +299,49 @@ def resolve(video_id):
     kind = (track.get("videoType") or "").removeprefix("MUSIC_VIDEO_TYPE_") or "UGC"
     title = track.get("title") or ""
     artists = [x["name"] for x in track.get("artists") or []]
+    if kind not in ("ATV", "OMV", "UGC", "OFFICIAL_SOURCE_MUSIC"):
+        return None, {"title": title or youtube_title(video_id), "artists": artists, "kind": kind}, f"非音乐曲目类型（{kind}），不下"
+    if is_non_original(title) or is_unofficial_artist(artists):
+        return None, {"title": title, "artists": artists, "kind": kind}, "非原版录音室版本（混音/现场/翻唱等），不下"
     target, note = video_id, ""
     if kind != "ATV":
+        yt_title = youtube_title(video_id)
+        if is_non_original(yt_title):
+            return None, {"title": yt_title, "artists": artists, "kind": kind}, "原视频为混音/现场/翻唱等非原版，不下"
         target = None
-        found = audio_version(title, artists)
-        if found:
-            target, track = found["videoId"], found
-            note = f"{kind} 换成纯音轨版 {target}"
+        # 先看 YouTube Music 直接关联的纯音轨版（counterpart），比搜索更准确
+        cp = track.get("counterpart")
+        if cp and (cp.get("videoType") or "").removeprefix("MUSIC_VIDEO_TYPE_") == "ATV":
+            cp_artists = [x["name"] for x in cp.get("artists") or []]
+            if not is_non_original(cp.get("title") or "") and not is_unofficial_artist(cp_artists):
+                _, ok = _album_ok(cp)
+                if ok:
+                    target, track = cp["videoId"], cp
+                    note = f"{kind} 换成纯音轨版 {target}"
         if not target:
-            info = {"title": title, "artists": artists, "kind": kind}
-            if kind == "OMV" and is_official_audio(youtube_title(video_id)):
-                return video_id, info, f"没找到纯音轨版，原视频是官方音频（{youtube_title(video_id)}），按它下"
+            found = audio_version(title, artists)
+            if found:
+                _, ok = _album_ok(found)
+                if ok:
+                    target, track = found["videoId"], found
+                    note = f"{kind} 换成纯音轨版 {target}"
+        if not target:
+            if kind == "OMV" and artists and is_official_audio(yt_title):
+                info = {"title": title, "artists": artists, "kind": kind}
+                return video_id, info, f"没找到纯音轨版，原视频是官方音频（{yt_title}），按它下"
             # 列表里显示 YouTube 原标题，看得出是 MV、现场还是歌词视频
-            info = {"title": youtube_title(video_id), "artists": [], "kind": kind}
+            info = {"title": yt_title, "artists": [], "kind": kind}
             return None, info, "没有纯音轨版，原视频也不是官方音频" if kind == "OMV" else "没有纯音轨版，原视频是用户上传"
-    info = {"title": track.get("title") or title, "artists": [x["name"] for x in track.get("artists") or []] or artists, "kind": kind}
-    browse_id = (track.get("album") or {}).get("id")
-    if browse_id:
-        info.update(place_of(album(browse_id), target, info["title"]))
+    final_title = track.get("title") or title
+    final_artists = [x["name"] for x in track.get("artists") or []] or artists
+    if not final_artists or is_non_original(final_title) or is_unofficial_artist(final_artists):
+        return None, {"title": final_title, "artists": final_artists, "kind": kind}, "非原版或缺少正版艺人信息，不下"
+    alb, ok = _album_ok(track)
+    if not ok:
+        return None, {"title": final_title, "artists": final_artists, "kind": kind}, f"所属专辑为非原版发行（{alb.get('title')}），不下"
+    info = {"title": final_title, "artists": final_artists, "kind": kind}
+    if alb:
+        info.update(place_of(alb, target, info["title"]))
     return target, info, note
 
 
@@ -206,6 +368,9 @@ def artist(channel_id, log, progress=lambda done, total, text: None):
     log(f"歌手 {page.get('name')}：{len(releases)} 张专辑、EP、单曲，逐张读曲目")
     albums = []
     for n, r in enumerate(releases, 1):
+        if _NON_ORIGINAL_ALBUM.search(r.get("title") or ""):
+            log(f"  {r.get('title')}：非原版录音室专辑（现场/伴奏/解说/白噪音等），跳过")
+            continue
         progress(n - 1, len(releases), f"读 {page.get('name')} 的专辑和单曲 {n}/{len(releases)}：{r.get('title')}（{r.get('year') or '年份不详'}）")
         albums.append((r, album(r["browseId"])))
     # 这位歌手在曲目里的身份：各张发行第一位专辑歌手里出现最多的那个（歌手页名字可能是英文，曲目里是中文名）
@@ -214,18 +379,18 @@ def artist(channel_id, log, progress=lambda done, total, text: None):
     names = {_norm(owner["name"]), _norm(page.get("name"))}
 
     def keep(t, a):
-        """只收这位歌手参与的（合辑、原声带里别人唱的不收），现场版不收。"""
+        """只收这位歌手参与的（合辑、原声带里别人唱的不收），现场/混音/翻唱等非原版不收。"""
         who = t.get("artists") or a.get("artists") or []
-        return any(x.get("id") == owner["id"] or _norm(x.get("name")) in names for x in who) and not LIVE.search(t.get("title") or "")
+        return any(x.get("id") == owner["id"] or _norm(x.get("name")) in names for x in who) and not is_non_original(t.get("title") or "")
     songs, seen = [], set()
     for r, a in albums:
-        if LIVE.search(r.get("title") or ""):
-            log(f"  {r.get('title')}：现场专辑，跳过")
+        if is_unofficial_album(a):
+            log(f"  {r.get('title')}：非原版发行，跳过")
             continue
         got = album_songs(a, r["browseId"], log, seen, keep)
         songs += got
         if not got:
-            log(f"  {r.get('title')}：没有新的歌（前面的发行里都有了、不是这位歌手唱的、现场版或只有 MV），整张跳过")
+            log(f"  {r.get('title')}：没有新的歌（前面的发行里都有了、不是这位歌手唱的、现场/混音版或只有 MV），整张跳过")
     for _, info in songs:   # 都放在这位歌手名下：合唱的单曲、合辑里的歌不散到别的歌手文件夹
         info["owner"] = owner["name"]
     progress(len(releases), len(releases), f"读 {page.get('name')} 的视频列表，挑出 MV")

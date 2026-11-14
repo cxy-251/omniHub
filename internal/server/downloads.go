@@ -155,6 +155,9 @@ func (r *Router) writableLibraryChoice(category string) ([]dlOption, string) {
 
 // stagingLibraryChoice 列出可写的在线库作为暂存位置；默认选和 Chrome 下载目录同一块盘的（多为内置存储）。
 func (r *Router) stagingLibraryChoice() ([]dlOption, string) {
+	if r == nil || r.libMgr == nil {
+		return nil, ""
+	}
 	home, _ := os.UserHomeDir()
 	var opts []dlOption
 	def := ""

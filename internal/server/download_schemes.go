@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,13 +54,18 @@ func (r *Router) schemeKinds() []*dlKind {
 		{"images", "只要图片：原图，进相册的图库「X」"},
 		{"media", "图片和视频：图片进图库「X」，视频（最高码率）进短视频的 X"},
 	}}
+	filterViews := dlField{Name: "filter_views", Label: "限制播放量", Type: "toggle", Default: true}
+	minViews := dlField{Name: "min_views", Label: "最低播放量", Type: "text", Default: "1000000", Help: "次（留空或 0 不限）"}
+	filterReplay := dlField{Name: "filter_replay", Label: "限制重播率", Type: "toggle", Default: true}
+	minReplay := dlField{Name: "min_replay", Label: "最低重播率", Type: "text", Default: "5.0", Help: "需 Last.fm（留空或 0 不限）"}
+	exemptAlbums := dlField{Name: "exempt_albums", Label: "整张专辑链接免过滤", Type: "toggle", Default: true, Help: "保留整张专辑完整性"}
 	return []*dlKind{
 		{
-			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑、单曲或歌手页，只从 YouTube / YouTube Music 下（其他网站的音乐多是搬运，不收），全部下载，不筛选。YouTube 的歌换成 YouTube Music 上的纯音轨版（MV 有片头片尾，不下它的音频）；找不到纯音轨版时只收官方音频（Official Audio），MV、歌词视频、现场、翻唱都不下。按歌手归档：属于专辑、EP 的歌放进歌手下的专辑文件夹，单曲放在歌手文件夹里。歌手页（YouTube Music 歌手页或歌手的官方频道）下全部专辑、EP、单曲，同一首只留最早发行的那版，MV（标题写着 Music Video、Official Video、MV 的，歌词视频、现场不算）下成视频放进短视频的 MV/<歌手>。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
+			ID: "music", Title: "音乐", Description: "一次可以填很多个歌单、专辑、单曲或歌手页，只从 YouTube / YouTube Music 下（其他网站的音乐多是搬运，不收）。默认启用 YouTube 播放量 ≥ 100 万且 Last.fm 重播率 ≥ 5.0 过滤（可独立开关或改阈值；整张专辑链接默认免过滤以保持专辑完整）。YouTube 的歌换成 YouTube Music 上的纯音轨版（MV 有片头片尾，不下它的音频）；找不到纯音轨版时只收官方音频（Official Audio），MV、歌词视频、现场、混音（Remix）、翻唱、伴奏、加速/降调及非原版发行都不下。按歌手归档：属于专辑、EP 的歌放进歌手下的专辑文件夹，单曲放在歌手文件夹里。歌手页（YouTube Music 歌手页或歌手的官方频道）下全部专辑、EP、单曲，同一首只留最早发行的那版，MV（标题写着 Music Video、Official Video、MV 的，歌词视频、现场不算）下成视频放进短视频的 MV/<歌手>。只取最好的音轨，不转码，嵌入封面和标签。每首的播放数、点赞数、发布日期、下载日期，以及 Last.fm 的风格、听众、总播放、重播率写进文件标签，播放时显示。下过的自动跳过。",
 			Scheme: &dlScheme{Listable: true, Steps: []string{"粘贴歌单/专辑/歌手链接（一行一个）", "读取列表：看会下哪些歌和 MV、哪些不下，去掉不要的勾", "下载到暂存区（下过的跳过）", "播放数、点赞、日期、Last.fm 信息写进标签", "在「暂存区」试听、删掉不要的", "移入资源库"}, Destination: "音声 / 音乐 / <歌手>/（整张专辑放 <歌手>/<专辑>/）",
 				Input: "歌单、专辑、单曲或歌手页链接，一行一个", Placeholder: "https://music.youtube.com/playlist?list=LM（赞过的歌）\nhttps://music.youtube.com/channel/…（歌手）\nhttps://www.youtube.com/watch?v=…"},
 			needs:  []string{"uv", "ffmpeg", "ffprobe"},
-			Fields: []dlField{urls, library},
+			Fields: []dlField{urls, filterViews, minViews, filterReplay, minReplay, exemptAlbums, library},
 			build:  func(r *Router, p dlParams) (dlPlan, error) { return r.buildScheme("music", p) },
 		},
 		{
@@ -140,6 +147,11 @@ func (r *Router) buildList(scheme string, p dlParams, urls []string) (dlPlan, er
 	args := append([]string{"scripts/general.py"}, urls...)
 	args = append(args, "--batch", dir, "--scheme", scheme, "--archive", archivePath(lib.RootPath, scheme), "--plan-out", path)
 	args = append(args, videoArgs(p)...)
+	fargs, err := musicFilterArgs(scheme, p)
+	if err != nil {
+		return dlPlan{}, err
+	}
+	args = append(args, fargs...)
 	title := "读取列表"
 	if before := p.text("list_before"); before != "" && scheme == "x" { // 往前多读一年，接在上一份列表后面
 		from, ok := r.planPath(p.text("list_from"))
@@ -154,6 +166,47 @@ func (r *Router) buildList(scheme string, p dlParams, urls []string) (dlPlan, er
 	}
 	titles := map[string]string{"music": "音乐", "youtube": "YouTube", "bilibili": "B站", "x": "X"}
 	return dlPlan{title: fmt.Sprintf("%s %s %d 个链接", titles[scheme], title, len(urls)), args: args, resource: strings.TrimSuffix(path, ".json"), lib: lib}, nil
+}
+
+func flagDefaultTrue(p dlParams, name string) bool {
+	if _, ok := p[name]; !ok {
+		return true
+	}
+	return p.flag(name)
+}
+
+// musicFilterArgs 校验并返回音乐方案的最低播放量、最低重播率及专辑豁免参数。
+func musicFilterArgs(scheme string, p dlParams) ([]string, error) {
+	if scheme != "music" {
+		return nil, nil
+	}
+	var args []string
+	if flagDefaultTrue(p, "filter_views") {
+		if raw := strings.TrimSpace(p.text("min_views")); raw != "" {
+			n, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil || n < 0 {
+				return nil, errors.New("最低播放量格式不对（请填非负整数，留空或 0 不限）")
+			}
+			if n > 0 {
+				args = append(args, "--min-views", strconv.FormatInt(n, 10))
+			}
+		}
+	}
+	if flagDefaultTrue(p, "filter_replay") {
+		if raw := strings.TrimSpace(p.text("min_replay")); raw != "" {
+			v, err := strconv.ParseFloat(raw, 64)
+			if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+				return nil, errors.New("最低重播率格式不对（请填非负数字，留空或 0 不限）")
+			}
+			if v > 0 {
+				args = append(args, "--min-replay", raw)
+			}
+		}
+	}
+	if !flagDefaultTrue(p, "exempt_albums") {
+		args = append(args, "--no-exempt-albums")
+	}
+	return args, nil
 }
 
 // videoArgs 是视频方案的模式（读取列表和下载共用）；X 的「图片和视频」模式加 --x-videos。
@@ -237,9 +290,18 @@ func (r *Router) buildScheme(scheme string, p dlParams) (dlPlan, error) {
 	}
 	if scheme == "youtube" || scheme == "bilibili" || scheme == "x" { // 直接下载与按列表下载都要：模式
 		args = append(args, videoArgs(p)...)
-	} else if p.text("mode") == "direct" {
-		if rank := p.text("rank"); rank != "" {
-			args = append(args, "--rank", rank, "--top", p.text("top"))
+	} else {
+		if p.text("plan") == "" {
+			fargs, err := musicFilterArgs(scheme, p)
+			if err != nil {
+				return dlPlan{}, err
+			}
+			args = append(args, fargs...)
+		}
+		if p.text("mode") == "direct" {
+			if rank := p.text("rank"); rank != "" {
+				args = append(args, "--rank", rank, "--top", p.text("top"))
+			}
 		}
 	}
 	if n := p.text("x_limit"); n != "" {

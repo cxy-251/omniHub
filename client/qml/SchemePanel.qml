@@ -22,15 +22,39 @@ ColumnLayout {
     property bool showHelp: false
     property var analysis: ({items: []})
 
+    readonly property var musicFilterKeys: ["filter_views", "min_views", "filter_replay", "min_replay", "exempt_albums"]
+    readonly property bool musicFiltersDirty: {
+        if (!isMusic) return false
+        for (var i = 0; i < musicFilterKeys.length; i++) {
+            var k = musicFilterKeys[i]
+            var f = field(k)
+            if (f && f.default !== undefined && String(values[k]) !== String(f.default)) return true
+        }
+        return false
+    }
     function field(name) { return kind.fields.find(function (f) { return f.name === name }) || null }
     function set(name, value) {
         var v = Object.assign({}, values); v[name] = value; values = v
         if (name === "mode") { save({mode: value}); if (plan || planJob) clearPlan() }   // 换了模式，读出的列表就不对了
+        else if (musicFilterKeys.indexOf(name) !== -1) {
+            var sf = Object.assign({}, saved().filters || {}); sf[name] = value; save({filters: sf})
+            if (plan || planJob) clearPlan()
+        }
+    }
+    function resetMusicFilters() {
+        var v = Object.assign({}, values)
+        musicFilterKeys.forEach(function (k) { var f = field(k); if (f && f.default !== undefined) v[k] = f.default })
+        values = v; save({filters: {}})
+        if (plan || planJob) clearPlan()
     }
     function optionLabel(name) { var f = field(name); var o = f ? f.options.find(function (x) { return x.value === values[name] }) : null; return o ? o.label : "" }
     function reset() {
         var v = {}
         kind.fields.forEach(function (f) { if (f.default !== undefined) v[f.name] = f.default })
+        if (kind.id === "music") {
+            var sf = saved().filters || {}
+            musicFilterKeys.forEach(function (k) { if (sf[k] !== undefined && v[k] !== undefined) v[k] = sf[k] })
+        }
         values = v; input = ""; analysis = {items: []}
         plan = null; planJob = null; planToken = ""; excluded = {}
         if (kind.scheme && kind.scheme.listable) {   // 不用 listable：换方案时这个绑定可能还没更新
@@ -100,10 +124,11 @@ ColumnLayout {
         pollList()
     }
     function planLoaded(r) {
-        // 视频方案：排名在前 N 之后的默认不勾（只在第一次取到列表时；之后按用户改过的）
+        // 视频方案 / 音乐未达阈值曲目：默认不勾（只在第一次取到列表时；之后按用户改过的）
         if (saved().picked !== planToken) {
             var m = Object.assign({}, excluded)
             ;(r.videos || []).forEach(function (v) { if (!v.picked) m[v.id] = true })
+            ;(r.songs || []).forEach(function (s) { if (s.picked === false) m[s.id] = true })
             excluded = m
             save({picked: planToken})
         }
@@ -145,9 +170,25 @@ ColumnLayout {
         if (!plan) return []
         var out = []
         var who = function (x) { return (x.artists && x.artists.length ? x.artists.join(" / ") + " - " : "") + (x.title || x.id) }
-        var songs = (plan.songs || []).slice().sort(function (a, b) { return a.path.localeCompare(b.path, undefined, {numeric: true}) })
-        if (songs.length) out.push({type: "head", group: "song", text: "要下的歌 " + songs.length + " 首（放到 音声/音乐/ 下的位置）"})
-        songs.forEach(function (x) { out.push({type: "song", grp: "song", id: x.id, text: x.path, note: x.source === "纯音轨" ? "" : x.source}) })
+        var allSongs = (plan.songs || []).slice().sort(function (a, b) { return a.path.localeCompare(b.path, undefined, {numeric: true}) })
+        var pickedSongs = allSongs.filter(function (x) { return x.picked !== false })
+        var filteredSongs = allSongs.filter(function (x) { return x.picked === false })
+        var songNote = function (x) {
+            var parts = []
+            if (x.source_note) parts.push(x.source_note)
+            if (x.source && x.source !== "纯音轨") parts.push(x.source)
+            if (x.views !== null && x.views !== undefined) parts.push(views(x.views))
+            if (x.lastfm_replay) parts.push("重播 " + Number(x.lastfm_replay).toFixed(1))
+            return parts.join(" · ")
+        }
+        if (pickedSongs.length) out.push({type: "head", group: "song", text: "要下的歌 " + pickedSongs.length + " 首（符合条件，默认全勾；放到 音声/音乐/ 下的位置）"})
+        pickedSongs.forEach(function (x) {
+            out.push({type: "song", grp: "song", id: x.id, text: x.path, note: songNote(x)})
+        })
+        if (filteredSongs.length) out.push({type: "head", group: "filtered", text: "未达过滤条件 " + filteredSongs.length + " 首（默认不勾，可按需手动补勾）"})
+        filteredSongs.forEach(function (x) {
+            out.push({type: "song", grp: "filtered", id: x.id, text: x.path, note: x.filter_reason || songNote(x), amberNote: true})
+        })
         var mvs = (plan.mvs || []).filter(function (m) { return !m.done })
         if (mvs.length) out.push({type: "head", group: "mv", text: "音乐 MV " + mvs.length + " 个（下成视频，放到 短视频/MV/<歌手>/）"})
         mvs.forEach(function (m) { out.push({type: "mv", grp: "mv", id: m.id, text: m.title, note: m.artist}) })
@@ -256,7 +297,7 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: 8
         Repeater {
-            model: panel.kind.fields.filter(function (f) { return f.name !== "urls" && f.name !== "library" })
+            model: panel.kind.fields.filter(function (f) { return f.name !== "urls" && f.name !== "library" && panel.musicFilterKeys.indexOf(f.name) === -1 })
             delegate: Row {
                 required property var modelData
                 spacing: 4
@@ -282,9 +323,71 @@ ColumnLayout {
                     visible: modelData.type === "text"
                     implicitHeight: 30; width: 200; font.pixelSize: 12
                     placeholderText: modelData.help || ""
-                    text: panel.values[modelData.name] || ""
+                    text: panel.values[modelData.name] !== undefined ? String(panel.values[modelData.name]) : ""
                     onTextEdited: panel.set(modelData.name, text)
                 }
+            }
+        }
+    }
+
+    // 音乐过滤条件与开关：各条件独立勾选生效，专辑链接默认保持完整
+    Rectangle {
+        visible: panel.isMusic && !!panel.field("min_views")
+        Layout.fillWidth: true
+        implicitHeight: musicFilterFlow.implicitHeight + 14
+        color: "#161b22"; border.color: "#30363d"; radius: 4
+        Flow {
+            id: musicFilterFlow
+            anchors.fill: parent; anchors.margins: 7
+            spacing: 12
+            Row {
+                spacing: 4; height: 28
+                CheckBox {
+                    text: "播放量 ≥"
+                    font.pixelSize: 12; padding: 0; height: 28
+                    checked: !!panel.values.filter_views
+                    onToggled: panel.set("filter_views", checked)
+                }
+                TextField {
+                    enabled: !!panel.values.filter_views
+                    opacity: enabled ? 1.0 : 0.45
+                    height: 28; width: 96; font.pixelSize: 12
+                    placeholderText: "1000000"
+                    text: panel.values.min_views !== undefined ? String(panel.values.min_views) : ""
+                    onTextEdited: panel.set("min_views", text)
+                }
+            }
+            Row {
+                spacing: 4; height: 28
+                CheckBox {
+                    text: "重播率 ≥"
+                    font.pixelSize: 12; padding: 0; height: 28
+                    checked: !!panel.values.filter_replay
+                    onToggled: panel.set("filter_replay", checked)
+                }
+                TextField {
+                    enabled: !!panel.values.filter_replay
+                    opacity: enabled ? 1.0 : 0.45
+                    height: 28; width: 64; font.pixelSize: 12
+                    placeholderText: "5.0"
+                    text: panel.values.min_replay !== undefined ? String(panel.values.min_replay) : ""
+                    onTextEdited: panel.set("min_replay", text)
+                }
+            }
+            CheckBox {
+                text: "整张专辑链接免过滤"
+                font.pixelSize: 12; padding: 0; height: 28
+                checked: !!panel.values.exempt_albums
+                onToggled: panel.set("exempt_albums", checked)
+            }
+            Label {
+                text: "启用的条件需同时满足"
+                color: "#8b949e"; font.pixelSize: 11; height: 28; verticalAlignment: Text.AlignVCenter
+            }
+            Chip {
+                visible: panel.musicFiltersDirty
+                text: "恢复默认"
+                onClicked: panel.resetMusicFilters()
             }
         }
     }
@@ -368,7 +471,7 @@ ColumnLayout {
                     visible: !!modelData.note
                     Layout.maximumWidth: 420; elide: Text.ElideRight
                     text: modelData.note || ""
-                    font.pixelSize: 11; color: modelData.type === "skip" ? "#d29922" : "#8b949e"
+                    font.pixelSize: 11; color: modelData.type === "skip" || modelData.amberNote ? "#d29922" : "#8b949e"
                 }
                 Chip { visible: modelData.type === "artist" || modelData.type === "others"; text: panel.expanded[modelData.group] ? "收起" : "展开"; onClicked: panel.expand(modelData.group) }
                 Chip { visible: modelData.type === "head" && !!modelData.group; text: "全选"; onClicked: panel.setAll(modelData.group, true) }
